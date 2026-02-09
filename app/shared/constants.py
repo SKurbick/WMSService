@@ -1,0 +1,14 @@
+"""Константы приложения"""
+
+# Пагинация
+DEFAULT_PAGE_SIZE = 100
+MAX_PAGE_SIZE = 1000
+
+# Лимиты
+MAX_LOCATION_NAME_LENGTH = 100
+MAX_QR_CODE_LENGTH = 50
+MAX_BATCH_NUMBER_LENGTH = 50
+
+# Уровни локаций
+MIN_LOCATION_LEVEL = 1
+MAX_LOCATION_LEVEL = 5
