@@ -12,6 +12,15 @@ class ContainerRepository:
     def __init__(self, pool: Pool):
         self.pool = pool
 
+    def _parse_record(self, record: Record) -> dict:
+        """Конвертирует asyncpg.Record в dict с парсингом JSON полей"""
+        data = dict(record)
+        for field in ("contents", "metadata"):
+            if isinstance(data.get(field), str):
+                data[field] = json.loads(data[field])
+        return data
+
+
     async def register(
         self, qr_code: str, container_type: str, location_code: str, contents: list
     ) -> Record:
@@ -35,7 +44,7 @@ class ContainerRepository:
         """Получить контейнер по QR-коду с содержимым"""
         async with self.pool.acquire() as conn:
             result = await conn.fetchrow(queries.GET_CONTAINER_BY_QR, qr_code)
-            return result
+            return self._parse_record(result) if result else None
 
     async def get_by_id(self, container_id: int) -> Optional[Record]:
         """Получить контейнер по ID"""
