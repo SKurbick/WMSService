@@ -46,24 +46,24 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description="""
-    # WMS (Warehouse Management System) API
-    
-    Микросервис для управления складом с адресным хранением.
-    
-    ## Основные возможности:
-    
-    * **Локации** - управление иерархией склада (зоны, стеллажи, ячейки)
-    * **Контейнеры** - учёт паллет, коробок, QR-кодов
-    * **Остатки** - отслеживание inventory по локациям
-    * **Перемещения** - Event Sourcing через movements
-    * **Отчёты** - аналитика, ABC-анализ, оборачиваемость
-    
-    ## Технологии:
-    
-    * FastAPI + asyncpg
-    * PostgreSQL 16 с LTREE
-    * Event Sourcing
-    """,
+# WMS (Warehouse Management System) API
+
+Микросервис для управления складом с адресным хранением.
+
+## Основные возможности:
+
+* **Локации** - управление иерархией склада (зоны, стеллажи, ячейки)
+* **Контейнеры** - учёт паллет, коробок, QR-кодов
+* **Остатки** - отслеживание inventory по локациям
+* **Перемещения** - Event Sourcing через movements
+* **Отчёты** - аналитика, ABC-анализ, оборачиваемость
+
+## Технологии:
+
+* FastAPI + asyncpg
+* PostgreSQL 16 с LTREE
+* Event Sourcing
+""",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
