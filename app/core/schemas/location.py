@@ -6,6 +6,25 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 from app.core.enums import ZoneType
 
+class ZoneResponse(BaseModel):
+    """Схема для ответа - список зон"""
+
+    location_id: int
+    location_code: str
+    name: str
+    zone_type: ZoneType
+    level: int
+    path: str
+    is_active: bool
+    is_pickable: bool
+    max_weight: Optional[Decimal] = Field(default=None, ge=0, description="Максимальный вес (кг)")
+    max_volume: Optional[Decimal] = Field(default=None, ge=0, description="Максимальный объём (м³)")
+    metadata: Optional[dict]
+    warehouse_code: Optional[str] = Field(None, description="Код склада (родитель)")
+    warehouse_name: Optional[str] = Field(None, description="Название склада")
+
+    class Config:
+        from_attributes = True
 
 class LocationBase(BaseModel):
     """Базовая схема локации"""
@@ -13,8 +32,8 @@ class LocationBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Название локации")
     zone_type: ZoneType = Field(..., description="Тип зоны")
     level: int = Field(..., ge=1, le=5, description="Уровень в иерархии (1-5)")
-    max_weight: Decimal = Field(default=Decimal("0"), ge=0, description="Максимальный вес (кг)")
-    max_volume: Decimal = Field(default=Decimal("0"), ge=0, description="Максимальный объём (м³)")
+    max_weight: Optional[Decimal] = Field(default=Decimal("0"), ge=0, description="Максимальный вес (кг)")
+    max_volume: Optional[Decimal] = Field(default=Decimal("0"), ge=0, description="Максимальный объём (м³)")
     is_active: bool = Field(default=True, description="Активна ли локация")
     is_pickable: bool = Field(default=False, description="Можно ли комплектовать из этой локации")
     metadata: Optional[dict] = Field(None, description="Дополнительные данные (JSON)")

@@ -7,6 +7,7 @@ from app.core.schemas.location import (
     LocationResponse,
     LocationChildResponse,
     LocationDeactivateResponse,
+    ZoneResponse
 )
 from app.infrastructure.database.repositories.location_repository import LocationRepository
 from app.core.exceptions import LocationNotFoundError, ParentLocationInactiveError
@@ -17,6 +18,11 @@ class LocationService:
 
     def __init__(self, repository: LocationRepository):
         self.repo = repository
+
+    async def get_zones(self) -> List[ZoneResponse]:
+        """Получить список всех активных зон склада"""
+        zones = await self.repo.get_zones()
+        return [ZoneResponse.model_validate(dict(zone)) for zone in zones]
 
     async def create_location(self, data: LocationCreate) -> LocationResponse:
         """
@@ -59,7 +65,7 @@ class LocationService:
         return LocationResponse.model_validate(dict(location))
 
     async def get_children(
-        self, location_id: int, recursive: bool = True
+            self, location_id: int, recursive: bool = True
     ) -> List[LocationChildResponse]:
         """
         Получить дочерние локации
@@ -100,7 +106,7 @@ class LocationService:
         return LocationDeactivateResponse.model_validate(dict(deactivated))
 
     async def find_available_location(
-        self, product_id: str, quantity: int, zone_type: str = "storage"
+            self, product_id: str, quantity: int, zone_type: str = "storage"
     ) -> dict:
         """
         Найти оптимальную свободную ячейку для размещения товара

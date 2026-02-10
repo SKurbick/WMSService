@@ -9,6 +9,7 @@ from app.core.schemas.location import (
     LocationResponse,
     LocationChildResponse,
     LocationDeactivateResponse,
+    ZoneResponse,
 )
 from app.core.services.location_service import LocationService
 from app.api.v1.dependencies import get_location_service
@@ -43,23 +44,39 @@ async def create_location(
     return await service.create_location(data)
 
 
+@router.get("/zones", response_model=List[ZoneResponse])
+async def get_zones(
+    service: LocationService = Depends(get_location_service)
+):
+    """
+    Получить список зон склада
+
+    Возвращает все активные зоны (level = 1) с информацией о складе-родителе.
+
+    **Возвращает:**
+    - Список активных зон с кодом и названием склада
+    """
+    return await service.get_zones()
+
+
 @router.get("/{location_id}", response_model=LocationResponse)
 async def get_location(
-    location_id: int, service: LocationService = Depends(get_location_service)
+        location_id: int, service: LocationService = Depends(get_location_service)
 ):
     """
     Получить локацию по ID
-    
+
     Возвращает детальную информацию о локации: название, код, путь,
     родителя, тип зоны, вместимость.
-    
+
     **Параметры:**
     - **location_id**: ID локации
-    
+
     **Возвращает:**
     - Полную информацию о локации
     """
     return await service.get_location_by_id(location_id)
+
 
 
 @router.get("/by-code/{location_code}", response_model=LocationResponse)

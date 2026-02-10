@@ -11,6 +11,12 @@ class LocationRepository:
     def __init__(self, pool: Pool):
         self.pool = pool
 
+    async def get_zones(self) -> List[Record]:
+        """Получить список всех активных зон (level = 1)"""
+        async with self.pool.acquire() as conn:
+            results = await conn.fetch(queries.GET_ZONES)
+            return results
+
     async def create(self, data: dict) -> Record:
         """Создать локацию"""
         async with self.pool.acquire() as conn:

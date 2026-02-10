@@ -116,6 +116,28 @@ WHERE l.parent_location_id = $1
 ORDER BY l.location_code;
 """
 
+GET_ZONES = """
+SELECT 
+    l.location_id,
+    l.location_code,
+    l.name,
+    l.zone_type,
+    l.level,
+    l.path::text,
+    l.is_active,
+    l.is_pickable,
+    l.max_weight,
+    l.max_volume,
+    l.metadata,
+    p.location_code as warehouse_code,
+    p.name as warehouse_name
+FROM wms.locations l
+JOIN wms.locations p ON l.parent_location_id = p.location_id
+WHERE l.level = 1
+  AND l.is_active = TRUE
+ORDER BY l.location_id;
+"""
+
 # === UPDATE ===
 
 UPDATE_LOCATION = """
