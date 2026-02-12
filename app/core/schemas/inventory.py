@@ -47,8 +47,8 @@ class InventorySummaryResponse(BaseModel):
     product_id: str
     product_name: Optional[str] = None
     category: Optional[str] = None
-    total_quantity: int = Field(..., description="Общее количество")
-    locations_count: int = Field(..., description="Количество локаций")
+    total_quantity: int = Field(default=0, description="Общее количество")
+    locations_count: int = Field(default=0, description="Количество локаций")
     in_containers: int = Field(default=0, description="Количество в контейнерах")
     loose: int = Field(default=0, description="Количество россыпью")
     last_updated: Optional[datetime] = None
