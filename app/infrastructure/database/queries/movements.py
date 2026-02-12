@@ -68,6 +68,7 @@ LIMIT $6 OFFSET $7;
 
 GET_MOVEMENTS_BY_PRODUCT = """
 SELECT
+    m.product_id,
     m.movement_id,
     m.movement_type,
     l_from.location_code as from_location,

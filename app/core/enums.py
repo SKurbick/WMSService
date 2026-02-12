@@ -22,7 +22,7 @@ class MovementType(str, Enum):
     TRANSFER = "transfer"  # Перемещение между локациями
     ADJUST = "adjust"  # Корректировка остатков
     WRITE_OFF = "write_off"  # Списание
-
+    UNPACK = "unpack"
 
 class ContainerStatus(str, Enum):
     """Статусы контейнера"""
