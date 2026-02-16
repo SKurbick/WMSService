@@ -12,7 +12,7 @@ class ZoneType(str, Enum):
     PACKING = "packing"  # Упаковка
     SHIPPING = "shipping"  # Отгрузка
     QUARANTINE = "quarantine"  # Карантин
-
+    WAREHOUSE = "warehouse" # Склад
 
 class MovementType(str, Enum):
     """Типы перемещений"""

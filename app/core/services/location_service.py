@@ -7,7 +7,8 @@ from app.core.schemas.location import (
     LocationResponse,
     LocationChildResponse,
     LocationDeactivateResponse,
-    ZoneResponse
+    ZoneResponse,
+    LocationTreeNode,
 )
 from app.infrastructure.database.repositories.location_repository import LocationRepository
 from app.core.exceptions import LocationNotFoundError, ParentLocationInactiveError
@@ -18,6 +19,38 @@ class LocationService:
 
     def __init__(self, repository: LocationRepository):
         self.repo = repository
+
+    async def get_zones_tree(self, max_level: int = 5) -> List[LocationTreeNode]:
+        """
+        Получить иерархическое дерево зон
+
+        Args:
+            max_level: Максимальный уровень вложенности (0-5)
+        """
+        # Получаем плоский список
+        locations = await self.repo.get_zones_hierarchy(max_level)
+
+        # Конвертируем в dict для быстрого доступа
+        locations_dict = {loc["location_id"]: dict(loc) for loc in locations}
+
+        # Добавляем поле children в каждую локацию
+        for loc in locations_dict.values():
+            loc["children"] = []
+
+        # Строим дерево
+        roots = []
+        for loc in locations_dict.values():
+            if loc["parent_location_id"] is None:
+                # Корневой элемент
+                roots.append(loc)
+            else:
+                # Добавляем к родителю
+                parent = locations_dict.get(loc["parent_location_id"])
+                if parent:
+                    parent["children"].append(loc)
+
+        # Конвертируем в Pydantic модели (рекурсивно)
+        return [LocationTreeNode.model_validate(root) for root in roots]
 
     async def get_zones(self) -> List[ZoneResponse]:
         """Получить список всех активных зон склада"""

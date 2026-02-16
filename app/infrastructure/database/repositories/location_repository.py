@@ -11,6 +11,12 @@ class LocationRepository:
     def __init__(self, pool: Pool):
         self.pool = pool
 
+    async def get_zones_hierarchy(self, max_level: int = 5) -> List[Record]:
+        """Получить иерархию зон с ограничением по уровню"""
+        async with self.pool.acquire() as conn:
+            results = await conn.fetch(queries.GET_ZONES_HIERARCHY, max_level)
+            return results
+
     async def get_zones(self) -> List[Record]:
         """Получить список всех активных зон (level = 1)"""
         async with self.pool.acquire() as conn:

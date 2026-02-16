@@ -184,3 +184,51 @@ RETURNING location_id, location_code, is_active;
 FIND_AVAILABLE_LOCATION = """
 SELECT * FROM wms.find_available_location($1, $2, $3);
 """
+
+# === Получение иерархии зон с ограничением по уровню ===
+GET_ZONES_HIERARCHY = """
+WITH RECURSIVE location_tree AS (
+    -- Корневые локации (склады, level = 0)
+    SELECT 
+        l.location_id,
+        l.location_code,
+        l.name,
+        l.zone_type,
+        l.level,
+        l.path::text,
+        l.is_active,
+        l.is_pickable,
+        l.max_weight,
+        l.max_volume,
+        l.metadata,
+        l.parent_location_id,
+        ARRAY[l.location_id] as id_path
+    FROM wms.locations l
+    WHERE l.parent_location_id IS NULL
+      AND l.is_active = TRUE
+
+    UNION ALL
+
+    -- Рекурсивно добавляем дочерние до max_level
+    SELECT 
+        l.location_id,
+        l.location_code,
+        l.name,
+        l.zone_type,
+        l.level,
+        l.path::text,
+        l.is_active,
+        l.is_pickable,
+        l.max_weight,
+        l.max_volume,
+        l.metadata,
+        l.parent_location_id,
+        lt.id_path || l.location_id
+    FROM wms.locations l
+    JOIN location_tree lt ON l.parent_location_id = lt.location_id
+    WHERE l.is_active = TRUE
+      AND l.level <= $1  -- Ограничение по уровню
+)
+SELECT * FROM location_tree
+ORDER BY id_path;
+"""

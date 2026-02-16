@@ -10,6 +10,7 @@ from app.core.schemas.location import (
     LocationChildResponse,
     LocationDeactivateResponse,
     ZoneResponse,
+    LocationTreeNode,
 )
 from app.core.services.location_service import LocationService
 from app.api.v1.dependencies import get_location_service
@@ -19,7 +20,7 @@ router = APIRouter(prefix="/locations", tags=["Локации"])
 
 @router.post("", response_model=LocationResponse, status_code=status.HTTP_201_CREATED)
 async def create_location(
-    data: LocationCreate, service: LocationService = Depends(get_location_service)
+        data: LocationCreate, service: LocationService = Depends(get_location_service)
 ):
     """
     Создать новую локацию
@@ -46,7 +47,7 @@ async def create_location(
 
 @router.get("/zones", response_model=List[ZoneResponse])
 async def get_zones(
-    service: LocationService = Depends(get_location_service)
+        service: LocationService = Depends(get_location_service)
 ):
     """
     Получить список зон склада
@@ -57,6 +58,31 @@ async def get_zones(
     - Список активных зон с кодом и названием склада
     """
     return await service.get_zones()
+
+
+@router.get("/zones/tree", response_model=List[LocationTreeNode])
+async def get_zones_tree(
+        max_level: int = Query(5, ge=0, le=5, description="Максимальный уровень вложенности (0-5)"),
+        service: LocationService = Depends(get_location_service)
+):
+    """
+    Получить иерархическое дерево зон
+
+    Возвращает вложенную структуру локаций с ограничением по уровню.
+
+    **Параметры:**
+    - **max_level**:
+      - 0 - только склады
+      - 1 - склады + зоны
+      - 2 - склады + зоны + стеллажи
+      - 3 - + секции
+      - 4 - + ярусы
+      - 5 - полная иерархия до ячеек
+
+    **Возвращает:**
+    - Дерево локаций с вложенными children
+    """
+    return await service.get_zones_tree(max_level)
 
 
 @router.get("/{location_id}", response_model=LocationResponse)
@@ -78,10 +104,9 @@ async def get_location(
     return await service.get_location_by_id(location_id)
 
 
-
 @router.get("/by-code/{location_code}", response_model=LocationResponse)
 async def get_location_by_code(
-    location_code: str, service: LocationService = Depends(get_location_service)
+        location_code: str, service: LocationService = Depends(get_location_service)
 ):
     """
     Получить локацию по коду
@@ -99,11 +124,11 @@ async def get_location_by_code(
 
 @router.get("/{location_id}/children", response_model=List[LocationChildResponse])
 async def get_location_children(
-    location_id: int,
-    recursive: bool = Query(
-        True, description="Включить все уровни вложенности (рекурсивно через LTREE)"
-    ),
-    service: LocationService = Depends(get_location_service),
+        location_id: int,
+        recursive: bool = Query(
+            True, description="Включить все уровни вложенности (рекурсивно через LTREE)"
+        ),
+        service: LocationService = Depends(get_location_service),
 ):
     """
     Получить дочерние локации
@@ -123,9 +148,9 @@ async def get_location_children(
 
 @router.put("/{location_id}", response_model=LocationResponse)
 async def update_location(
-    location_id: int,
-    data: LocationUpdate,
-    service: LocationService = Depends(get_location_service),
+        location_id: int,
+        data: LocationUpdate,
+        service: LocationService = Depends(get_location_service),
 ):
     """
     Обновить локацию
@@ -150,7 +175,7 @@ async def update_location(
 
 @router.patch("/{location_id}/deactivate", response_model=LocationDeactivateResponse)
 async def deactivate_location(
-    location_id: int, service: LocationService = Depends(get_location_service)
+        location_id: int, service: LocationService = Depends(get_location_service)
 ):
     """
     Деактивировать локацию
@@ -169,10 +194,10 @@ async def deactivate_location(
 
 @router.get("/find-available", response_model=dict)
 async def find_available_location(
-    product_id: str = Query(..., description="ID товара"),
-    quantity: int = Query(..., ge=1, description="Количество товара"),
-    zone_type: str = Query("storage", description="Тип зоны для поиска"),
-    service: LocationService = Depends(get_location_service),
+        product_id: str = Query(..., description="ID товара"),
+        quantity: int = Query(..., ge=1, description="Количество товара"),
+        zone_type: str = Query("storage", description="Тип зоны для поиска"),
+        service: LocationService = Depends(get_location_service),
 ):
     """
     Найти свободную ячейку

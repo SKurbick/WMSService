@@ -1,6 +1,6 @@
 """Pydantic схемы для локаций"""
 
-from typing import Optional
+from typing import Optional, List
 from decimal import Decimal
 from pydantic import BaseModel, Field
 from datetime import datetime
@@ -98,3 +98,27 @@ class LocationDeactivateResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class LocationTreeNode(BaseModel):
+    """Узел дерева локаций (рекурсивная структура)"""
+
+    location_id: int
+    location_code: str
+    name: str
+    zone_type: ZoneType
+    level: int
+    path: str
+    is_active: bool
+    is_pickable: bool
+    max_weight: Optional[Decimal] = None
+    max_volume: Optional[Decimal] = None
+    metadata: Optional[dict] = None
+    children: List['LocationTreeNode'] = Field(default_factory=list, description="Дочерние локации")
+
+    class Config:
+        from_attributes = True
+
+
+# обновить forward reference для рекурсии
+LocationTreeNode.model_rebuild()
