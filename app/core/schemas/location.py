@@ -31,7 +31,7 @@ class LocationBase(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=100, description="Название локации")
     zone_type: ZoneType = Field(..., description="Тип зоны")
-    level: int = Field(..., ge=1, le=5, description="Уровень в иерархии (1-5)")
+    level: int = Field(..., ge=0, le=5, description="Уровень в иерархии (0-5)")
     max_weight: Optional[Decimal] = Field(default=Decimal("0"), ge=0, description="Максимальный вес (кг)")
     max_volume: Optional[Decimal] = Field(default=Decimal("0"), ge=0, description="Максимальный объём (м³)")
     is_active: bool = Field(default=True, description="Активна ли локация")

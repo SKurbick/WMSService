@@ -1,6 +1,7 @@
 """API endpoints для локаций"""
 
 from fastapi import APIRouter, Depends, status, Query
+from fastapi.responses import StreamingResponse
 from typing import List
 
 from app.core.schemas.location import (
@@ -13,6 +14,7 @@ from app.core.schemas.location import (
     LocationTreeNode,
 )
 from app.core.services.location_service import LocationService
+from app.core.services.label_service import LabelService
 from app.api.v1.dependencies import get_location_service
 
 router = APIRouter(prefix="/locations", tags=["Локации"])
@@ -216,3 +218,42 @@ async def find_available_location(
     - Информацию о найденной свободной ячейке
     """
     return await service.find_available_location(product_id, quantity, zone_type)
+
+
+@router.get("/{location_id}/qr-code")
+async def generate_location_qr_code(
+        location_id: int,
+        size: int = Query(300, ge=100, le=1000, description="Размер QR-кода в пикселях"),
+        location_service: LocationService = Depends(get_location_service),
+):
+    """
+    Генерировать QR-код для локации
+
+    Генерирует PNG изображение с QR-кодом содержащим location_code.
+    QR-код можно распечатать и разместить на складе для быстрого сканирования.
+
+    **Параметры:**
+    - **location_id**: ID локации
+    - **size**: Размер изображения в пикселях (100-1000, по умолчанию 300)
+
+    **Возвращает:**
+    - PNG изображение с QR-кодом
+
+    **Содержимое QR-кода:**
+    - location_code (например: PUSHKINO-ХРАНЕНИЕ-01-S01-L01-A)
+    """
+    # Получаем локацию
+    location = await location_service.get_location_by_id(location_id)
+
+    # Генерируем QR-код из location_code
+    label_service = LabelService()
+    qr_image = label_service.generate_qr_code(location.location_code, size)
+
+    # Возвращаем PNG изображение
+    return StreamingResponse(
+        qr_image,
+        media_type="image/png",
+        headers={
+            "Content-Disposition": f'inline; filename="location_{location_id}_qr.png"'
+        }
+    )
