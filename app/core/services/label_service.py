@@ -60,12 +60,14 @@ class LabelService:
 
         # Пытаемся загрузить шрифт
         try:
+            # Для Debian/Ubuntu (работает в Docker)
             font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
         except:
             try:
-                # Попытка для Alpine Linux
-                font = ImageFont.truetype("/usr/share/fonts/ttf-dejavu/DejaVuSans-Bold.ttf", font_size)
+                # Альтернативный путь
+                font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", font_size)
             except:
+                # Fallback на дефолтный (без кириллицы)
                 font = ImageFont.load_default()
 
         # Проверяем помещается ли текст в одну строку

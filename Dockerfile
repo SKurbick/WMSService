@@ -4,6 +4,11 @@ LABEL authors="skurbick"
 # Устанавливаем рабочую директорию
 WORKDIR /app
 
+# Установка шрифтов с поддержкой кириллицы
+RUN apt-get update && apt-get install -y \
+    fonts-dejavu \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
 
 # Копируем файл с зависимостями
 COPY requirements.txt .
