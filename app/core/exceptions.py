@@ -92,3 +92,45 @@ class ProductNotFoundError(DomainException):
     """Товар не найден"""
 
     pass
+
+
+# === Tasks ===
+
+
+class TaskNotFoundError(DomainException):
+    """Заявка не найдена"""
+
+    pass
+
+
+class TaskForbiddenError(DomainException):
+    """Заявка не принадлежит данному пользователю"""
+
+    pass
+
+
+class TaskInvalidStatusError(DomainException):
+    """Недопустимый переход статуса заявки"""
+
+    pass
+
+
+class TaskPermissionDeniedError(DomainException):
+    """Недостаточно прав для выполнения операции с заявкой"""
+
+    pass
+
+
+class TaskItemNotFoundError(DomainException):
+    """Позиция заявки не найдена"""
+
+    pass
+
+
+# === Notifications ===
+
+
+class NotificationNotFoundError(DomainException):
+    """Уведомление не найдено"""
+
+    pass

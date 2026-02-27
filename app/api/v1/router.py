@@ -8,6 +8,8 @@ from app.api.v1.endpoints import (
     movements,
     reports,
     system,
+    tasks,
+    notifications,
 )
 
 api_router = APIRouter()
@@ -19,3 +21,5 @@ api_router.include_router(inventory.router)
 api_router.include_router(movements.router)
 api_router.include_router(reports.router)
 api_router.include_router(system.router)
+api_router.include_router(tasks.router)
+api_router.include_router(notifications.router)

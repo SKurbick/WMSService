@@ -12,6 +12,8 @@ from app.infrastructure.database.repositories.inventory_repository import Invent
 from app.infrastructure.database.repositories.movement_repository import MovementRepository
 from app.infrastructure.database.repositories.report_repository import ReportRepository
 from app.infrastructure.database.repositories.system_repository import SystemRepository
+from app.infrastructure.database.repositories.task_repository import TaskRepository
+from app.infrastructure.database.repositories.notification_repository import NotificationRepository
 
 # Services
 from app.core.services.location_service import LocationService
@@ -20,6 +22,8 @@ from app.core.services.inventory_service import InventoryService
 from app.core.services.movement_service import MovementService
 from app.core.services.report_service import ReportService
 from app.core.services.system_service import SystemService
+from app.core.services.task_service import TaskService
+from app.core.services.notification_service import NotificationService
 
 
 # === Repositories ===
@@ -102,3 +106,30 @@ def get_system_service(
 ) -> SystemService:
     """DI для SystemService"""
     return SystemService(system_repository)
+
+
+def get_task_repository(pool: Pool = Depends(get_db_pool)) -> TaskRepository:
+    """DI для TaskRepository"""
+    return TaskRepository(pool)
+
+
+def get_notification_repository(pool: Pool = Depends(get_db_pool)) -> NotificationRepository:
+    """DI для NotificationRepository"""
+    return NotificationRepository(pool)
+
+
+def get_notification_service(
+    repository: NotificationRepository = Depends(get_notification_repository),
+) -> NotificationService:
+    """DI для NotificationService"""
+    return NotificationService(repository)
+
+
+def get_task_service(
+    task_repo: TaskRepository = Depends(get_task_repository),
+    notification_repo: NotificationRepository = Depends(get_notification_repository),
+    movement_repo: MovementRepository = Depends(get_movement_repository),
+    notification_service: NotificationService = Depends(get_notification_service),
+) -> TaskService:
+    """DI для TaskService"""
+    return TaskService(task_repo, notification_repo, movement_repo, notification_service)

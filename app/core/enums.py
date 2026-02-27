@@ -50,3 +50,36 @@ class InventoryStatus(str, Enum):
     RESERVED = "reserved"  # Зарезервирован
     QUARANTINE = "quarantine"  # На карантине
     DAMAGED = "damaged"  # Повреждён
+
+
+class TaskType(str, Enum):
+    """Типы заявок"""
+
+    REPLENISHMENT = "replenishment"          # Пополнение
+    TRANSFER = "transfer"                    # Перемещение
+    PICKING = "picking"                      # Комплектация
+    PUTAWAY = "putaway"                      # Размещение
+    RECOUNT = "recount"                      # Пересчёт
+    DISCREPANCY_APPROVAL = "discrepancy_approval"  # Подтверждение расхождения
+
+
+class TaskStatus(str, Enum):
+    """Статусы заявок"""
+
+    PENDING = "pending"
+    ASSIGNED = "assigned"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    COMPLETED_WITH_DISCREPANCY = "completed_with_discrepancy"
+    PENDING_APPROVAL = "pending_approval"
+    PENDING_RECOUNT = "pending_recount"
+    WAITING_RECOUNT = "waiting_recount"
+    CANCELLED = "cancelled"
+
+
+class NotificationSeverity(str, Enum):
+    """Важность уведомления"""
+
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"

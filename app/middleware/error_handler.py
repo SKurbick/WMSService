@@ -11,6 +11,12 @@ from app.core.exceptions import (
     ContainerAlreadyExistsError,
     InsufficientInventoryError,
     InsufficientContainerQuantityError,
+    TaskNotFoundError,
+    TaskForbiddenError,
+    TaskInvalidStatusError,
+    TaskPermissionDeniedError,
+    TaskItemNotFoundError,
+    NotificationNotFoundError,
 )
 import logging
 
@@ -76,6 +82,54 @@ def add_exception_handlers(app: FastAPI):
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"detail": str(exc), "error_code": "INSUFFICIENT_CONTAINER_QUANTITY"},
+        )
+
+    @app.exception_handler(TaskNotFoundError)
+    async def task_not_found_handler(request: Request, exc: TaskNotFoundError):
+        logger.warning(f"Заявка не найдена: {exc}")
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": str(exc), "error_code": "TASK_NOT_FOUND"},
+        )
+
+    @app.exception_handler(TaskForbiddenError)
+    async def task_forbidden_handler(request: Request, exc: TaskForbiddenError):
+        logger.warning(f"Доступ к заявке запрещён: {exc}")
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": str(exc), "error_code": "TASK_FORBIDDEN"},
+        )
+
+    @app.exception_handler(TaskInvalidStatusError)
+    async def task_invalid_status_handler(request: Request, exc: TaskInvalidStatusError):
+        logger.warning(f"Недопустимый статус заявки: {exc}")
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc), "error_code": "TASK_INVALID_STATUS"},
+        )
+
+    @app.exception_handler(TaskPermissionDeniedError)
+    async def task_permission_denied_handler(request: Request, exc: TaskPermissionDeniedError):
+        logger.warning(f"Нет прав на операцию с заявкой: {exc}")
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": str(exc), "error_code": "TASK_PERMISSION_DENIED"},
+        )
+
+    @app.exception_handler(TaskItemNotFoundError)
+    async def task_item_not_found_handler(request: Request, exc: TaskItemNotFoundError):
+        logger.warning(f"Позиция заявки не найдена: {exc}")
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": str(exc), "error_code": "TASK_ITEM_NOT_FOUND"},
+        )
+
+    @app.exception_handler(NotificationNotFoundError)
+    async def notification_not_found_handler(request: Request, exc: NotificationNotFoundError):
+        logger.warning(f"Уведомление не найдено: {exc}")
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": str(exc), "error_code": "NOTIFICATION_NOT_FOUND"},
         )
 
     @app.exception_handler(DomainException)
