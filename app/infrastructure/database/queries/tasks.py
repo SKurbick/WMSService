@@ -126,9 +126,10 @@ UPDATE_TASK_ITEM_ACTUAL = """
 UPDATE wms.task_items
 SET
     quantity_actual  = $2,
-    from_location_id = (SELECT location_id FROM wms.locations WHERE location_code = $3),
-    discrepancy_reason = $4
+    from_location_id = (SELECT location_id FROM wms.locations WHERE location_code = $4),
+    discrepancy_reason = $5
 WHERE item_id = $1
+  AND task_id = $3
 RETURNING item_id;
 """
 
@@ -256,7 +257,7 @@ SELECT
     from_location_id,
     to_location_id,
     $3,           -- assigned_to (nullable)
-    1,            -- system user
+    $5,            -- system user
     $4::jsonb     -- metadata
 FROM wms.tasks
 WHERE task_id = $1
@@ -311,13 +312,13 @@ WHERE ti.task_id = $1
 
 GET_APPROVERS = """
 SELECT user_id
-FROM wms.user_permissions
+FROM public.user_permissions
 WHERE approve_discrepancies = TRUE;
 """
 
 CHECK_USER_CAN_APPROVE = """
 SELECT COALESCE(approve_discrepancies, FALSE) AS can_approve
-FROM wms.user_permissions
+FROM public.user_permissions
 WHERE user_id = $1;
 """
 
@@ -348,4 +349,11 @@ FROM wms.inventory i
 JOIN wms.locations l ON i.location_id = l.location_id
 WHERE i.product_id = $1
   AND l.location_code = $2;
+"""
+
+VALIDATE_ITEM_IDS_BELONG_TO_TASK = """
+SELECT item_id
+FROM wms.task_items
+WHERE task_id = $1
+  AND item_id = ANY($2::bigint[]);
 """

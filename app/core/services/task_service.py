@@ -2,8 +2,11 @@
 
 import json
 import logging
+from decimal import Decimal
 from typing import List, Optional
 from datetime import date
+
+from fastapi import HTTPException
 
 from app.core.schemas.task import (
     TaskCreate,
@@ -45,6 +48,19 @@ from app.core.exceptions import (
 
 logger = logging.getLogger(__name__)
 
+def convert_decimals_to_float(obj):
+    """
+    Рекурсивно конвертирует все Decimal в dict/list в float.
+    Необходимо для JSON сериализации данных из PostgreSQL.
+    """
+    if isinstance(obj, dict):
+        return {k: convert_decimals_to_float(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_decimals_to_float(item) for item in obj]
+    elif isinstance(obj, Decimal):
+        return float(obj)
+    else:
+        return obj
 
 class TaskService:
     """Сервис заявок"""
@@ -234,15 +250,37 @@ class TaskService:
 
     async def complete_task(self, task_id: int, data: TaskComplete) -> TaskCompleteResponse:
         """
-        Завершить заявку.
+        Завершить заявку с фактическими данными.
 
-        1. Проверить что заявка назначена на данного пользователя и в статусе in_progress.
-        2. Обновить фактические данные в task_items.
-        3. Проверить расхождения.
-        4. Если расхождение есть и у пользователя нет права approve → создать дочернюю заявку.
-        5. Иначе → создать movements и завершить.
+        Алгоритм:
+        1. Проверить что заявка существует, назначена на пользователя и в статусе in_progress
+        2. Валидировать что переданы ВСЕ позиции заявки (защита от частичного завершения)
+        3. Валидировать что все item_id принадлежат данной заявке (защита от подмены)
+        4. Обновить фактические данные (quantity_actual, from_location_code) для каждой позиции
+        5. Проверить расхождения между planned и actual
+        6. Если есть расхождение и у пользователя нет права approve_discrepancies:
+           - Создать дочернюю заявку типа discrepancy_approval для админа
+           - Перевести родительскую заявку в статус pending_approval
+           - Отправить уведомления всем пользователям с правом approve_discrepancies
+           - НЕ создавать movements (ждём подтверждения админа)
+        7. Если нет расхождений ИЛИ пользователь имеет право approve:
+           - Создать movements для всех позиций
+           - Завершить заявку (статус: completed или completed_with_discrepancy)
+
+        Args:
+            task_id: ID заявки
+            data: Данные завершения (фактические количества, локации)
+
+        Returns:
+            TaskCompleteResponse с итоговым статусом
+
+        Raises:
+            TaskNotFoundError: Заявка не найдена
+            TaskForbiddenError: Заявка назначена на другого пользователя
+            TaskInvalidStatusError: Заявка не в статусе in_progress или неполные данные
+            TaskItemNotFoundError: Позиция заявки не найдена
         """
-        # 1. Проверяем заявку
+        # 1. Проверить существование и права
         task = await self.task_repo.get_by_id(task_id)
         if not task:
             raise TaskNotFoundError(f"Заявка #{task_id} не найдена")
@@ -255,10 +293,32 @@ class TaskService:
                 f"Заявка должна быть в статусе in_progress, текущий: {task['status']}"
             )
 
-        # 2. Обновляем фактические данные
+        # 2. Валидация: проверить что передали данные для ВСЕХ позиций заявки
+        task_items = await self.task_repo.get_task_items(task_id)
+        expected_item_ids = {item["item_id"] for item in task_items}
+        received_item_ids = {item.item_id for item in data.items}
+
+        # 2.1. Проверить что не пропущены позиции
+        missing_items = expected_item_ids - received_item_ids
+        if missing_items:
+            raise TaskInvalidStatusError(
+                f"Не переданы данные для позиций: {list(missing_items)}. "
+                f"Необходимо передать данные для ВСЕХ позиций заявки."
+            )
+
+        # 2.2. Проверить что нет лишних/чужих позиций
+        extra_items = received_item_ids - expected_item_ids
+        if extra_items:
+            raise TaskInvalidStatusError(
+                f"Переданы неверные item_id: {list(extra_items)}. "
+                f"Эти позиции не принадлежат заявке #{task_id}."
+            )
+
+        # 3. Обновить фактические данные для каждой позиции
         for item in data.items:
             result = await self.task_repo.update_task_item_actual(
                 item_id=item.item_id,
+                task_id=task_id,
                 quantity_actual=item.quantity_actual,
                 from_location_code=item.from_location_code,
                 discrepancy_reason=item.discrepancy_reason,
@@ -266,16 +326,21 @@ class TaskService:
             if not result:
                 raise TaskItemNotFoundError(f"Позиция #{item.item_id} не найдена")
 
-        # 3. Проверяем расхождения
+        # 4. Проверить расхождения (сравнить planned vs actual для всех позиций)
         discrepancy_records = await self.task_repo.check_discrepancies(task_id)
         discrepancies = [dict(r) for r in discrepancy_records]
+
+        # Конвертировать Decimal → float для JSON сериализации
+        discrepancies = convert_decimals_to_float(discrepancies)
+
         has_discrepancy = any(d["has_discrepancy"] for d in discrepancies)
 
-        # 4. Проверяем право пользователя
+        # 5. Проверить права пользователя на самостоятельное подтверждение расхождений
         user_can_approve = await self.task_repo.check_user_can_approve(data.user_id)
 
+        # 6. Если есть расхождение и пользователь НЕ может самостоятельно подтвердить
         if has_discrepancy and not user_can_approve:
-            # Создаём дочернюю заявку для админа
+            # 6.1. Создать метаданные для дочерней заявки
             child_metadata = {
                 "parent_task_info": {
                     "task_id": task_id,
@@ -287,25 +352,28 @@ class TaskService:
                 "to_location_code": data.to_location_code,
             }
 
-            # Если создатель заявки может подтверждать — назначаем ему
+            # 6.2. Назначить дочернюю заявку на создателя (если у него есть право approve)
             assignee = None
             if await self.task_repo.check_user_can_approve(task["created_by"]):
                 assignee = task["created_by"]
 
+            # 6.3. Создать дочернюю заявку типа discrepancy_approval
             child = await self.task_repo.create_child_task(
                 parent_task_id=task_id,
                 task_type="discrepancy_approval",
                 assigned_to=assignee,
                 metadata=child_metadata,
+                created_by=data.user_id
             )
 
-            # Меняем статус родительской заявки
+            # 6.4. Перевести родительскую заявку в статус ожидания подтверждения
             await self.task_repo.set_status(task_id, "pending_approval")
 
-            # Уведомляем всех approvers
+            # 6.5. Отправить уведомления всем пользователям с правом approve_discrepancies
             approver_rows = await self.task_repo.get_approvers()
             approver_ids = [r["user_id"] for r in approver_rows]
 
+            # 6.6. Подготовить данные для уведомления
             total_planned = sum(d["quantity_planned"] for d in discrepancies)
             total_actual = sum(d["quantity_actual"] for d in discrepancies)
             percent = (
@@ -314,6 +382,7 @@ class TaskService:
             )
             severity = "critical" if percent >= 20 else "warning"
 
+            # 6.7. Создать уведомления
             await self.notification_svc.create_for_users(
                 user_ids=approver_ids,
                 notification_type="task_discrepancy",
@@ -327,6 +396,7 @@ class TaskService:
                 metadata={"discrepancies": discrepancies, "parent_task_id": task_id},
             )
 
+            # 6.8. Вернуть ответ (movements НЕ создаются, ждём подтверждения админа)
             return TaskCompleteResponse(
                 task_id=task_id,
                 status="pending_approval",
@@ -334,13 +404,17 @@ class TaskService:
                 child_task_id=child["task_id"],
             )
 
-        # 5. Нет расхождений или пользователь имеет право approve
+        # 7. Нет расхождений ИЛИ пользователь имеет право самостоятельно подтвердить
+        # 7.1. Создать movements для всех позиций (с фактическими количествами)
         await self._create_movements_for_task(task_id, data.to_location_code, data.user_id)
 
+        # 7.2. Завершить заявку (статус зависит от наличия расхождений)
         completed = await self.task_repo.complete_task(task_id)
+
+        # 7.3. Вернуть результат
         return TaskCompleteResponse(
             task_id=task_id,
-            status=completed["status"],
+            status=completed["status"],  # completed или completed_with_discrepancy
         )
 
     # ============================================================
@@ -472,7 +546,17 @@ class TaskService:
             await self.task_repo.update_approved_qty(item_id, quantity)
 
         # Получаем metadata задачи
-        task_metadata = task["metadata"] or {}
+        task_metadata_raw = task["metadata"]
+        if isinstance(task_metadata_raw, str):
+            # PostgreSQL вернул JSON как строку - парсим
+            task_metadata = json.loads(task_metadata_raw) if task_metadata_raw else {}
+        elif isinstance(task_metadata_raw, dict):
+            # Уже dict - используем как есть
+            task_metadata = task_metadata_raw
+        else:
+            # None или другой тип - пустой dict
+            task_metadata = {}
+
         to_location_code = task_metadata.get("to_location_code", "")
 
         # Создаём movements для родительской заявки
@@ -561,6 +645,7 @@ class TaskService:
             task_type="recount",
             assigned_to=parent_task["assigned_to"] if parent_task else None,
             metadata=recount_metadata,
+            created_by= user_id
         )
 
         await self.task_repo.set_status(parent_task_id or task_id, "pending_recount")

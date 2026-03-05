@@ -19,16 +19,16 @@ class TaskRepository:
     # ============================================================
 
     async def get_tasks(
-        self,
-        status: Optional[str] = None,
-        task_type: Optional[str] = None,
-        assigned_to: Optional[int] = None,
-        from_location_id: Optional[int] = None,
-        to_location_id: Optional[int] = None,
-        from_date: Optional[date] = None,
-        to_date: Optional[date] = None,
-        limit: int = 100,
-        offset: int = 0,
+            self,
+            status: Optional[str] = None,
+            task_type: Optional[str] = None,
+            assigned_to: Optional[int] = None,
+            from_location_id: Optional[int] = None,
+            to_location_id: Optional[int] = None,
+            from_date: Optional[date] = None,
+            to_date: Optional[date] = None,
+            limit: int = 100,
+            offset: int = 0,
     ) -> List[Record]:
         async with self.pool.acquire() as conn:
             return await conn.fetch(
@@ -61,16 +61,16 @@ class TaskRepository:
     # ============================================================
 
     async def create(
-        self,
-        task_type: str,
-        priority: int,
-        from_location_code: str,
-        to_location_code: str,
-        due_date,
-        reason: Optional[str],
-        notes: Optional[str],
-        created_by: int,
-        items: list,
+            self,
+            task_type: str,
+            priority: int,
+            from_location_code: str,
+            to_location_code: str,
+            due_date,
+            reason: Optional[str],
+            notes: Optional[str],
+            created_by: int,
+            items: list,
     ) -> Record:
         """Создать заявку вместе с позициями в одной транзакции"""
         async with self.pool.acquire() as conn:
@@ -131,20 +131,35 @@ class TaskRepository:
             return await conn.fetchrow(queries.START_TASK, task_id, user_id)
 
     async def update_task_item_actual(
-        self,
-        item_id: int,
-        quantity_actual: int,
-        from_location_code: str,
-        discrepancy_reason: Optional[str],
+            self,
+            item_id: int,
+            task_id: int,
+            quantity_actual: int,
+            from_location_code: str,
+            discrepancy_reason: Optional[str],
     ) -> Optional[Record]:
         async with self.pool.acquire() as conn:
             return await conn.fetchrow(
                 queries.UPDATE_TASK_ITEM_ACTUAL,
                 item_id,
                 quantity_actual,
+                task_id,
                 from_location_code,
                 discrepancy_reason,
             )
+
+    async def validate_items_belong_to_task(
+            self, task_id: int, item_ids: List[int]
+    ) -> List[int]:
+        """Проверить что все item_ids принадлежат task_id"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                queries.VALIDATE_ITEM_IDS_BELONG_TO_TASK,
+                task_id,
+                item_ids,
+            )
+            return [row["item_id"] for row in rows]
+
 
     async def check_discrepancies(self, task_id: int) -> List[Record]:
         async with self.pool.acquire() as conn:
@@ -167,7 +182,7 @@ class TaskRepository:
             return await conn.fetch(queries.GET_SUGGESTIONS, task_id)
 
     async def get_product_qty_in_zone(
-        self, product_id: str, zone_code: str
+            self, product_id: str, zone_code: str
     ) -> float:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(queries.GET_PRODUCT_QTY_IN_ZONE, product_id, zone_code)
@@ -178,12 +193,26 @@ class TaskRepository:
     # ============================================================
 
     async def create_child_task(
-        self,
-        parent_task_id: int,
-        task_type: str,
-        assigned_to: Optional[int],
-        metadata: dict,
+            self,
+            parent_task_id: int,
+            task_type: str,
+            assigned_to: Optional[int],
+            metadata: dict,
+            created_by: int,
     ) -> Record:
+        """
+        Создать дочернюю заявку (discrepancy_approval или recount).
+
+        Args:
+            parent_task_id: ID родительской заявки
+            task_type: Тип дочерней заявки ('discrepancy_approval' или 'recount')
+            assigned_to: ID пользователя на которого назначить (может быть None)
+            metadata: Метаданные дочерней заявки (JSON)
+            created_by: ID пользователя-создателя
+
+        Returns:
+            Record с данными созданной заявки
+        """
         async with self.pool.acquire() as conn:
             return await conn.fetchrow(
                 queries.CREATE_CHILD_TASK,
@@ -191,6 +220,7 @@ class TaskRepository:
                 task_type,
                 assigned_to,
                 json.dumps(metadata, ensure_ascii=False),
+                created_by,
             )
 
     # ============================================================
@@ -211,7 +241,7 @@ class TaskRepository:
             return await conn.fetchrow(queries.UPDATE_TASK_ITEM_APPROVED_QTY, item_id, quantity)
 
     async def get_inventory_qty_in_location(
-        self, product_id: str, location_id: int
+            self, product_id: str, location_id: int
     ) -> float:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -228,7 +258,7 @@ class TaskRepository:
     # ============================================================
 
     async def save_recount_results(
-        self, task_id: int, results: dict, user_id: int
+            self, task_id: int, results: dict, user_id: int
     ) -> Optional[Record]:
         async with self.pool.acquire() as conn:
             return await conn.fetchrow(
@@ -239,7 +269,7 @@ class TaskRepository:
             )
 
     async def get_inventory_qty_by_location_code(
-        self, product_id: str, location_code: str
+            self, product_id: str, location_code: str
     ) -> float:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
