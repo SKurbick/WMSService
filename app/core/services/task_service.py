@@ -31,7 +31,7 @@ from app.core.schemas.task import (
     RejectDiscrepancyResponse,
     RecountResponse,
     CompleteRecount,
-    CompleteRecountResponse,
+    CompleteRecountResponse, TaskItemResponse,
 )
 from app.infrastructure.database.repositories.task_repository import TaskRepository
 from app.infrastructure.database.repositories.notification_repository import NotificationRepository
@@ -107,14 +107,62 @@ class TaskService:
         return [TaskListResponse.model_validate(dict(r)) for r in records]
 
     async def get_task_by_id(self, task_id: int) -> TaskDetailResponse:
+        """
+        Получить детальную информацию о заявке с позициями.
+
+        Для обычных заявок (replenishment, transfer, picking, putaway) позиции берутся из task_items.
+        Для дочерних заявок (discrepancy_approval, recount) позиции берутся из metadata.discrepancies.
+
+        Args:
+            task_id: ID заявки
+
+        Returns:
+            TaskDetailResponse с полной информацией о заявке и позициями
+
+        Raises:
+            TaskNotFoundError: Заявка не найдена
+        """
         task = await self.task_repo.get_by_id(task_id)
         if not task:
             raise TaskNotFoundError(f"Заявка #{task_id} не найдена")
 
-        items_records = await self.task_repo.get_task_items(task_id)
-
         task_dict = dict(task)
-        task_dict["items"] = [dict(r) for r in items_records]
+
+        # Для дочерних заявок (discrepancy_approval, recount) берём items из metadata
+        if task["task_type"] in ("discrepancy_approval", "recount"):
+            # Парсим metadata (может быть строка или dict)
+            metadata_raw = task["metadata"]
+            if isinstance(metadata_raw, str):
+                metadata = json.loads(metadata_raw) if metadata_raw else {}
+            elif isinstance(metadata_raw, dict):
+                metadata = metadata_raw
+            else:
+                metadata = {}
+
+            # Извлекаем discrepancies и преобразуем в items
+            items_from_metadata = []
+            for disc in metadata.get("discrepancies", []):
+                items_from_metadata.append(TaskItemResponse(
+                    item_id=disc.get("item_id"),
+                    product_id=disc.get("product_id"),
+                    product_name=None,  # В metadata нет имени товара
+                    quantity_planned=float(disc.get("quantity_planned", 0)),
+                    quantity_actual=float(disc.get("quantity_actual", 0)) if disc.get("quantity_actual") is not None else None,
+                    from_location_id=None,  # В metadata нет location_id
+                    from_location_code=disc.get("from_location_code"),
+                    batch_number=None,  # В metadata нет batch
+                    discrepancy_reason=disc.get("reason"),
+                    has_discrepancy=disc.get("has_discrepancy"),
+                    discrepancy_qty=float(disc.get("discrepancy_qty", 0)) if disc.get("discrepancy_qty") is not None else None,
+                    discrepancy_percent=float(disc.get("discrepancy_percent", 0)) if disc.get("discrepancy_percent") is not None else None,
+                ))
+
+            task_dict["items"] = items_from_metadata
+        else:
+            # Для обычных заявок берём items из task_items (как раньше)
+            items_records = await self.task_repo.get_task_items(task_id)
+            task_dict["items"] = [TaskItemResponse.model_validate(dict(r)) for r in items_records]
+
         return TaskDetailResponse.model_validate(task_dict)
 
     async def get_my_tasks(self, user_id: int) -> List[TaskMyResponse]:
