@@ -127,6 +127,9 @@ class TaskService:
             raise TaskNotFoundError(f"Заявка #{task_id} не найдена")
 
         task_dict = dict(task)
+        if task_dict.get("metadata"):
+            if isinstance(task_dict["metadata"], str):
+                task_dict["metadata"] = json.loads(task_dict["metadata"])
 
         # Для дочерних заявок (discrepancy_approval, recount) берём items из metadata
         if task["task_type"] in ("discrepancy_approval", "recount"):
