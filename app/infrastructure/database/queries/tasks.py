@@ -26,6 +26,37 @@ ORDER BY
 LIMIT $8 OFFSET $9;
 """
 
+GET_CHILD_TASKS_FOR_PARENTS = """
+SELECT
+    t.task_id,
+    t.task_type,
+    t.status,
+    t.priority,
+    t.parent_task_id,
+    fl.location_code AS from_location_code,
+    tl.location_code AS to_location_code,
+    t.assigned_to,
+    t.created_by,
+    t.due_date,
+    t.created_at,
+    COALESCE(ti.items_count, 0)              AS items_count,
+    COALESCE(ti.total_quantity_planned, 0)   AS total_quantity_planned,
+    ti.total_quantity_actual
+FROM wms.tasks t
+LEFT JOIN wms.locations fl ON t.from_location_id = fl.location_id
+LEFT JOIN wms.locations tl ON t.to_location_id   = tl.location_id
+LEFT JOIN (
+    SELECT
+        task_id,
+        COUNT(*)                        AS items_count,
+        SUM(quantity_planned)           AS total_quantity_planned,
+        SUM(quantity_actual)            AS total_quantity_actual
+    FROM wms.task_items
+    GROUP BY task_id
+) ti ON t.task_id = ti.task_id
+WHERE t.parent_task_id = ANY($1::bigint[]);
+"""
+
 GET_TASK_BY_ID = """
 SELECT *
 FROM wms.v_tasks_with_users

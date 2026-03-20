@@ -74,6 +74,27 @@ class TaskUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+class ChildTaskSummary(BaseModel):
+    """Дочерняя заявка в списке родителя"""
+
+    task_id: int
+    task_type: str
+    status: str
+    priority: int
+    from_location_code: Optional[str] = None
+    to_location_code: Optional[str] = None
+    assigned_to: Optional[int] = None
+    created_by: int
+    due_date: Optional[datetime] = None
+    items_count: int = 0
+    total_quantity_planned: float = 0
+    total_quantity_actual: Optional[float] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class TaskListResponse(BaseModel):
     """Заявка в списке (без позиций)"""
 
@@ -81,6 +102,7 @@ class TaskListResponse(BaseModel):
     task_type: str
     status: str
     priority: int
+    parent_task_id: Optional[int] = None
     from_location_code: Optional[str] = None
     from_zone_type: Optional[str] = None
     to_location_code: Optional[str] = None
@@ -94,6 +116,7 @@ class TaskListResponse(BaseModel):
     total_quantity_actual: Optional[float] = None
     created_at: datetime
     waiting_minutes: Optional[float] = None
+    child_tasks: List[ChildTaskSummary] = []
 
     class Config:
         from_attributes = True

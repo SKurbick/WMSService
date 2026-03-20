@@ -31,7 +31,9 @@ from app.core.schemas.task import (
     RejectDiscrepancyResponse,
     RecountResponse,
     CompleteRecount,
-    CompleteRecountResponse, TaskItemResponse,
+    CompleteRecountResponse,
+    TaskItemResponse,
+    ChildTaskSummary,
 )
 from app.infrastructure.database.repositories.task_repository import TaskRepository
 from app.infrastructure.database.repositories.notification_repository import NotificationRepository
@@ -90,6 +92,7 @@ class TaskService:
         to_location_id: Optional[int] = None,
         from_date: Optional[date] = None,
         to_date: Optional[date] = None,
+        hide_child_tasks: bool = True,
         limit: int = 100,
         offset: int = 0,
     ) -> List[TaskListResponse]:
@@ -104,7 +107,25 @@ class TaskService:
             limit=limit,
             offset=offset,
         )
-        return [TaskListResponse.model_validate(dict(r)) for r in records]
+
+        tasks = [TaskListResponse.model_validate(dict(r)) for r in records]
+
+        if hide_child_tasks:
+            tasks = [t for t in tasks if t.parent_task_id is None]
+
+        # Батч-загрузка дочерних заявок для всех родителей в одном запросе
+        parent_ids = [t.task_id for t in tasks if t.parent_task_id is None]
+        if parent_ids:
+            child_records = await self.task_repo.get_child_tasks_for_parents(parent_ids)
+            children_by_parent: dict[int, list[ChildTaskSummary]] = {}
+            for cr in child_records:
+                child = ChildTaskSummary.model_validate(dict(cr))
+                children_by_parent.setdefault(cr["parent_task_id"], []).append(child)
+
+            for task in tasks:
+                task.child_tasks = children_by_parent.get(task.task_id, [])
+
+        return tasks
 
     async def get_task_by_id(self, task_id: int) -> TaskDetailResponse:
         """

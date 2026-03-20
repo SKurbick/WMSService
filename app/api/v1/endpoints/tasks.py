@@ -48,6 +48,7 @@ async def get_tasks(
     to_location_id: Optional[int] = Query(None, description="Фильтр по зоне-назначению"),
     from_date: Optional[date] = Query(None, description="Дата начала периода"),
     to_date: Optional[date] = Query(None, description="Дата окончания периода"),
+    hide_child_tasks: bool = Query(True, description="Скрывать дочерние заявки из основного списка"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     service: TaskService = Depends(get_task_service),
@@ -61,6 +62,7 @@ async def get_tasks(
         to_location_id=to_location_id,
         from_date=from_date,
         to_date=to_date,
+        hide_child_tasks=hide_child_tasks,
         limit=limit,
         offset=offset,
     )

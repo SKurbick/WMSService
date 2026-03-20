@@ -44,6 +44,10 @@ class TaskRepository:
                 offset,
             )
 
+    async def get_child_tasks_for_parents(self, parent_ids: List[int]) -> List[Record]:
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(queries.GET_CHILD_TASKS_FOR_PARENTS, parent_ids)
+
     async def get_by_id(self, task_id: int) -> Optional[Record]:
         async with self.pool.acquire() as conn:
             return await conn.fetchrow(queries.GET_TASK_BY_ID, task_id)
