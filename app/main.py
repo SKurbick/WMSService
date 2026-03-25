@@ -35,18 +35,18 @@ async def lifespan(app: FastAPI):
     await get_db_pool()
     logger.info("✅ База данных подключена")
 
-    consumer_task = asyncio.create_task(start_consumer())
-    logger.info("✅ RabbitMQ consumer запущен")
+    # consumer_task = asyncio.create_task(start_consumer())
+    # logger.info("✅ RabbitMQ consumer запущен")
 
     yield
 
     # Shutdown
     logger.info("🛑 Остановка WMS Service...")
-    consumer_task.cancel()
-    try:
-        await consumer_task
-    except asyncio.CancelledError:
-        pass
+    # consumer_task.cancel()
+    # try:
+    #     await consumer_task
+    # except asyncio.CancelledError:
+    #     pass
     await close_db_pool()
     logger.info("✅ База данных отключена")
 
