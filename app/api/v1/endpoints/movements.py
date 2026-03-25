@@ -1,12 +1,12 @@
 """API endpoints для движений товаров"""
 
-from fastapi import APIRouter, Depends, status, Query, Path
+from fastapi import APIRouter, Depends, status, Query, Path, Body
 from typing import List, Optional
 from datetime import date
 
 from app.core.schemas.movement import (
     MovementCreate,
-    MovementCreateResponse,
+    MovementBulkCreateResponse,
     MovementResponse,
 )
 from app.core.services.movement_service import MovementService
@@ -15,18 +15,27 @@ from app.api.v1.dependencies import get_movement_service
 router = APIRouter(prefix="/movements", tags=["Движения"])
 
 
-@router.post("", response_model=MovementCreateResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=MovementBulkCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_movement(
-    data: MovementCreate,
+    data: List[MovementCreate] = Body(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Список movements для создания (1-500 элементов)",
+    ),
     service: MovementService = Depends(get_movement_service),
 ):
     """
-    Создать движение товара
+    Создать movements (батч операция)
 
-    Регистрирует движение товара (pick, transfer, adjust, receive, ship, write_off).
+    Регистрирует один или несколько movements атомарно.
+    Все movements создаются в одной транзакции (всё или ничего).
     Триггер в БД автоматически обновляет inventory.
 
     **Параметры:**
+    - **data**: Массив movements (минимум 1, максимум 500)
+
+    Каждый movement содержит:
     - **movement_type**: Тип движения
     - **product_id**: ID товара
     - **from_location_code**: Код локации-источника (опционально)
@@ -38,7 +47,12 @@ async def create_movement(
     - **reason**: Причина/комментарий (опционально)
 
     **Возвращает:**
-    - Созданное движение
+    - **created**: Список созданных movements
+    - **total**: Количество созданных movements
+
+    **Атомарность:**
+    - Если хотя бы один movement не прошёл валидацию → ошибка, ничего не создано
+    - Если ошибка при создании любого movement → откат всех
     """
     return await service.create_movement(data)
 

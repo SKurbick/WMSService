@@ -37,7 +37,8 @@ from app.core.schemas.task import (
 )
 from app.infrastructure.database.repositories.task_repository import TaskRepository
 from app.infrastructure.database.repositories.notification_repository import NotificationRepository
-from app.infrastructure.database.repositories.movement_repository import MovementRepository
+from app.core.services.movement_service import MovementService
+from app.core.schemas.movement import MovementCreate
 from app.core.services.notification_service import NotificationService
 from app.core.exceptions import (
     TaskNotFoundError,
@@ -71,12 +72,12 @@ class TaskService:
         self,
         task_repo: TaskRepository,
         notification_repo: NotificationRepository,
-        movement_repo: MovementRepository,
+        movement_service: MovementService,
         notification_service: NotificationService,
     ):
         self.task_repo = task_repo
         self.notification_repo = notification_repo
-        self.movement_repo = movement_repo
+        self.movement_service = movement_service
         self.notification_svc = notification_service
 
     # ============================================================
@@ -633,39 +634,42 @@ class TaskService:
 
         # Создаём movements для родительской заявки
         items = await self.task_repo.get_items_for_movements(parent_task_id)
-        # Получаем имя пользователя для movement
         for item in items:
-            await self.movement_repo.create({
-                "movement_type": "transfer",
-                "product_id": item["product_id"],
-                "from_location_code": item["from_location_code"],
-                "to_location_code": to_location_code,
-                "quantity": int(item["quantity_actual"]),
-                "batch_number": item["batch_number"],
-                "container_code": None,
-                "user_name": f"user_{data.user_id}",
-                "reason": f"Task #{parent_task_id} (approved)",
-            })
+            await self.movement_service.create_movement([
+                MovementCreate(
+                    movement_type="transfer",
+                    product_id=item["product_id"],
+                    from_location_code=item["from_location_code"],
+                    to_location_code=to_location_code,
+                    quantity=int(item["quantity_actual"]),
+                    batch_number=item["batch_number"],
+                    container_code=None,
+                    user_name=f"user_{data.user_id}",
+                    reason=f"Task #{parent_task_id} (approved)",
+                )
+            ])
 
             # Adjustment если approved > planned
             orig_item = await self.task_repo.get_task_item_detail(item["item_id"])
             if orig_item and item["quantity_actual"] > orig_item["quantity_planned"]:
                 diff = int(item["quantity_actual"] - orig_item["quantity_planned"])
-                await self.movement_repo.create({
-                    "movement_type": "adjust",
-                    "product_id": item["product_id"],
-                    "from_location_code": None,
-                    "to_location_code": item["from_location_code"],
-                    "quantity": diff,
-                    "batch_number": item["batch_number"],
-                    "container_code": None,
-                    "user_name": f"user_{data.user_id}",
-                    "reason": (
-                        f"Task #{parent_task_id}: adjustment "
-                        f"(approved {item['quantity_actual']} instead of "
-                        f"{orig_item['quantity_planned']})"
-                    ),
-                })
+                await self.movement_service.create_movement([
+                    MovementCreate(
+                        movement_type="adjust",
+                        product_id=item["product_id"],
+                        from_location_code=None,
+                        to_location_code=item["from_location_code"],
+                        quantity=diff,
+                        batch_number=item["batch_number"],
+                        container_code=None,
+                        user_name=f"user_{data.user_id}",
+                        reason=(
+                            f"Task #{parent_task_id}: adjustment "
+                            f"(approved {item['quantity_actual']} instead of "
+                            f"{orig_item['quantity_planned']})"
+                        ),
+                    )
+                ])
 
         # Обновляем статусы
         await self.task_repo.set_status(parent_task_id, "completed_with_discrepancy")
@@ -799,15 +803,19 @@ class TaskService:
     ) -> None:
         """Создать movements для каждой позиции заявки"""
         items = await self.task_repo.get_items_for_movements(task_id)
-        for item in items:
-            await self.movement_repo.create({
-                "movement_type": "transfer",
-                "product_id": item["product_id"],
-                "from_location_code": item["from_location_code"],
-                "to_location_code": to_location_code,
-                "quantity": int(item["quantity_actual"]),
-                "batch_number": item["batch_number"],
-                "container_code": None,
-                "user_name": f"user_{user_id}",
-                "reason": f"Task #{task_id}",
-            })
+        movements = [
+            MovementCreate(
+                movement_type="transfer",
+                product_id=item["product_id"],
+                from_location_code=item["from_location_code"],
+                to_location_code=to_location_code,
+                quantity=int(item["quantity_actual"]),
+                batch_number=item["batch_number"],
+                container_code=None,
+                user_name=f"user_{user_id}",
+                reason=f"Task #{task_id}",
+            )
+            for item in items
+        ]
+        if movements:
+            await self.movement_service.create_movement(movements)

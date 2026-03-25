@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # Внешние сервисы
     PRODUCTS_SERVICE_URL: Optional[str] = None
 
+    # RabbitMQ
+    RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
+    RABBITMQ_QUEUE: str = "wms.fbs.write_off"
+
+    # Локации
+    FBS_LOCATION_CODE: str = "PUSHKINO-ФБС"
+
     # Настройки Pydantic v2
     model_config = SettingsConfigDict(
         env_file=".env",

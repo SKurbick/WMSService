@@ -1,5 +1,6 @@
 """Точка входа FastAPI приложения"""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -10,6 +11,7 @@ from app.infrastructure.database.connection import get_db_pool, close_db_pool
 from app.api.v1.router import api_router
 from app.middleware.error_handler import add_exception_handlers
 from app.middleware.logging import add_logging_middleware
+from app.consumer import start_consumer
 
 # Настройка логирования
 logging.basicConfig(
@@ -32,11 +34,19 @@ async def lifespan(app: FastAPI):
     logger.info(f"📊 Подключение к БД: {settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}")
     await get_db_pool()
     logger.info("✅ База данных подключена")
-    
+
+    consumer_task = asyncio.create_task(start_consumer())
+    logger.info("✅ RabbitMQ consumer запущен")
+
     yield
-    
+
     # Shutdown
     logger.info("🛑 Остановка WMS Service...")
+    consumer_task.cancel()
+    try:
+        await consumer_task
+    except asyncio.CancelledError:
+        pass
     await close_db_pool()
     logger.info("✅ База данных отключена")
 

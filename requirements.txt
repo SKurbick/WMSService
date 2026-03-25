@@ -5,6 +5,9 @@ uvicorn==0.34.0
 # База данных
 asyncpg==0.30.0
 
+# RabbitMQ
+aio-pika
+
 # Валидация и настройки
 pydantic==2.11.3
 pydantic-settings==2.8.1

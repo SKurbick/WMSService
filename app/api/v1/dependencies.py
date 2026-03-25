@@ -128,8 +128,8 @@ def get_notification_service(
 def get_task_service(
     task_repo: TaskRepository = Depends(get_task_repository),
     notification_repo: NotificationRepository = Depends(get_notification_repository),
-    movement_repo: MovementRepository = Depends(get_movement_repository),
+    movement_service: MovementService = Depends(get_movement_service),
     notification_service: NotificationService = Depends(get_notification_service),
 ) -> TaskService:
     """DI для TaskService"""
-    return TaskService(task_repo, notification_repo, movement_repo, notification_service)
+    return TaskService(task_repo, notification_repo, movement_service, notification_service)

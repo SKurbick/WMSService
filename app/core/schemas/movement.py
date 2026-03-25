@@ -1,6 +1,6 @@
 """Pydantic схемы для движений товаров"""
 
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime, date
 from app.core.enums import MovementType
@@ -30,6 +30,22 @@ class MovementCreateResponse(BaseModel):
     to_location_id: Optional[int] = None
     quantity: int
     created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MovementBulkCreateResponse(BaseModel):
+    """Ответ при создании нескольких movements"""
+
+    created: List[MovementCreateResponse] = Field(
+        ...,
+        description="Список созданных movements"
+    )
+    total: int = Field(
+        ...,
+        description="Количество созданных movements"
+    )
 
     class Config:
         from_attributes = True
