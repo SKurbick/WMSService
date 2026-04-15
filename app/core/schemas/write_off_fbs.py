@@ -19,7 +19,7 @@ class ShipmentOfGoodsUpdate(BaseModel):
 
 
 class WriteOffAccordingToFBS(ShipmentOfGoodsUpdate):
-    assembly_tasks: List[int]
+    assembly_tasks: List[str]
 
     @field_validator('quantity')
     def validate_quantity_equals_tasks_count(cls, v: int, info) -> int:

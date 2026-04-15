@@ -12,6 +12,7 @@ from app.api.v1.router import api_router
 from app.middleware.error_handler import add_exception_handlers
 from app.middleware.logging import add_logging_middleware
 from app.consumer import start_consumer
+from app.retry_worker import start_retry_worker
 
 # Настройка логирования
 logging.basicConfig(
@@ -35,18 +36,26 @@ async def lifespan(app: FastAPI):
     await get_db_pool()
     logger.info("✅ База данных подключена")
 
-    # consumer_task = asyncio.create_task(start_consumer())
-    # logger.info("✅ RabbitMQ consumer запущен")
+    consumer_task = asyncio.create_task(start_consumer())
+    logger.info("✅ RabbitMQ consumer запущен")
+
+    retry_task = asyncio.create_task(start_retry_worker())
+    logger.info("✅ Retry worker запущен")
 
     yield
 
     # Shutdown
     logger.info("🛑 Остановка WMS Service...")
-    # consumer_task.cancel()
-    # try:
-    #     await consumer_task
-    # except asyncio.CancelledError:
-    #     pass
+    consumer_task.cancel()
+    try:
+        await consumer_task
+    except asyncio.CancelledError:
+        pass
+    retry_task.cancel()
+    try:
+        await retry_task
+    except asyncio.CancelledError:
+        pass
     await close_db_pool()
     logger.info("✅ База данных отключена")
 
