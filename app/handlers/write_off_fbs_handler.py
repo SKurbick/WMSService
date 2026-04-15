@@ -143,30 +143,23 @@ def _group_items(
 
 def _items_to_dicts(items: List[WriteOffAccordingToFBS]) -> List[dict]:
     """Конвертирует список схем в список dict для репозитория."""
-    result = []
-    for item in items:
-        d = item.model_dump()
-        # shipment_date в схеме — date, в БД — TIMESTAMPTZ
-        if d.get("shipment_date") is not None:
-            d["shipment_date"] = datetime.combine(
-                d["shipment_date"],
-                datetime.min.time(),
-                tzinfo=timezone.utc,
-            )
-        result.append(d)
-    return result
+    return [item.model_dump() for item in items]
 
 
 async def handle_write_off_fbs(
     items: List[WriteOffAccordingToFBS],
     pool: Pool,
     raw_message: Optional[dict] = None,
+    shipment_id: Optional[int] = None,
 ) -> int:
     """
     Обрабатывает список объектов списания из ФБС зоны.
 
+    Если shipment_id передан (consumer уже создал запись до валидации) —
+    использует его. Иначе создаёт shipment сам (для прямых вызовов).
+
     Шаги:
-    1. Сохранить shipment + items в БД (транзакция 1) — данные зафиксированы, ACK отправляется
+    1. Создать fbs_shipment_items для уже существующего shipment
     2. Для каждой группы product_id — попытка списания (отдельная транзакция):
        - Успех          → status=success, movement_id заполнен
        - CheckViolation → status=pending_retry, next_retry_at заполнен
@@ -174,7 +167,7 @@ async def handle_write_off_fbs(
     3. Пересчитать статус shipment
 
     Returns:
-        shipment_id созданного журнала
+        shipment_id
     """
     shipment_repo = FbsShipmentRepository()
     movement_repo = MovementRepository(pool)
@@ -188,21 +181,23 @@ async def handle_write_off_fbs(
             f"Группировка: {len(items)} позиций → {len(grouped_items)} уникальных product_id"
         )
 
-    # --- Транзакция 1: сохраняем журнал ---
+    # --- Создаём shipment_items (shipment уже создан consumer'ом ДО валидации) ---
     async with pool.acquire() as conn:
         async with conn.transaction():
-            shipment_id = await shipment_repo.create_shipment(
-                conn,
-                raw_message=raw_message if raw_message is not None else [],
-                total_items=len(items),
-            )
+            if shipment_id is None:
+                # Прямой вызов без consumer'а — создаём shipment здесь
+                shipment_id = await shipment_repo.create_shipment(
+                    conn,
+                    raw_message=raw_message if raw_message is not None else [],
+                    total_items=len(items),
+                )
             item_ids = await shipment_repo.create_shipment_items(
                 conn,
                 shipment_id=shipment_id,
                 items=_items_to_dicts(items),
             )
 
-    logger.info(f"Shipment сохранён | shipment_id={shipment_id} | items={len(item_ids)}")
+    logger.info(f"Shipment items созданы | shipment_id={shipment_id} | items={len(item_ids)}")
 
     # Маппинг product_id → list[item_id] для обновления статусов
     product_to_item_ids: dict[str, List[int]] = {}

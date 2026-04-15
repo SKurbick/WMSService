@@ -9,7 +9,7 @@ from asyncpg import Connection
 
 CREATE_SHIPMENT = """
 INSERT INTO wms.fbs_shipments (raw_message, total_items, status)
-VALUES ($1::jsonb, $2, 'processing')
+VALUES ($1::jsonb, $2, $3)
 RETURNING shipment_id
 """
 
@@ -85,12 +85,14 @@ class FbsShipmentRepository:
         conn: Connection,
         raw_message: dict,
         total_items: int,
+        status: str = "processing",
     ) -> int:
         """INSERT в fbs_shipments. Возвращает shipment_id."""
         row = await conn.fetchrow(
             CREATE_SHIPMENT,
             json.dumps(raw_message, ensure_ascii=False),
             total_items,
+            status,
         )
         return row["shipment_id"]
 

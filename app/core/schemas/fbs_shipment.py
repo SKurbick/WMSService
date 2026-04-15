@@ -27,5 +27,6 @@ class FbsShipmentResponse(BaseModel):
     received_at: datetime
     total_items: int
     status: str
+    error_message: Optional[str] = None
     completed_at: Optional[datetime] = None
     items: List[FbsShipmentItemResponse] = []

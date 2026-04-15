@@ -9,10 +9,13 @@ from pydantic import ValidationError
 
 from app.shared.config import settings
 from app.infrastructure.database.connection import get_db_pool
+from app.infrastructure.database.repositories.fbs_shipment_repository import FbsShipmentRepository
 from app.handlers.write_off_fbs_handler import handle_write_off_fbs
 from app.core.schemas.write_off_fbs import WriteOffAccordingToFBS
 
 logger = logging.getLogger(__name__)
+
+fbs_shipment_repo = FbsShipmentRepository()
 
 
 async def start_consumer() -> None:
@@ -32,6 +35,7 @@ async def start_consumer() -> None:
         async for message in queue:
             # Управляем ACK/NACK вручную — не используем message.process()
 
+            # === Шаг 1: JSON парсинг ===
             try:
                 raw: list = json.loads(message.body)
             except json.JSONDecodeError as e:
@@ -40,30 +44,52 @@ async def start_consumer() -> None:
                 await message.ack()
                 continue
 
+            logger.debug(f"Raw message: {len(raw)} элементов, первый: {raw[0] if raw else 'пустой'}")
+
+            pool = await get_db_pool()
+
+            # === Шаг 2: Сохранить raw JSON в БД ДО валидации ===
+            try:
+                async with pool.acquire() as conn:
+                    shipment_id = await fbs_shipment_repo.create_shipment(
+                        conn,
+                        raw_message=raw,
+                        total_items=len(raw) if isinstance(raw, list) else 0,
+                    )
+                logger.info(f"Shipment сохранён: shipment_id={shipment_id}, элементов={len(raw)}")
+            except Exception as e:
+                logger.error(f"Не удалось сохранить shipment в БД: {e}", exc_info=True)
+                # Не смогли записать даже raw — NACK с requeue, попробуем позже
+                await message.nack(requeue=True)
+                continue
+
+            # === Шаг 3: ACK — данные в БД, сообщение можно удалить из очереди ===
+            await message.ack()
+
+            # === Шаг 4: Валидация Pydantic ===
             try:
                 items: List[WriteOffAccordingToFBS] = [
                     WriteOffAccordingToFBS(**i) for i in raw
                 ]
             except ValidationError as e:
-                logger.error(f"Ошибка валидации схемы: {e}")
-                # NACK без requeue — невалидные данные уйдут в DLQ если настроен
-                await message.nack(requeue=False)
+                logger.error(f"Ошибка валидации схемы (shipment_id={shipment_id}): {e}")
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        UPDATE wms.fbs_shipments
+                        SET status = 'validation_failed', error_message = $1
+                        WHERE shipment_id = $2
+                        """,
+                        str(e),
+                        shipment_id,
+                    )
                 continue
 
-            first_product = items[0].product_id if items else "—"
-            logger.info(
-                f"Получено сообщение: {len(items)} позиций, "
-                f"первый product_id={first_product}"
-            )
-
+            # === Шаг 5: Обработка — создание items и списание ===
             try:
-                pool = await get_db_pool()
-                shipment_id = await handle_write_off_fbs(items, pool, raw_message=raw)
-                logger.info(f"Сообщение обработано | shipment_id={shipment_id}")
+                await handle_write_off_fbs(
+                    items, pool, raw_message=raw, shipment_id=shipment_id
+                )
+                logger.info(f"Сообщение обработано, shipment_id={shipment_id}")
             except Exception as e:
-                # Даже если handler упал — данные могли сохраниться в БД,
-                # retry будет по таблице fbs_shipment_items, а не по очереди
-                logger.error(f"Ошибка обработки сообщения: {e}", exc_info=True)
-
-            # ACK всегда после успешного парсинга — дальше работаем по данным в БД
-            await message.ack()
+                logger.error(f"Ошибка обработки (shipment_id={shipment_id}): {e}", exc_info=True)

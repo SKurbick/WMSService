@@ -14,7 +14,7 @@ class ShipmentOfGoodsUpdate(BaseModel):
     wb_warehouse: Optional[str] = None
     account: str
     quantity: int
-    shipment_date: Optional[datetime.date] = None
+    shipment_date: Optional[datetime.datetime] = None
     product_reserves_id: Optional[int] = None
 
 
