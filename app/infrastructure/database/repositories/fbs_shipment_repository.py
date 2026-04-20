@@ -33,6 +33,57 @@ SET
 WHERE item_id = $1
 """
 
+GET_SHIPMENTS = """
+SELECT shipment_id, received_at, total_items, status, error_message, completed_at
+FROM wms.fbs_shipments
+WHERE ($1::text IS NULL OR status = $1)
+  AND ($2::timestamptz IS NULL OR received_at >= $2)
+  AND ($3::timestamptz IS NULL OR received_at <= $3)
+ORDER BY received_at DESC
+LIMIT $4 OFFSET $5
+"""
+
+COUNT_SHIPMENTS = """
+SELECT count(*)::int
+FROM wms.fbs_shipments
+WHERE ($1::text IS NULL OR status = $1)
+  AND ($2::timestamptz IS NULL OR received_at >= $2)
+  AND ($3::timestamptz IS NULL OR received_at <= $3)
+"""
+
+GET_SHIPMENT_BY_ID = """
+SELECT shipment_id, received_at, raw_message, total_items, status, error_message, completed_at
+FROM wms.fbs_shipments
+WHERE shipment_id = $1
+"""
+
+GET_ITEMS_BY_SHIPMENT_ID = """
+SELECT item_id, product_id, quantity, author, supply_id, account, assembly_tasks,
+       status, error_message, retry_count, movement_id, created_at, updated_at
+FROM wms.fbs_shipment_items
+WHERE shipment_id = $1
+ORDER BY item_id
+"""
+
+GET_SHIPMENTS_STATS = """
+SELECT status, count(*)::int AS count
+FROM wms.fbs_shipments
+GROUP BY status
+"""
+
+GET_SHIPMENTS_BY_STATUS = """
+SELECT shipment_id, raw_message
+FROM wms.fbs_shipments
+WHERE status = $1
+ORDER BY shipment_id
+"""
+
+UPDATE_SHIPMENT_ERROR = """
+UPDATE wms.fbs_shipments
+SET error_message = $2
+WHERE shipment_id = $1
+"""
+
 UPDATE_SHIPMENT_STATUS = """
 UPDATE wms.fbs_shipments
 SET
@@ -156,6 +207,45 @@ class FbsShipmentRepository:
         - Микс success+failed/exh. → partially_completed (completed_at = now())
         """
         await conn.execute(UPDATE_SHIPMENT_STATUS, shipment_id)
+
+    async def get_shipments(
+        self,
+        conn: Connection,
+        status: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+    ) -> tuple:
+        """Список shipments с фильтрацией. Возвращает (записи, total_count)."""
+        rows = await conn.fetch(GET_SHIPMENTS, status, date_from, date_to, limit, offset)
+        total = await conn.fetchval(COUNT_SHIPMENTS, status, date_from, date_to)
+        return rows, total
+
+    async def get_shipment_by_id(self, conn: Connection, shipment_id: int):
+        """Один shipment по ID."""
+        return await conn.fetchrow(GET_SHIPMENT_BY_ID, shipment_id)
+
+    async def get_items_by_shipment_id(self, conn: Connection, shipment_id: int) -> list:
+        """Все items конкретного shipment."""
+        return await conn.fetch(GET_ITEMS_BY_SHIPMENT_ID, shipment_id)
+
+    async def get_shipments_stats(self, conn: Connection) -> list:
+        """GROUP BY status — один запрос."""
+        return await conn.fetch(GET_SHIPMENTS_STATS)
+
+    async def get_shipments_by_status(self, conn: Connection, status: str) -> list:
+        """Все shipments с указанным статусом (shipment_id + raw_message)."""
+        return await conn.fetch(GET_SHIPMENTS_BY_STATUS, status)
+
+    async def update_shipment_error(
+        self,
+        conn: Connection,
+        shipment_id: int,
+        error_message: str,
+    ) -> None:
+        """Обновляет error_message (статус не трогает — остаётся validation_failed)."""
+        await conn.execute(UPDATE_SHIPMENT_ERROR, shipment_id, error_message)
 
     async def get_pending_retry_items(self, conn: Connection) -> list:
         """Возвращает все items со статусом pending_retry у которых next_retry_at <= now()."""

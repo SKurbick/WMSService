@@ -2,7 +2,7 @@
 
 import datetime
 from typing import List, Optional
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, model_validator
 
 
 class ShipmentOfGoodsUpdate(BaseModel):
@@ -21,11 +21,11 @@ class ShipmentOfGoodsUpdate(BaseModel):
 class WriteOffAccordingToFBS(ShipmentOfGoodsUpdate):
     assembly_tasks: List[str]
 
-    @field_validator('quantity')
-    def validate_quantity_equals_tasks_count(cls, v: int, info) -> int:
-        assembly_tasks = info.data.get('assembly_tasks', [])
-        if v != len(assembly_tasks):
+    @model_validator(mode='after')
+    def validate_quantity_equals_tasks_count(self):
+        if self.quantity != len(self.assembly_tasks):
             raise ValueError(
-                f'quantity ({v}) должно быть равно количеству assembly_tasks ({len(assembly_tasks)})'
+                f'quantity ({self.quantity}) должно быть равно '
+                f'количеству assembly_tasks ({len(self.assembly_tasks)})'
             )
-        return v
+        return self
