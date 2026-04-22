@@ -25,45 +25,52 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Lifecycle events для FastAPI
-    
-    Запускается при старте и остановке приложения.
-    """
-    # Startup
     logger.info("🚀 Запуск WMS Service...")
     logger.info(f"📊 Подключение к БД: {settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}")
     await get_db_pool()
     logger.info("✅ База данных подключена")
 
-    consumer_task = asyncio.create_task(start_consumer())
-    logger.info("✅ RabbitMQ consumer запущен")
+    consumer_task = None
+    retry_task = None
 
-    retry_task = asyncio.create_task(start_retry_worker())
-    logger.info("✅ Retry worker запущен")
+    if settings.CONSUMER_ENABLED:
+        consumer_task = asyncio.create_task(start_consumer())
+        logger.info("✅ RabbitMQ consumer запущен")
+        retry_task = asyncio.create_task(start_retry_worker())
+        logger.info("✅ Retry worker запущен")
 
     yield
 
-    # Shutdown
     logger.info("🛑 Остановка WMS Service...")
-    consumer_task.cancel()
-    try:
-        await consumer_task
-    except asyncio.CancelledError:
-        pass
-    retry_task.cancel()
-    try:
-        await retry_task
-    except asyncio.CancelledError:
-        pass
+    if consumer_task:
+        consumer_task.cancel()
+        try:
+            await consumer_task
+        except asyncio.CancelledError:
+            pass
+    if retry_task:
+        retry_task.cancel()
+        try:
+            await retry_task
+        except asyncio.CancelledError:
+            pass
     await close_db_pool()
     logger.info("✅ База данных отключена")
 
+
+# Метаданные тегов для Swagger UI
+tags_metadata = [
+    {
+        "name": "FBS Shipments",
+        "description": "Журнал отгрузок из ФБС зоны. Просмотр, статистика и переобработка записей, полученных из RabbitMQ.",
+    },
+]
 
 # Создание FastAPI приложения
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
+    openapi_tags=tags_metadata,
     description="""
 # WMS (Warehouse Management System) API
 
