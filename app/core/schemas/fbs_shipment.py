@@ -14,7 +14,7 @@ class FbsShipmentItemResponse(BaseModel):
     author: str = Field(description="Инициатор отгрузки")
     supply_id: str = Field(description="ID поставки/отправления")
     account: str = Field(description="Аккаунт маркетплейса")
-    assembly_tasks: list = Field(description="Список ID заданий сборки")
+    assembly_tasks:  Any = Field(description="Список ID заданий сборки")
     status: str = Field(description="Статус позиции: new, success, failed, pending_retry, retry_exhausted")
     error_message: Optional[str] = Field(None, description="Текст ошибки, если обработка завершилась неудачей")
     retry_count: int = Field(description="Количество выполненных попыток обработки")
