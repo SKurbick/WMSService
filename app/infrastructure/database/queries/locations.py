@@ -53,7 +53,12 @@ SELECT
     p.location_code as parent_location_code,
     p.name as parent_name,
     l.created_at,
-    l.updated_at
+    l.updated_at,
+    (
+        SELECT string_agg(a.name, ' > ' ORDER BY nlevel(a.path))
+        FROM wms.locations a
+        WHERE a.path @> l.path
+    ) AS name_path
 FROM wms.locations l
 LEFT JOIN wms.locations p ON l.parent_location_id = p.location_id
 WHERE l.location_id = $1;
@@ -231,4 +236,22 @@ WITH RECURSIVE location_tree AS (
 )
 SELECT * FROM location_tree
 ORDER BY id_path;
+"""
+
+GET_ZONE_LOCATIONS_FOR_QR = """
+SELECT
+    l.location_id,
+    l.location_code,
+    (
+        SELECT string_agg(a.name, ' > ' ORDER BY nlevel(a.path))
+        FROM wms.locations a
+        WHERE a.path @> l.path
+    ) AS name_path
+FROM wms.locations l
+CROSS JOIN (
+    SELECT path FROM wms.locations WHERE location_id = $1
+) zone
+WHERE l.path <@ zone.path
+  AND l.location_id != $1
+ORDER BY l.path;
 """

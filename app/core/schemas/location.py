@@ -63,6 +63,7 @@ class LocationResponse(LocationBase):
     location_id: int = Field(..., description="ID локации")
     location_code: str = Field(..., description="Код локации (автогенерируется)")
     path: str = Field(..., description="Путь в иерархии (LTREE)")
+    name_path: Optional[str] = Field(None, description="Полный путь по названиям: Склад > Зона > … > Ячейка")
     parent_location_id: Optional[int] = Field(None, description="ID родителя")
     parent_location_code: Optional[str] = Field(None, description="Код родителя")
     parent_name: Optional[str] = Field(None, description="Название родителя")

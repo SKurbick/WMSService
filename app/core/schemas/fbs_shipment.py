@@ -2,8 +2,8 @@
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-
-from pydantic import BaseModel, Field
+import json
+from pydantic import BaseModel, Field, field_validator
 
 
 class FbsShipmentItemResponse(BaseModel):
@@ -22,6 +22,12 @@ class FbsShipmentItemResponse(BaseModel):
     created_at: datetime = Field(description="Дата создания позиции")
     updated_at: datetime = Field(description="Дата последнего обновления позиции")
 
+    @field_validator('assembly_tasks', mode='before')
+    @classmethod
+    def parse_assembly_tasks(cls, v):
+        if isinstance(v, str):
+            return json.loads(v)
+        return v
 
 class FbsShipmentListItem(BaseModel):
     """Элемент списка отгрузок — без raw_message и items (тяжёлые поля)"""

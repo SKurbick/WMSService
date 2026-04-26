@@ -87,6 +87,11 @@ class LocationRepository:
             result = await conn.fetchrow(queries.DEACTIVATE_LOCATION, location_id)
             return result
 
+    async def get_zone_locations_for_qr(self, zone_id: int) -> List[Record]:
+        """Получить все локации зоны (все уровни вложенности) для генерации QR-кодов"""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(queries.GET_ZONE_LOCATIONS_FOR_QR, zone_id)
+
     async def find_available(
         self, product_id: str, quantity: int, zone_type: str = "storage"
     ) -> Optional[Record]:

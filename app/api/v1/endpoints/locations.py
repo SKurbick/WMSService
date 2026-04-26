@@ -112,12 +112,12 @@ async def get_location_by_code(
 ):
     """
     Получить локацию по коду
-    
+
     Возвращает локацию по человекочитаемому коду (например: PUSHKINO-A-01-S05-L02-B).
-    
+
     **Параметры:**
     - **location_code**: Код локации
-    
+
     **Возвращает:**
     - Информацию о локации
     """
@@ -220,6 +220,36 @@ async def find_available_location(
     return await service.find_available_location(product_id, quantity, zone_type)
 
 
+@router.get("/{zone_id}/qr-codes")
+async def generate_zone_qr_codes(
+        zone_id: int,
+        size: int = Query(300, ge=100, le=1000, description="Размер каждого QR-кода в пикселях"),
+        location_service: LocationService = Depends(get_location_service),
+):
+    """
+    Сгенерировать QR-коды для всех локаций зоны
+
+    Возвращает ZIP-архив с PNG-файлами для каждой вложенной локации зоны
+    (стеллажи, секции, ярусы, ячейки). Файлы названы по `location_code`.
+    Сортировка: по LTREE-пути — сначала все потомки первого стеллажа, затем второго и т.д.
+
+    **Параметры:**
+    - **zone_id**: ID зоны
+    - **size**: Размер изображения в пикселях (100-1000, по умолчанию 300)
+
+    **Возвращает:**
+    - ZIP-архив (`application/zip`) с файлами `{location_code}.png`
+    """
+    zip_buffer = await location_service.generate_zone_qr_zip(zone_id, size)
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="zone_{zone_id}_qr_codes.zip"'
+        },
+    )
+
+
 @router.get("/{location_id}/qr-code")
 async def generate_location_qr_code(
         location_id: int,
@@ -245,9 +275,9 @@ async def generate_location_qr_code(
     # Получаем локацию
     location = await location_service.get_location_by_id(location_id)
 
-    # Генерируем QR-код из location_code
+    # Генерируем QR-код из location_code; name_path — вторая строка под кодом
     label_service = LabelService()
-    qr_image = label_service.generate_qr_code(location.location_code, size)
+    qr_image = label_service.generate_qr_code(location.location_code, size, location.name_path)
 
     # Возвращаем PNG изображение
     return StreamingResponse(

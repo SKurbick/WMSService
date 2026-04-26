@@ -1,5 +1,6 @@
 """Сервис для работы с локациями (бизнес-логика)"""
 
+from io import BytesIO
 from typing import List
 from app.core.schemas.location import (
     LocationCreate,
@@ -154,3 +155,17 @@ class LocationService:
                 f"(кол-во: {quantity}, зона: {zone_type})"
             )
         return dict(result)
+
+    async def generate_zone_qr_zip(self, zone_id: int, size: int = 300) -> BytesIO:
+        """Сгенерировать ZIP-архив с QR-кодами всех локаций зоны"""
+        from app.core.services.label_service import LabelService
+
+        zone = await self.repo.get_by_id(zone_id)
+        if not zone:
+            raise LocationNotFoundError(f"Зона с ID {zone_id} не найдена")
+
+        locations = await self.repo.get_zone_locations_for_qr(zone_id)
+        if not locations:
+            raise LocationNotFoundError(f"Зона с ID {zone_id} не содержит вложенных локаций")
+
+        return LabelService().generate_zone_qr_zip([dict(loc) for loc in locations], size=size)
