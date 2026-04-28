@@ -169,3 +169,13 @@ class LocationService:
             raise LocationNotFoundError(f"Зона с ID {zone_id} не содержит вложенных локаций")
 
         return LabelService().generate_zone_qr_zip([dict(loc) for loc in locations], size=size)
+
+    async def generate_location_qr_zip(self, location_id: int, size: int = 300) -> BytesIO:
+        """Сгенерировать ZIP-архив с QR-кодом одной локации"""
+        from app.core.services.label_service import LabelService
+
+        location = await self.repo.get_by_id(location_id)
+        if not location:
+            raise LocationNotFoundError(f"Локация с ID {location_id} не найдена")
+
+        return LabelService().generate_zone_qr_zip([dict(location)], size=size)

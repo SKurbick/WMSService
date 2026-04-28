@@ -10,6 +10,8 @@ from PIL import Image, ImageDraw, ImageFont
 class LabelService:
     """Сервис для генерации QR-кодов и ярлыков"""
 
+    _pdf_font_name: Optional[str] = None
+
     def _load_font(self, size: int) -> ImageFont.FreeTypeFont:
         for path in (
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -33,6 +35,46 @@ class LabelService:
             bbox = draw.textbbox((0, 0), text, font=font)
             text_width = bbox[2] - bbox[0]
         return font, text_width
+
+    def _get_pdf_font_name(self) -> str:
+        """Регистрирует шрифт с поддержкой кириллицы для PDF (однократно)."""
+        if LabelService._pdf_font_name is not None:
+            return LabelService._pdf_font_name
+
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+
+        for path in (
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/ttf-dejavu/DejaVuSans-Bold.ttf",
+        ):
+            try:
+                pdfmetrics.registerFont(TTFont("WMSLabelFont", path))
+                LabelService._pdf_font_name = "WMSLabelFont"
+                return "WMSLabelFont"
+            except Exception:
+                continue
+
+        LabelService._pdf_font_name = "Helvetica-Bold"
+        return "Helvetica-Bold"
+
+    def _generate_raw_qr_image(self, data: str, size: int) -> BytesIO:
+        """Генерирует PNG только с QR-кодом, без текстовых подписей."""
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(data)
+        qr.make(fit=True)
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+        qr_img = qr_img.resize((size, size))
+        buf = BytesIO()
+        qr_img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
 
     def generate_qr_code(
         self,
@@ -106,25 +148,136 @@ class LabelService:
         buffer.seek(0)
         return buffer
 
+    def _draw_rotated_text(
+        self,
+        c,
+        text: str,
+        center_x: float,
+        center_y: float,
+        font_name: str,
+        font_size: int,
+        max_len_pt: float,
+    ) -> None:
+        """Рисует текст повёрнутым на 90° (читается снизу вверх), вписывая в max_len_pt."""
+        actual_w = c.stringWidth(text, font_name, font_size)
+        if actual_w > 0:
+            font_size = max(5, int(font_size * max_len_pt / actual_w))
+        c.saveState()
+        c.translate(center_x, center_y)
+        c.rotate(90)
+        c.setFont(font_name, font_size)
+        c.drawCentredString(0, 0, text)
+        c.restoreState()
+
+    def generate_zone_qr_pdf(self, locations: list, size: int = 300) -> BytesIO:
+        """
+        Генерирует PDF со всеми QR-кодами зоны, расположенными бок о бок.
+
+        Формат ярлыка: QR-код слева, две строки текста (код + путь) повёрнуты на 90° справа.
+        Ярлыки заполняются сверху вниз (по столбцам) на страницах A4 (альбомная).
+
+        Args:
+            locations: список dict с ключами location_code, name_path
+            size: размер QR-кода в пикселях (используется при генерации растра)
+
+        Returns:
+            BytesIO с PDF-файлом
+        """
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib.utils import ImageReader
+
+        font_name = self._get_pdf_font_name()
+
+        margin = 5.0  # маленький отступ вокруг ярлыка
+
+        # Размеры одного ярлыка
+        qr_pt = 150.0
+        # Полоса справа от QR: три текстовые строки
+        line1_offset = 10.0   # код локации
+        line2_offset = 29.0   # зона
+        line3_offset = 48.0   # путь от стеллажа
+        text_strip = 60.0     # общая ширина полосы
+        label_w = qr_pt + text_strip
+        label_h = qr_pt
+
+        # Страница = ярлык + отступ со всех сторон
+        page_w = label_w + 2 * margin
+        page_h = label_h + 2 * margin
+        page_size = (page_w, page_h)
+
+        x = margin
+        y = margin
+
+        buffer = BytesIO()
+        c = rl_canvas.Canvas(buffer, pagesize=page_size)
+
+        for idx, loc in enumerate(locations):
+            if idx > 0:
+                c.showPage()
+
+            # QR-код (чистый, без текста)
+            png = self._generate_raw_qr_image(loc['location_code'], size=200)
+            c.drawImage(ImageReader(png), x, y, width=qr_pt, height=qr_pt)
+
+            code = loc['location_code']
+            display_code = code.split('-', 1)[1] if '-' in code else code
+
+            # Строка 1: код локации без складского префикса
+            self._draw_rotated_text(
+                c, display_code,
+                center_x=x + qr_pt + line1_offset,
+                center_y=y + label_h / 2,
+                font_name=font_name,
+                font_size=9,
+                max_len_pt=label_h - 4,
+            )
+
+            name_path = loc.get('name_path') or ''
+            parts = name_path.split(' > ') if name_path else []
+
+            # Строка 2: "Зона: <название зоны>" (parts[1])
+            if len(parts) > 1:
+                zone_label = f"Зона: {parts[1]}"
+                self._draw_rotated_text(
+                    c, zone_label,
+                    center_x=x + qr_pt + line2_offset,
+                    center_y=y + label_h / 2,
+                    font_name=font_name,
+                    font_size=9,
+                    max_len_pt=label_h - 4,
+                )
+
+            # Строка 3: путь начиная со стеллажа (parts[2:])
+            if len(parts) > 2:
+                rack_path = ' > '.join(parts[2:])
+                self._draw_rotated_text(
+                    c, rack_path,
+                    center_x=x + qr_pt + line3_offset,
+                    center_y=y + label_h / 2,
+                    font_name=font_name,
+                    font_size=9,
+                    max_len_pt=label_h - 4,
+                )
+
+        c.save()
+        buffer.seek(0)
+        return buffer
+
     def generate_zone_qr_zip(self, locations: list, size: int = 300) -> BytesIO:
         """
-        Генерирует ZIP-архив с QR-кодами для всех локаций зоны.
+        Генерирует ZIP-архив с одним PDF-файлом (qr_labels.pdf),
+        содержащим QR-коды всех локаций зоны, расположенные бок о бок.
 
         Args:
             locations: список dict с ключами location_code, name_path
             size: размер каждого QR-кода в пикселях
 
         Returns:
-            BytesIO с ZIP-архивом; файлы внутри: {location_code}.png
+            BytesIO с ZIP-архивом; внутри один файл: qr_labels.pdf
         """
-        buffer = BytesIO()
-        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for loc in locations:
-                png = self.generate_qr_code(
-                    loc['location_code'],
-                    size=size,
-                    name_path=loc.get('name_path'),
-                )
-                zf.writestr(f"{loc['location_code']}.png", png.read())
-        buffer.seek(0)
-        return buffer
+        pdf_buffer = self.generate_zone_qr_pdf(locations, size)
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("qr_labels.pdf", pdf_buffer.read())
+        zip_buffer.seek(0)
+        return zip_buffer

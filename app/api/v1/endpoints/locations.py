@@ -229,16 +229,17 @@ async def generate_zone_qr_codes(
     """
     Сгенерировать QR-коды для всех локаций зоны
 
-    Возвращает ZIP-архив с PNG-файлами для каждой вложенной локации зоны
-    (стеллажи, секции, ярусы, ячейки). Файлы названы по `location_code`.
+    Возвращает ZIP-архив с одним PDF-файлом `qr_labels.pdf`.
+    Каждый ярлык: QR-код слева, код локации повёрнут на 90° справа.
+    Ярлыки расположены бок о бок, страницы A4 альбомной ориентации.
     Сортировка: по LTREE-пути — сначала все потомки первого стеллажа, затем второго и т.д.
 
     **Параметры:**
     - **zone_id**: ID зоны
-    - **size**: Размер изображения в пикселях (100-1000, по умолчанию 300)
+    - **size**: Размер QR-кода в пикселях (100-1000, по умолчанию 300)
 
     **Возвращает:**
-    - ZIP-архив (`application/zip`) с файлами `{location_code}.png`
+    - ZIP-архив (`application/zip`) с файлом `qr_labels.pdf`
     """
     zip_buffer = await location_service.generate_zone_qr_zip(zone_id, size)
     return StreamingResponse(
@@ -259,31 +260,22 @@ async def generate_location_qr_code(
     """
     Генерировать QR-код для локации
 
-    Генерирует PNG изображение с QR-кодом содержащим location_code.
-    QR-код можно распечатать и разместить на складе для быстрого сканирования.
+    Возвращает PDF-файл с одним QR-кодом. Формат ярлыка идентичен массовой печати:
+    QR-код слева, код локации и путь повёрнуты на 90° справа.
+    Страница обрезана впритык к содержимому.
 
     **Параметры:**
     - **location_id**: ID локации
-    - **size**: Размер изображения в пикселях (100-1000, по умолчанию 300)
+    - **size**: Размер QR-кода в пикселях (100-1000, по умолчанию 300)
 
     **Возвращает:**
-    - PNG изображение с QR-кодом
-
-    **Содержимое QR-кода:**
-    - location_code (например: PUSHKINO-ХРАНЕНИЕ-01-S01-L01-A)
+    - PDF-файл с одним ярлыком
     """
-    # Получаем локацию
-    location = await location_service.get_location_by_id(location_id)
-
-    # Генерируем QR-код из location_code; name_path — вторая строка под кодом
-    label_service = LabelService()
-    qr_image = label_service.generate_qr_code(location.location_code, size, location.name_path)
-
-    # Возвращаем PNG изображение
+    zip_buffer = await location_service.generate_location_qr_zip(location_id, size)
     return StreamingResponse(
-        qr_image,
-        media_type="image/png",
+        zip_buffer,
+        media_type="application/zip",
         headers={
-            "Content-Disposition": f'inline; filename="location_{location_id}_qr.png"'
+            "Content-Disposition": f'attachment; filename="location_{location_id}_qr.zip"'
         }
     )
