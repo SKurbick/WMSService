@@ -56,6 +56,25 @@ async def get_inventory_by_location(
     return await service.get_inventory_by_location(location_id)
 
 
+@router.get("/location/by-code/{location_code}", response_model=List[InventoryInLocationResponse])
+async def get_inventory_by_location_code(
+    location_code: str = Path(..., description="Код локации"),
+    service: InventoryService = Depends(get_inventory_service),
+):
+    """
+    Получить остатки в локации по коду
+
+    Возвращает все товары в указанной локации.
+
+    **Параметры:**
+    - **location_code**: Код локации (например, `PUSHKINO-A-01-S05-L02-B`)
+
+    **Возвращает:**
+    - Список товаров в локации
+    """
+    return await service.get_inventory_by_location_code(location_code)
+
+
 @router.get("/summary", response_model=List[InventorySummaryResponse])
 async def get_inventory_summary(
     category: Optional[str] = Query(None, description="Фильтр по категории"),

@@ -58,6 +58,15 @@ class InventoryService:
         results = await self.inventory_repo.get_by_location(location_id)
         return [InventoryInLocationResponse.model_validate(dict(r)) for r in results]
 
+    async def get_inventory_by_location_code(self, location_code: str) -> List[InventoryInLocationResponse]:
+        """Получить все остатки в локации по её коду"""
+        location = await self.location_repo.get_by_code(location_code)
+        if not location:
+            raise LocationNotFoundError(f"Локация с кодом '{location_code}' не найдена")
+
+        results = await self.inventory_repo.get_by_location(location["location_id"])
+        return [InventoryInLocationResponse.model_validate(dict(r)) for r in results]
+
     async def get_inventory_summary(
         self, category: Optional[str] = None
     ) -> List[InventorySummaryResponse]:
