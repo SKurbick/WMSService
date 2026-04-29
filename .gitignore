@@ -3,3 +3,4 @@
 __pycache__/
 poligon.py
 rabbitmq_consumer.py
+scan_qr_from_pdf.py

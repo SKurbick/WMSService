@@ -157,8 +157,8 @@ class LabelService:
         font_name: str,
         font_size: int,
         max_len_pt: float,
-    ) -> None:
-        """Рисует текст повёрнутым на 90° (читается снизу вверх), вписывая в max_len_pt."""
+    ) -> int:
+        """Рисует текст повёрнутым на 90° и возвращает итоговый размер шрифта."""
         actual_w = c.stringWidth(text, font_name, font_size)
         if actual_w > 0:
             font_size = max(5, int(font_size * max_len_pt / actual_w))
@@ -168,6 +168,7 @@ class LabelService:
         c.setFont(font_name, font_size)
         c.drawCentredString(0, 0, text)
         c.restoreState()
+        return font_size
 
     def generate_zone_qr_pdf(self, locations: list, size: int = 300) -> BytesIO:
         """
@@ -192,11 +193,19 @@ class LabelService:
 
         # Размеры одного ярлыка
         qr_pt = 150.0
-        # Полоса справа от QR: три текстовые строки
-        line1_offset = 10.0   # код локации
-        line2_offset = 29.0   # зона
-        line3_offset = 48.0   # путь от стеллажа
-        text_strip = 60.0     # общая ширина полосы
+        # Полоса справа от QR: три независимые вертикальные колонки текста.
+        # Раньше смещения были слишком плотными, из-за чего третья колонка могла
+        # визуально наезжать на соседние строки при длинных кириллических подписях.
+        text_strip_padding = 8.0
+        text_column_width = 18.0
+        text_column_gap = 8.0
+        right_extra_padding = 10.0
+        text_strip = (
+            text_strip_padding * 2
+            + text_column_width * 3
+            + text_column_gap * 2
+            + right_extra_padding
+        )
         label_w = qr_pt + text_strip
         label_h = qr_pt
 
@@ -222,10 +231,16 @@ class LabelService:
             code = loc['location_code']
             display_code = code.split('-', 1)[1] if '-' in code else code
 
+            column_centers = [
+                x + qr_pt + text_strip_padding + text_column_width / 2,
+                x + qr_pt + text_strip_padding + text_column_width * 1.5 + text_column_gap,
+                x + qr_pt + text_strip_padding + text_column_width * 2.5 + text_column_gap * 2,
+            ]
+
             # Строка 1: код локации без складского префикса
             self._draw_rotated_text(
                 c, display_code,
-                center_x=x + qr_pt + line1_offset,
+                center_x=column_centers[0],
                 center_y=y + label_h / 2,
                 font_name=font_name,
                 font_size=9,
@@ -240,7 +255,7 @@ class LabelService:
                 zone_label = f"Зона: {parts[1]}"
                 self._draw_rotated_text(
                     c, zone_label,
-                    center_x=x + qr_pt + line2_offset,
+                    center_x=column_centers[1],
                     center_y=y + label_h / 2,
                     font_name=font_name,
                     font_size=9,
@@ -250,12 +265,21 @@ class LabelService:
             # Строка 3: путь начиная со стеллажа (parts[2:])
             if len(parts) > 2:
                 rack_path = ' > '.join(parts[2:])
+                rack_font_size = 9
+                scaled_rack_font_size = max(
+                    5,
+                    int(
+                        rack_font_size * (label_h - 4)
+                        / max(c.stringWidth(rack_path, font_name, rack_font_size), 1)
+                    ),
+                )
+                rack_shift_x = max(0.0, (scaled_rack_font_size - rack_font_size) * 0.55)
                 self._draw_rotated_text(
                     c, rack_path,
-                    center_x=x + qr_pt + line3_offset,
+                    center_x=column_centers[2] + rack_shift_x,
                     center_y=y + label_h / 2,
                     font_name=font_name,
-                    font_size=9,
+                    font_size=rack_font_size,
                     max_len_pt=label_h - 4,
                 )
 
