@@ -1,0 +1,58 @@
+# Invariants
+
+Источник: `docs/context/wms_schema.sql` плюс явно отмеченные требования, которые должны обеспечиваться приложением.
+
+## Enforced by DB
+
+- `locations.location_code` уникален.
+- `locations.path` обязателен и имеет тип `wms.ltree`.
+- `locations.parent_location_id`, если заполнен, ссылается на существующую location.
+- `containers.qr_code` уникален.
+- `containers.container_type` входит в `pallet/box/unit`.
+- `containers.status` входит в `sealed/opened/empty/blocked`.
+- `container_contents.quantity > 0`.
+- `container_contents.status` входит в `active/replaced/removed`.
+- `inventory.quantity >= 0`.
+- `inventory.status` входит в `available/damaged/quarantine`.
+- `inventory` не имеет дублей по `(product_id, location_id, status, batch_number, container_code)` с учетом `NULLS NOT DISTINCT`.
+- `movements.movement_type`, `tasks.task_type/status`, `fbs_shipments.status`, `fbs_shipment_items.status` входят в разрешенные списки.
+- Product/location/user references, объявленные FK, должны существовать.
+
+## Inventory/movements
+
+- `movements` должен быть достаточным источником для восстановления `inventory`.
+- Insert в `movements` должен быть нормальным способом менять остатки.
+- `to_location_id` увеличивает inventory; `from_location_id` уменьшает inventory.
+- Расход не должен приводить к отрицательному `inventory.quantity`; сейчас это enforced check constraint, а не явная предварительная проверка `quantity >= requested`.
+- Нулевые inventory rows удаляются trigger function.
+- `container_code` в inventory/movements должен совпадать с QR контейнера, но FK этого не enforce.
+
+## Locations
+
+- `parent_location_id` и `path` должны описывать одну и ту же иерархию.
+- При смене parent у локации должны быть согласованы path всех потомков; DDL обновляет только строку, где был UPDATE.
+- `location_code` генерируется только при INSERT, не при rename или смене parent.
+- Канонические уровни из комментариев функций: root/склад без parent, level 1 зона, level 2 стеллаж, level 3 секция, level 4 ярус, level 5 ячейка. DDL диапазон не проверяет.
+
+## Containers
+
+- Active contents контейнера должны соответствовать inventory rows с `container_code = containers.qr_code`.
+- Регистрация контейнера не должна обходить trigger sync.
+- Перемещение контейнера должно создавать transfer movements по всем остаткам контейнера.
+- Распаковка не должна извлекать больше active quantity, чем есть.
+- Заблокированный контейнер не должен использоваться в операциях; DDL это не enforce, кроме ручной функции `block_empty_container`.
+
+## Tasks and FBS
+
+- Task item должен принадлежать существующей task.
+- Complete/approve/recount semantics не заданы DDL и должны поддерживаться приложением.
+- Movements, созданные по task, должны быть согласованы с task, но FK для `related_movement_id` нет.
+- FBS item должен принадлежать shipment.
+- Если `fbs_shipment_items.movement_id` заполнен, он должен указывать на созданное списание, но DDL этого не enforce.
+
+## Конкурентный доступ
+
+- Операции изменения остатков должны выполняться в транзакции.
+- DDL не содержит advisory locks или explicit `SELECT FOR UPDATE`.
+- Триггеры полагаются на row locks при `UPDATE inventory` и `INSERT ... ON CONFLICT DO UPDATE`.
+- Read-then-write операции (`unpack_from_container`, `block_empty_container`, `find_available_location`) не имеют явной защиты от гонок в DDL.
