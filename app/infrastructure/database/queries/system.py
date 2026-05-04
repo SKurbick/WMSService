@@ -141,3 +141,53 @@ SELECT
     NOW() as refreshed_at
 FROM wms.mv_product_stock;
 """
+
+# === Агрегированный read-only аудит известных рисков ===
+
+GET_AUDIT_SUMMARY = """
+SELECT
+    (
+        SELECT COUNT(*)
+        FROM wms.movements
+        WHERE quantity IS NULL OR quantity <= 0
+    ) AS bad_movement_quantity_count,
+    (
+        SELECT COUNT(*)
+        FROM wms.movements
+        WHERE from_location_id IS NULL
+          AND to_location_id IS NULL
+    ) AS movement_without_sides_count,
+    (
+        SELECT COUNT(*)
+        FROM wms.movements m
+        LEFT JOIN wms.containers c ON c.qr_code = m.container_code
+        WHERE m.container_code IS NOT NULL
+          AND c.container_id IS NULL
+    ) AS orphan_movement_container_code_count,
+    (
+        SELECT COUNT(*)
+        FROM wms.inventory i
+        LEFT JOIN wms.containers c ON c.qr_code = i.container_code
+        WHERE i.container_code IS NOT NULL
+          AND c.container_id IS NULL
+    ) AS orphan_inventory_container_code_count,
+    (
+        SELECT COUNT(*)
+        FROM wms.fbs_shipment_items f
+        LEFT JOIN wms.movements m ON m.movement_id = f.movement_id
+        WHERE f.movement_id IS NOT NULL
+          AND m.movement_id IS NULL
+    ) AS orphan_fbs_movement_count,
+    (
+        SELECT COUNT(*)
+        FROM wms.inventory
+        WHERE quantity < 0
+    ) AS negative_inventory_quantity_count,
+    (
+        SELECT COUNT(*)
+        FROM wms.locations l
+        LEFT JOIN wms.locations p ON p.location_id = l.parent_location_id
+        WHERE l.parent_location_id IS NOT NULL
+          AND p.location_id IS NULL
+    ) AS orphan_location_parent_count;
+"""

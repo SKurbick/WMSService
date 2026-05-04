@@ -66,3 +66,32 @@ class IntegrityCheckResult(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AuditSummaryResponse(BaseModel):
+    """Агрегированные проверки известных рисков качества данных"""
+
+    bad_movement_quantity_count: int = Field(
+        ..., description="Movements с quantity IS NULL или quantity <= 0"
+    )
+    movement_without_sides_count: int = Field(
+        ..., description="Movements без from_location_id и to_location_id"
+    )
+    orphan_movement_container_code_count: int = Field(
+        ..., description="Movements с container_code без соответствующего containers.qr_code"
+    )
+    orphan_inventory_container_code_count: int = Field(
+        ..., description="Inventory rows с container_code без соответствующего containers.qr_code"
+    )
+    orphan_fbs_movement_count: int = Field(
+        ..., description="FBS shipment items с movement_id без соответствующего movement"
+    )
+    negative_inventory_quantity_count: int = Field(
+        ..., description="Inventory rows с quantity < 0"
+    )
+    orphan_location_parent_count: int = Field(
+        ..., description="Locations с parent_location_id без соответствующего parent"
+    )
+
+    class Config:
+        from_attributes = True

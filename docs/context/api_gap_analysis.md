@@ -113,6 +113,7 @@ Risk scale:
 |---|---|---|---|---|---|
 | GET | `/` | Информация о сервисе | read-only | none | low |
 | GET | `/health` | Health check | read-only | database connectivity | low |
+| GET | `/api/system/audit-summary` | Count-проверки известных рисков качества данных | read-only audit | `wms.movements`, `wms.inventory`, `wms.containers`, `wms.fbs_shipment_items`, `wms.locations` | low |
 | POST | `/api/system/validate-integrity` | Сверить inventory с расчетом из movements | read-only audit | `wms.movements`, `wms.inventory`, `wms.locations` | medium |
 | POST | `/api/system/recalculate-inventory` | Удалить и пересчитать inventory из movements | write/maintenance | `wms.inventory`, `wms.movements`, `wms.locations` | high |
 | POST | `/api/system/create-snapshot` | Создать snapshot остатков | write/maintenance | `wms.inventory`, `wms.inventory_snapshots` | medium |
@@ -126,12 +127,15 @@ Risk scale:
 
 Потенциально полезные read-only endpoints:
 
-- `GET /api/system/known-issues/audit` или `GET /api/system/audit-queries/results` - выполнить безопасный subset проверок из `docs/context/sql_audit_queries.sql` и вернуть counts. Сейчас есть `validate-integrity`, но нет API для orphan `container_code`, bad movement quantity, no-side movement и orphan FBS movement refs.
 - `GET /api/inventory/snapshots` и `GET /api/inventory/snapshots/{snapshot_date}` - просмотр созданных snapshots. Создание snapshot есть, чтения snapshot history нет.
 - `GET /api/containers/{qr_code}/contents` - явный read-only endpoint active contents контейнера. Сейчас contents, вероятно, входят в `GET /containers/{qr_code}`, но отдельного endpoint для быстрого списка contents/партий нет.
 - `GET /api/tasks/{task_id}/children` - дочерние approval/recount tasks для parent task. Общий список может скрывать child tasks через `hide_child_tasks`.
 - `GET /api/fbs-shipments/items` - поиск FBS items по статусу, `next_retry_at`, `product_id`, `movement_id`. Сейчас items доступны только внутри конкретного shipment.
 - `GET /api/notifications` - список всех уведомлений пользователя с фильтром `is_read`, сейчас есть только unread.
+
+Closed gap:
+
+- `GET /api/system/audit-summary` добавлен как read-only endpoint для counts по bad movement quantity, movements без направления, orphan `container_code`, orphan FBS movement refs, negative inventory quantity и orphan location parents.
 
 ### Write gaps
 
@@ -166,4 +170,4 @@ Risk scale:
 
 1. `GET /api/inventory/snapshots` / `GET /api/inventory/snapshots/{snapshot_date}` - read-only доступ к уже создаваемым snapshots; не меняет остатки и закрывает очевидный read gap после `create-snapshot`.
 2. `GET /api/fbs-shipments/items` - read-only поиск FBS items по status/retry/product/movement_id; помогает операторскому контролю retry без новых write risks.
-3. `GET /api/system/audit-summary` - read-only counts по проверкам из `sql_audit_queries.sql`; полезно для контроля known issues и не меняет данные.
+3. `GET /api/notifications` - read-only список уведомлений пользователя с фильтром `is_read`; расширяет существующий `unread` без влияния на остатки.

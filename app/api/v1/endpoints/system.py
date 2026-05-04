@@ -10,6 +10,7 @@ from app.core.schemas.system import (
     CreateSnapshotResponse,
     RefreshViewsResponse,
     IntegrityCheckResult,
+    AuditSummaryResponse,
 )
 from app.core.services.system_service import SystemService
 from app.api.v1.dependencies import get_system_service
@@ -31,6 +32,19 @@ async def validate_integrity(
     - Список расхождений между inventory и movements
     """
     return await service.validate_integrity()
+
+
+@router.get("/audit-summary", response_model=AuditSummaryResponse)
+async def get_audit_summary(
+    service: SystemService = Depends(get_system_service),
+):
+    """
+    Получить агрегированные проверки известных рисков качества данных.
+
+    Endpoint read-only: выполняет только SELECT COUNT запросы,
+    не пересчитывает inventory, не создает snapshot и не меняет данные.
+    """
+    return await service.get_audit_summary()
 
 
 @router.post(

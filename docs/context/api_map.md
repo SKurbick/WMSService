@@ -89,6 +89,7 @@
 
 Префикс: `/api/system`.
 
+- `GET /api/system/audit-summary` - read-only count-проверки известных рисков качества данных.
 - `POST /api/system/validate-integrity` - сверить `inventory` с расчетом из `movements`.
 - `POST /api/system/recalculate-inventory` - удалить и пересчитать остатки из `movements`.
 - `POST /api/system/create-snapshot` - создать снимок остатков.

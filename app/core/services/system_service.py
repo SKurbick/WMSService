@@ -9,6 +9,7 @@ from app.core.schemas.system import (
     CreateSnapshotResponse,
     RefreshViewsResponse,
     IntegrityCheckResult,
+    AuditSummaryResponse,
 )
 from app.infrastructure.database.repositories.system_repository import SystemRepository
 
@@ -28,6 +29,15 @@ class SystemService:
         """
         results = await self.system_repo.validate_integrity()
         return [IntegrityCheckResult.model_validate(dict(r)) for r in results]
+
+    async def get_audit_summary(self) -> AuditSummaryResponse:
+        """
+        Получить агрегированные read-only проверки известных рисков качества данных.
+
+        Выполняет только SELECT COUNT запросы и не меняет состояние БД.
+        """
+        result = await self.system_repo.get_audit_summary()
+        return AuditSummaryResponse.model_validate(dict(result))
 
     async def recalculate_inventory(
         self, data: RecalculateInventoryRequest

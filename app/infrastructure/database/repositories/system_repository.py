@@ -18,6 +18,12 @@ class SystemRepository:
             results = await conn.fetch(queries.VALIDATE_INTEGRITY)
             return results
 
+    async def get_audit_summary(self) -> Record:
+        """Получить read-only агрегированные проверки известных рисков"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchrow(queries.GET_AUDIT_SUMMARY)
+            return result
+
     async def recalculate_inventory(
         self,
         product_id: Optional[str] = None,
