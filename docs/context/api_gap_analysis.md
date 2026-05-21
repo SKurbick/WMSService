@@ -34,6 +34,7 @@ Risk scale:
 |---|---|---|---|---|---|
 | GET | `/api/inventory/product/{product_id}` | Остатки товара по локациям, партиям, контейнерам | read-only | `wms.inventory`, `wms.locations`, `public.products` | low |
 | GET | `/api/inventory/location/{location_id}` | Остатки в локации | read-only | `wms.inventory`, `wms.locations`, `public.products` | low |
+| GET | `/api/inventory/location/{location_id}/recursive-summary` | Агрегированные остатки по локации и всем дочерним локациям | read-only | `wms.inventory`, `wms.locations`, `public.products`, LTREE `path` | low |
 | GET | `/api/inventory/location/by-code/{location_code}` | Остатки в локации по коду | read-only | `wms.inventory`, `wms.locations`, `public.products` | low |
 | GET | `/api/inventory/summary` | Агрегированные остатки | read-only | `wms.v_product_stock`, `public.products`, `wms.inventory` | low |
 | GET | `/api/inventory/container/{qr_code}` | Остатки в контейнере | read-only | `wms.inventory`, `wms.locations`, `public.products` | low |
@@ -136,6 +137,7 @@ Risk scale:
 Closed gap:
 
 - `GET /api/system/audit-summary` добавлен как read-only endpoint для counts по bad movement quantity, movements без направления, orphan `container_code`, orphan FBS movement refs, negative inventory quantity и orphan location parents.
+- `GET /api/inventory/location/{location_id}/recursive-summary` добавлен как read-only endpoint для сводки остатков внутри subtree локации.
 
 ### Write gaps
 

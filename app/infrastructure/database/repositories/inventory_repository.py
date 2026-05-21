@@ -23,6 +23,12 @@ class InventoryRepository:
             results = await conn.fetch(queries.GET_INVENTORY_BY_LOCATION, location_id)
             return results
 
+    async def get_location_recursive_summary(self, location_id: int) -> List[Record]:
+        """Получить сводку остатков по локации и всем дочерним локациям"""
+        async with self.pool.acquire() as conn:
+            results = await conn.fetch(queries.GET_LOCATION_RECURSIVE_SUMMARY, location_id)
+            return results
+
     async def get_summary(self, category: Optional[str] = None) -> List[Record]:
         """Получить агрегированные остатки по всем товарам"""
         async with self.pool.acquire() as conn:

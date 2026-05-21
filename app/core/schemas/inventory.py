@@ -57,6 +57,22 @@ class InventorySummaryResponse(BaseModel):
         from_attributes = True
 
 
+class InventoryLocationSummaryResponse(BaseModel):
+    """Агрегированный остаток товара в локации и дочерних локациях"""
+
+    product_id: str
+    product_name: Optional[str] = None
+    category: Optional[str] = None
+    total_quantity: int = Field(default=0, description="Общее количество")
+    locations_count: int = Field(default=0, description="Количество локаций")
+    in_containers: int = Field(default=0, description="Количество в контейнерах")
+    loose: int = Field(default=0, description="Количество россыпью")
+    last_updated: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 class InventoryInContainerResponse(BaseModel):
     """Остаток в контейнере"""
 

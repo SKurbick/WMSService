@@ -18,3 +18,17 @@
 - Так как ORM-моделей и миграций нет, `database_map.md` составлен по `queries`, `repositories` и Pydantic-схемам.
 
 Код приложения не изменялся.
+
+
+## 2026-05-21 - Recursive inventory summary по subtree локации
+
+Добавлен read-only endpoint `GET /api/inventory/location/{location_id}/recursive-summary`.
+
+Решения:
+
+- Возвращать список агрегированных остатков без метаданных исходной локации.
+- Группировать только по `product_id`; `status`, `batch_number` и `container_code` не выделять отдельными строками.
+- Включать остатки во всех статусах и в неактивных дочерних локациях.
+- Не добавлять endpoint по `location_code`.
+- Использовать `wms.locations.path <@ parent.path`, включая саму исходную локацию.
+- Не добавлять миграцию: индекс `idx_locations_path USING gist(path)` уже описан в DDL-контексте.

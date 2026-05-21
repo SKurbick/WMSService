@@ -6,6 +6,7 @@ from typing import List, Optional
 from app.core.schemas.inventory import (
     InventoryItemResponse,
     InventoryInLocationResponse,
+    InventoryLocationSummaryResponse,
     InventorySummaryResponse,
     InventoryInContainerResponse,
     LooseInventoryResponse,
@@ -54,6 +55,29 @@ async def get_inventory_by_location(
     - Список товаров в локации
     """
     return await service.get_inventory_by_location(location_id)
+
+
+@router.get(
+    "/location/{location_id}/recursive-summary",
+    response_model=List[InventoryLocationSummaryResponse],
+)
+async def get_location_recursive_summary(
+    location_id: int = Path(..., description="ID локации"),
+    service: InventoryService = Depends(get_inventory_service),
+):
+    """
+    Получить сводку остатков в локации и дочерних локациях
+
+    Возвращает агрегированные остатки по товарам для указанной локации
+    и всех её дочерних локаций ниже по дереву.
+
+    **Параметры:**
+    - **location_id**: ID локации
+
+    **Возвращает:**
+    - Список агрегированных остатков по товарам
+    """
+    return await service.get_location_recursive_summary(location_id)
 
 
 @router.get("/location/by-code/{location_code}", response_model=List[InventoryInLocationResponse])

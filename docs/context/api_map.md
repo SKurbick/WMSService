@@ -29,6 +29,7 @@
 
 - `GET /api/inventory/product/{product_id}` - остатки товара по локациям.
 - `GET /api/inventory/location/{location_id}` - остатки в локации.
+- `GET /api/inventory/location/{location_id}/recursive-summary` - агрегированные остатки по локации и всем дочерним локациям.
 - `GET /api/inventory/location/by-code/{location_code}` - остатки в локации по коду.
 - `GET /api/inventory/summary` - агрегированные остатки через `wms.v_product_stock`.
 - `GET /api/inventory/container/{qr_code}` - остатки в контейнере.

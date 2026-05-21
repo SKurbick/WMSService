@@ -42,6 +42,35 @@ WHERE i.location_id = $1
 ORDER BY p.name, i.container_code NULLS LAST;
 """
 
+# === Рекурсивная сводка остатков по локации и дочерним локациям ===
+
+GET_LOCATION_RECURSIVE_SUMMARY = """
+SELECT
+    i.product_id,
+    p.name as product_name,
+    p.category,
+    SUM(i.quantity)::bigint as total_quantity,
+    COUNT(DISTINCT i.location_id)::bigint as locations_count,
+    COALESCE(
+        SUM(i.quantity) FILTER (WHERE i.container_code IS NOT NULL), 0
+    )::bigint as in_containers,
+    COALESCE(
+        SUM(i.quantity) FILTER (WHERE i.container_code IS NULL), 0
+    )::bigint as loose,
+    MAX(i.updated_at) as last_updated
+FROM wms.inventory i
+JOIN wms.locations l ON i.location_id = l.location_id
+JOIN public.products p ON i.product_id = p.id
+WHERE l.path <@ (
+    SELECT parent.path
+    FROM wms.locations parent
+    WHERE parent.location_id = $1
+)
+  AND i.quantity > 0
+GROUP BY i.product_id, p.name, p.category
+ORDER BY p.name;
+"""
+
 # === Агрегированные остатки (через view) ===
 
 GET_INVENTORY_SUMMARY = """

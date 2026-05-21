@@ -4,6 +4,7 @@ from typing import List, Optional
 from app.core.schemas.inventory import (
     InventoryItemResponse,
     InventoryInLocationResponse,
+    InventoryLocationSummaryResponse,
     InventorySummaryResponse,
     InventoryInContainerResponse,
     LooseInventoryResponse,
@@ -57,6 +58,21 @@ class InventoryService:
 
         results = await self.inventory_repo.get_by_location(location_id)
         return [InventoryInLocationResponse.model_validate(dict(r)) for r in results]
+
+    async def get_location_recursive_summary(
+        self, location_id: int
+    ) -> List[InventoryLocationSummaryResponse]:
+        """
+        Получить агрегированные остатки в локации и всех дочерних локациях.
+
+        Результат группируется только по product_id и включает все статусы остатков.
+        """
+        location = await self.location_repo.get_by_id(location_id)
+        if not location:
+            raise LocationNotFoundError(f"Локация с ID {location_id} не найдена")
+
+        results = await self.inventory_repo.get_location_recursive_summary(location_id)
+        return [InventoryLocationSummaryResponse.model_validate(dict(r)) for r in results]
 
     async def get_inventory_by_location_code(self, location_code: str) -> List[InventoryInLocationResponse]:
         """Получить все остатки в локации по её коду"""
