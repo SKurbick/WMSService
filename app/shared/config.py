@@ -32,8 +32,10 @@ class Settings(BaseSettings):
     # RabbitMQ
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
     RABBITMQ_QUEUE: str = "wms.fbs.write_off"
+    STOCK_RESERVATION_QUEUE: str = "wms.stock.reservations"
     RABBITMQ_EXCHANGE: str = "orders"
     CONSUMER_ENABLED: bool = True
+    RESERVATION_CONSUMER_ENABLED: bool = True
 
     # Локации
     FBS_LOCATION_CODE: str = "PUSHKINO-ФБС"

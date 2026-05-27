@@ -64,4 +64,13 @@
 - `app/core/services/stock_reservation_service.py` - бизнес-логика статусов резервов и audit входящих событий;
 - `app/infrastructure/database/repositories/stock_reservation_repository.py` - доступ к таблицам резервов и view доступности;
 - `app/infrastructure/database/queries/stock_reservations.py` - SQL для резервов;
-- `app/consumer.py` - распознает формат резервов `wild/orders` и обрабатывает его отдельно от существующего FBS write-off flow.
+- `app/consumer.py` - содержит отдельные RabbitMQ consumers для FBS write-off и stock reservations.
+
+## RabbitMQ consumers
+
+RabbitMQ обработка разделена по очередям:
+
+- FBS write-off consumer запускается через `settings.CONSUMER_ENABLED` и слушает `settings.RABBITMQ_QUEUE`;
+- stock reservation consumer запускается через `settings.RESERVATION_CONSUMER_ENABLED` и слушает `settings.STOCK_RESERVATION_QUEUE`;
+- пустая очередь резервов не создает записей в БД: consumer просто ожидает новое сообщение от RabbitMQ;
+- ошибки БД при обработке резервов логируются с `exc_info=True` и приводят к `nack(requeue=True)`, чтобы отсутствие таблиц/view резервов не маскировалось.

@@ -11,7 +11,7 @@ from app.infrastructure.database.connection import get_db_pool, close_db_pool
 from app.api.v1.router import api_router
 from app.middleware.error_handler import add_exception_handlers
 from app.middleware.logging import add_logging_middleware
-from app.consumer import start_consumer
+from app.consumer import start_consumer, start_stock_reservation_consumer
 from app.retry_worker import start_retry_worker
 
 # Настройка логирования
@@ -31,13 +31,18 @@ async def lifespan(app: FastAPI):
     logger.info("✅ База данных подключена")
 
     consumer_task = None
+    reservation_consumer_task = None
     retry_task = None
 
     if settings.CONSUMER_ENABLED:
         consumer_task = asyncio.create_task(start_consumer())
-        logger.info("✅ RabbitMQ consumer запущен")
+        logger.info("✅ FBS RabbitMQ consumer запущен")
         retry_task = asyncio.create_task(start_retry_worker())
         logger.info("✅ Retry worker запущен")
+
+    if settings.RESERVATION_CONSUMER_ENABLED:
+        reservation_consumer_task = asyncio.create_task(start_stock_reservation_consumer())
+        logger.info("✅ Stock reservation RabbitMQ consumer запущен")
 
     yield
 
@@ -46,6 +51,12 @@ async def lifespan(app: FastAPI):
         consumer_task.cancel()
         try:
             await consumer_task
+        except asyncio.CancelledError:
+            pass
+    if reservation_consumer_task:
+        reservation_consumer_task.cancel()
+        try:
+            await reservation_consumer_task
         except asyncio.CancelledError:
             pass
     if retry_task:

@@ -20,14 +20,6 @@ logger = logging.getLogger(__name__)
 fbs_shipment_repo = FbsShipmentRepository()
 
 
-def _looks_like_reservation_message(raw) -> bool:
-    """Определяет новый формат резервов, не трогая старый FBS write-off формат."""
-    return isinstance(raw, list) and any(
-        isinstance(item, dict) and ("wild" in item or "orders" in item)
-        for item in raw
-    )
-
-
 async def start_consumer() -> None:
     connection = await aio_pika.connect_robust(settings.RABBITMQ_URL)
 
@@ -57,19 +49,6 @@ async def start_consumer() -> None:
             logger.debug(f"Raw message: {len(raw)} элементов, первый: {raw[0] if raw else 'пустой'}")
 
             pool = await get_db_pool()
-
-            if _looks_like_reservation_message(raw):
-                reservation_service = StockReservationService(
-                    StockReservationRepository(pool)
-                )
-                try:
-                    stats = await reservation_service.process_rabbitmq_message(raw)
-                    logger.info(f"Сообщение резервов обработано: {stats}")
-                    await message.ack()
-                except Exception as e:
-                    logger.error(f"Ошибка обработки резервов: {e}", exc_info=True)
-                    await message.nack(requeue=True)
-                continue
 
             # === Шаг 2: Сохранить raw JSON в БД ДО валидации ===
             try:
@@ -116,3 +95,48 @@ async def start_consumer() -> None:
                 logger.info(f"Сообщение обработано, shipment_id={shipment_id}")
             except Exception as e:
                 logger.error(f"Ошибка обработки (shipment_id={shipment_id}): {e}", exc_info=True)
+
+
+async def start_stock_reservation_consumer() -> None:
+    """RabbitMQ consumer для мягких резервов товара.
+
+    Слушает отдельную очередь резервов и не обрабатывает FBS write-off сообщения.
+    При пустой очереди consumer просто ожидает новые сообщения.
+    """
+    connection = await aio_pika.connect_robust(settings.RABBITMQ_URL)
+
+    async with connection:
+        channel = await connection.channel()
+        queue = await channel.declare_queue(
+            settings.STOCK_RESERVATION_QUEUE,
+            passive=True,
+        )
+
+        logger.info(
+            f"Stock reservation consumer запущен, слушаю очередь: "
+            f"{settings.STOCK_RESERVATION_QUEUE}"
+        )
+
+        async for message in queue:
+            try:
+                raw = json.loads(message.body)
+            except json.JSONDecodeError as e:
+                logger.error(f"Битый JSON в сообщении резервов: {e}")
+                await message.ack()
+                continue
+
+            pool = await get_db_pool()
+            reservation_service = StockReservationService(StockReservationRepository(pool))
+
+            try:
+                stats = await reservation_service.process_rabbitmq_message(raw)
+                logger.info(f"Сообщение резервов обработано: {stats}")
+                await message.ack()
+            except Exception as e:
+                logger.error(
+                    "Ошибка обработки stock reservation message. "
+                    "Проверьте доступность таблиц/view резервов в БД. "
+                    f"queue={settings.STOCK_RESERVATION_QUEUE} error={e}",
+                    exc_info=True,
+                )
+                await message.nack(requeue=True)

@@ -42,5 +42,16 @@
 - Не использовать `wms.inventory` и `wms.movements` для резервов, чтобы не смешивать обещанный внешний спрос с физическим складским остатком.
 - Хранить текущее состояние в `wms.stock_reservation_orders`, а все входящие события и бизнес-ошибки - в `wms.stock_reservation_events`.
 - Использовать UPSERT по `(source_type, product_id, external_order_id)` для идемпотентности повторных сообщений.
-- В existing RabbitMQ consumer распознавать формат `wild/orders` и обрабатывать его отдельно, не меняя существующий FBS write-off flow для сообщений старого формата.
+- Первичная реализация была разделена позднее: stock reservations обрабатываются отдельным consumer и отдельной очередью, чтобы не смешивать их с FBS write-off flow.
 - Таблицы и view считаются внешне созданными объектами БД согласно ТЗ; миграция в проект не добавлялась, так как существующего механизма миграций в репозитории нет.
+
+## 2026-05-28 - Отдельная RabbitMQ очередь для мягких резервов
+
+Решено разделить RabbitMQ consumers для FBS списаний и мягких резервов.
+
+Решения:
+
+- FBS write-off consumer продолжает слушать `settings.RABBITMQ_QUEUE`.
+- Stock reservation consumer слушает отдельную `settings.STOCK_RESERVATION_QUEUE`.
+- Запуск reservation consumer управляется отдельным флагом `settings.RESERVATION_CONSUMER_ENABLED`.
+- Ошибки БД при обработке резервов логируются и приводят к NACK/requeue, чтобы отсутствие таблиц или view резервов было видно в логах и не ACK-алось как успешная бизнес-ошибка.

@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 
 from app.api.v1.endpoints import inventory as inventory_endpoint
-from app.consumer import _looks_like_reservation_message
+from app.consumer import start_consumer, start_stock_reservation_consumer
 from app.core.exceptions import LocationNotFoundError
 from app.core.schemas.stock_reservation import ProductAvailabilityResponse
 from app.core.services.stock_reservation_service import StockReservationService
@@ -133,12 +133,13 @@ def test_stock_reservation_routes_are_registered():
     assert "/inventory/reservation-events" in paths
 
 
-def test_reservation_consumer_detection_does_not_match_write_off_message():
-    write_off = [{"product_id": "wild1605", "quantity": 1, "assembly_tasks": ["123"]}]
-    reservation = [{"wild": "wild1605", "orders": [{"order_id": 123, "status": "new"}]}]
+def test_reservation_consumer_uses_separate_queue_from_fbs_consumer():
+    fbs_names = start_consumer.__code__.co_names
+    reservation_names = start_stock_reservation_consumer.__code__.co_names
 
-    assert _looks_like_reservation_message(reservation) is True
-    assert _looks_like_reservation_message(write_off) is False
+    assert "RABBITMQ_QUEUE" in fbs_names
+    assert "STOCK_RESERVATION_QUEUE" not in fbs_names
+    assert "STOCK_RESERVATION_QUEUE" in reservation_names
 
 
 def test_reservation_sql_is_idempotent_and_does_not_touch_inventory_or_movements():

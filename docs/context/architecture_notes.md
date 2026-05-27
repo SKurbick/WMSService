@@ -86,3 +86,12 @@ Retry worker:
 - Нет тестов, по которым можно подтвердить expected behavior.
 - Нет тел PostgreSQL-функций и триггеров.
 - Некоторые критичные инварианты, вероятно, обеспечиваются БД, но это не проверяется из репозитория.
+
+## RabbitMQ consumers
+
+В lifespan запускаются независимые consumer-задачи:
+
+- `start_consumer()` для FBS write-off, если `settings.CONSUMER_ENABLED = True`; очередь - `settings.RABBITMQ_QUEUE`;
+- `start_stock_reservation_consumer()` для мягких резервов, если `settings.RESERVATION_CONSUMER_ENABLED = True`; очередь - `settings.STOCK_RESERVATION_QUEUE`.
+
+Reservation consumer использует `passive=True`, поэтому ожидает заранее созданную очередь и не пересоздает её. Если сообщений нет, цикл `async for message in queue` ждет новые сообщения и не обращается к БД.
