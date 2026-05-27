@@ -35,6 +35,12 @@
 - `GET /api/inventory/container/{qr_code}` - остатки в контейнере.
 - `GET /api/inventory/location/{location_id}/loose` - россыпь в локации.
 - `GET /api/inventory/search` - поиск по товару, названию, партии или контейнеру.
+- `GET /api/inventory/availability` - список доступности товаров с фильтрами `product_id`, `only_shortage`, `only_reserved`, `limit`, `offset`.
+- `GET /api/inventory/availability/totals` - агрегаты доступности по всем товарам.
+- `GET /api/inventory/product/{product_id}/availability` - доступность товара: физический остаток, активный мягкий резерв, свободный остаток и нехватка.
+- `GET /api/inventory/location/{location_id}/availability` - доступность товаров по subtree локации с глобальным мягким резервом.
+- `GET /api/inventory/reservations` - read-only список текущих мягких резервов с фильтрами.
+- `GET /api/inventory/reservation-events` - read-only audit входящих событий резервов с фильтрами.
 
 ## Movements
 

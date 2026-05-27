@@ -14,6 +14,9 @@ from app.infrastructure.database.repositories.report_repository import ReportRep
 from app.infrastructure.database.repositories.system_repository import SystemRepository
 from app.infrastructure.database.repositories.task_repository import TaskRepository
 from app.infrastructure.database.repositories.notification_repository import NotificationRepository
+from app.infrastructure.database.repositories.stock_reservation_repository import (
+    StockReservationRepository,
+)
 
 # Services
 from app.core.services.location_service import LocationService
@@ -24,6 +27,7 @@ from app.core.services.report_service import ReportService
 from app.core.services.system_service import SystemService
 from app.core.services.task_service import TaskService
 from app.core.services.notification_service import NotificationService
+from app.core.services.stock_reservation_service import StockReservationService
 
 
 # === Repositories ===
@@ -118,11 +122,26 @@ def get_notification_repository(pool: Pool = Depends(get_db_pool)) -> Notificati
     return NotificationRepository(pool)
 
 
+def get_stock_reservation_repository(
+    pool: Pool = Depends(get_db_pool),
+) -> StockReservationRepository:
+    """DI для StockReservationRepository"""
+    return StockReservationRepository(pool)
+
+
 def get_notification_service(
     repository: NotificationRepository = Depends(get_notification_repository),
 ) -> NotificationService:
     """DI для NotificationService"""
     return NotificationService(repository)
+
+
+def get_stock_reservation_service(
+    repository: StockReservationRepository = Depends(get_stock_reservation_repository),
+    location_repository: LocationRepository = Depends(get_location_repository),
+) -> StockReservationService:
+    """DI для StockReservationService"""
+    return StockReservationService(repository, location_repository)
 
 
 def get_task_service(

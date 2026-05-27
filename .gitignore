@@ -6,3 +6,5 @@ rabbitmq_consumer.py
 scan_qr_from_pdf.py
 AGENTS.md
 docs/tasks/
+add_excel_data.py
+dev_insert_stock_reservation_test_data.py

@@ -54,3 +54,14 @@
   - триггер обновления inventory при вставке в `wms.movements`;
   - триггер генерации `location_code` и `path` для `wms.locations`.
 - Конкурентный доступ явно обработан не везде; где нет явных блокировок в Python/SQL, это вынесено в открытые вопросы.
+
+## Мягкие резервы товаров
+
+Добавлен механизм мягкого резерва по `product_id + external_order_id` для сообщений RabbitMQ формата `wild/orders`. Резервы хранятся отдельно от физических остатков: код не пишет резервы в `wms.inventory` и не создает `wms.movements`.
+
+Основные компоненты:
+
+- `app/core/services/stock_reservation_service.py` - бизнес-логика статусов резервов и audit входящих событий;
+- `app/infrastructure/database/repositories/stock_reservation_repository.py` - доступ к таблицам резервов и view доступности;
+- `app/infrastructure/database/queries/stock_reservations.py` - SQL для резервов;
+- `app/consumer.py` - распознает формат резервов `wild/orders` и обрабатывает его отдельно от существующего FBS write-off flow.

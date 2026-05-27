@@ -193,3 +193,26 @@
 Позиции приходят из RabbitMQ, валидируются схемой `WriteOffAccordingToFBS` и списываются из локации `settings.FBS_LOCATION_CODE`.
 
 Сервис также обращается к `public.assembly_task`, где проверяет существование сборочных заданий и атомарно помечает их `is_shipped = TRUE` вместе со списанием.
+
+## Мягкие резервы товаров
+
+Текущие мягкие резервы хранятся в `wms.stock_reservation_orders`. Идентичность резерва задается уникальной связкой `source_type + product_id + external_order_id`.
+
+Поля текущего состояния:
+
+- `reservation_order_id`;
+- `source_type`;
+- `product_id`;
+- `external_order_id`;
+- `external_status`;
+- `is_reserved`;
+- `reserved_qty`;
+- `external_created_at`;
+- `last_event_at`;
+- `raw_payload`;
+- `created_at`;
+- `updated_at`.
+
+Audit всех входящих событий резервов хранится в `wms.stock_reservation_events`, включая успешные события, повторные события, неизвестные статусы, неизвестные товары и невалидные payload.
+
+Доступность товара читается из `wms.v_product_availability` и включает `physical_qty`, `reserved_qty`, `free_qty`, `shortage_qty`.

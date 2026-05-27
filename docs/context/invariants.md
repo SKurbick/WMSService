@@ -56,3 +56,12 @@
 - DDL не содержит advisory locks или explicit `SELECT FOR UPDATE`.
 - Триггеры полагаются на row locks при `UPDATE inventory` и `INSERT ... ON CONFLICT DO UPDATE`.
 - Read-then-write операции (`unpack_from_container`, `block_empty_container`, `find_available_location`) не имеют явной защиты от гонок в DDL.
+
+## Мягкие резервы
+
+- Мягкий резерв не должен изменять `wms.inventory`.
+- Мягкий резерв не должен создавать записи в `wms.movements`.
+- Идемпотентность текущего состояния резервов обеспечивается UPSERT по `(source_type, product_id, external_order_id)`.
+- Все входящие события резервов должны попадать в `wms.stock_reservation_events`, включая `unknown_status`, `product_not_found` и `invalid_payload`.
+- Бизнес-ошибки резервов ACK-аются после успешной записи audit.
+- Ошибки БД/транзакции при обработке резервов должны приводить к retry/NACK со стороны RabbitMQ consumer.

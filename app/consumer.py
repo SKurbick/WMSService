@@ -10,12 +10,22 @@ from pydantic import ValidationError
 from app.shared.config import settings
 from app.infrastructure.database.connection import get_db_pool
 from app.infrastructure.database.repositories.fbs_shipment_repository import FbsShipmentRepository
+from app.infrastructure.database.repositories.stock_reservation_repository import StockReservationRepository
+from app.core.services.stock_reservation_service import StockReservationService
 from app.handlers.write_off_fbs_handler import handle_write_off_fbs
 from app.core.schemas.write_off_fbs import WriteOffAccordingToFBS
 
 logger = logging.getLogger(__name__)
 
 fbs_shipment_repo = FbsShipmentRepository()
+
+
+def _looks_like_reservation_message(raw) -> bool:
+    """Определяет новый формат резервов, не трогая старый FBS write-off формат."""
+    return isinstance(raw, list) and any(
+        isinstance(item, dict) and ("wild" in item or "orders" in item)
+        for item in raw
+    )
 
 
 async def start_consumer() -> None:
@@ -47,6 +57,19 @@ async def start_consumer() -> None:
             logger.debug(f"Raw message: {len(raw)} элементов, первый: {raw[0] if raw else 'пустой'}")
 
             pool = await get_db_pool()
+
+            if _looks_like_reservation_message(raw):
+                reservation_service = StockReservationService(
+                    StockReservationRepository(pool)
+                )
+                try:
+                    stats = await reservation_service.process_rabbitmq_message(raw)
+                    logger.info(f"Сообщение резервов обработано: {stats}")
+                    await message.ack()
+                except Exception as e:
+                    logger.error(f"Ошибка обработки резервов: {e}", exc_info=True)
+                    await message.nack(requeue=True)
+                continue
 
             # === Шаг 2: Сохранить raw JSON в БД ДО валидации ===
             try:

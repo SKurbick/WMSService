@@ -89,3 +89,23 @@
 ### `wms.receipt_items`
 
 Snapshot поступлений из 1С: `receipt_item_id`, `guid`, `product_id`, `quantity`, `document_number`, `supplier_name`, `supplier_code`, timestamps. PK; unique `(guid, product_id)`; FK `product_id -> public.products(id) ON DELETE RESTRICT`; check `quantity >= 0`.
+
+## `wms.stock_reservation_orders`
+
+Назначение: текущее состояние мягких резервов товара по `source_type + product_id + external_order_id`. Таблица ожидается созданной в БД вне кода приложения.
+
+Ожидаемые поля по ТЗ: `reservation_order_id`, `source_type`, `product_id`, `external_order_id`, `external_status`, `is_reserved`, `reserved_qty`, `external_created_at`, `last_event_at`, `raw_payload`, `created_at`, `updated_at`.
+
+Ожидаемое ограничение: unique `(source_type, product_id, external_order_id)`, используемый для идемпотентного UPSERT.
+
+## `wms.stock_reservation_events`
+
+Назначение: audit всех входящих событий мягких резервов, включая бизнес-ошибки и невалидные payload. Таблица ожидается созданной в БД вне кода приложения.
+
+Ожидаемые поля по ТЗ: `reservation_event_id`, `source_type`, `product_id`, `external_order_id`, `external_status`, `reserved_qty`, `external_created_at`, `event_received_at`, `processing_result`, `error_message`, `raw_payload`.
+
+## `wms.v_product_availability`
+
+Назначение: read-only view доступности товара с учетом физического available остатка и активного мягкого резерва.
+
+Ожидаемые поля: `product_id`, `physical_qty`, `reserved_qty`, `free_qty`, `shortage_qty`. `free_qty` может быть отрицательным.

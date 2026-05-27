@@ -1,5 +1,7 @@
 """API endpoints для инвентаря (остатков)"""
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Query, Path
 from typing import List, Optional
 
@@ -12,10 +14,122 @@ from app.core.schemas.inventory import (
     LooseInventoryResponse,
     InventorySearchResult,
 )
+from app.core.schemas.stock_reservation import (
+    ProductAvailabilityResponse,
+    ProductAvailabilityTotalsResponse,
+    StockReservationEventResponse,
+    StockReservationOrderResponse,
+)
 from app.core.services.inventory_service import InventoryService
-from app.api.v1.dependencies import get_inventory_service
+from app.core.services.stock_reservation_service import StockReservationService
+from app.api.v1.dependencies import get_inventory_service, get_stock_reservation_service
 
 router = APIRouter(prefix="/inventory", tags=["Остатки"])
+
+
+@router.get(
+    "/availability",
+    response_model=List[ProductAvailabilityResponse],
+)
+async def list_product_availability(
+    product_id: Optional[str] = Query(None, description="ID товара"),
+    only_shortage: Optional[bool] = Query(None, description="Только товары с нехваткой"),
+    only_reserved: Optional[bool] = Query(None, description="Только товары с активным резервом"),
+    limit: int = Query(100, ge=1, le=5000, description="Лимит записей"),
+    offset: int = Query(0, ge=0, description="Смещение"),
+    service: StockReservationService = Depends(get_stock_reservation_service),
+):
+    """Получить список доступности товаров с учетом мягких резервов."""
+    return await service.list_product_availability(
+        product_id=product_id,
+        only_shortage=only_shortage,
+        only_reserved=only_reserved,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/availability/totals",
+    response_model=ProductAvailabilityTotalsResponse,
+)
+async def get_availability_totals(
+    service: StockReservationService = Depends(get_stock_reservation_service),
+):
+    """Получить агрегаты доступности по всем товарам."""
+    return await service.get_availability_totals()
+
+
+@router.get(
+    "/product/{product_id}/availability",
+    response_model=ProductAvailabilityResponse,
+)
+async def get_product_availability(
+    product_id: str = Path(..., description="ID товара"),
+    service: StockReservationService = Depends(get_stock_reservation_service),
+):
+    """Получить доступность товара с учетом мягкого резерва."""
+    return await service.get_product_availability(product_id)
+
+
+@router.get(
+    "/reservations",
+    response_model=List[StockReservationOrderResponse],
+)
+async def list_reservations(
+    product_id: Optional[str] = Query(None, description="ID товара"),
+    external_order_id: Optional[int] = Query(None, description="ID внешнего заказа"),
+    is_reserved: Optional[bool] = Query(None, description="Активен ли резерв"),
+    external_status: Optional[str] = Query(None, description="Внешний статус заказа"),
+    source_type: Optional[str] = Query(None, description="Источник резерва"),
+    older_than_hours: Optional[int] = Query(
+        None, ge=0, description="Старше N часов по last_event_at"
+    ),
+    limit: int = Query(100, ge=1, le=500, description="Лимит записей"),
+    offset: int = Query(0, ge=0, description="Смещение"),
+    service: StockReservationService = Depends(get_stock_reservation_service),
+):
+    """Получить текущие мягкие резервы с фильтрами."""
+    return await service.list_reservations(
+        product_id=product_id,
+        external_order_id=external_order_id,
+        is_reserved=is_reserved,
+        external_status=external_status,
+        source_type=source_type,
+        older_than_hours=older_than_hours,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/reservation-events",
+    response_model=List[StockReservationEventResponse],
+)
+async def list_reservation_events(
+    product_id: Optional[str] = Query(None, description="ID товара"),
+    external_order_id: Optional[int] = Query(None, description="ID внешнего заказа"),
+    external_status: Optional[str] = Query(None, description="Внешний статус заказа"),
+    processing_result: Optional[str] = Query(None, description="Результат обработки"),
+    source_type: Optional[str] = Query(None, description="Источник резерва"),
+    date_from: Optional[datetime] = Query(None, description="Дата события от"),
+    date_to: Optional[datetime] = Query(None, description="Дата события до"),
+    limit: int = Query(100, ge=1, le=500, description="Лимит записей"),
+    offset: int = Query(0, ge=0, description="Смещение"),
+    service: StockReservationService = Depends(get_stock_reservation_service),
+):
+    """Получить audit входящих событий резервов."""
+    return await service.list_reservation_events(
+        product_id=product_id,
+        external_order_id=external_order_id,
+        external_status=external_status,
+        processing_result=processing_result,
+        source_type=source_type,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/product/{product_id}", response_model=List[InventoryItemResponse])
@@ -55,6 +169,18 @@ async def get_inventory_by_location(
     - Список товаров в локации
     """
     return await service.get_inventory_by_location(location_id)
+
+
+@router.get(
+    "/location/{location_id}/availability",
+    response_model=List[ProductAvailabilityResponse],
+)
+async def get_location_subtree_availability(
+    location_id: int = Path(..., description="ID локации"),
+    service: StockReservationService = Depends(get_stock_reservation_service),
+):
+    """Получить доступность товаров по subtree локации с глобальным резервом."""
+    return await service.get_location_subtree_availability(location_id)
 
 
 @router.get(

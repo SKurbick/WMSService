@@ -57,3 +57,28 @@
 - FIFO/FEFO рекомендации.
 - FBS consumer, RabbitMQ ACK/NACK, Pydantic validation, группировка по `product_id`, retry worker/backoff.
 - Атомарность отметки `public.assembly_task.is_shipped` и создания movement.
+
+## Мягкие резервы товаров
+
+- Резерв является отдельной сущностью и не является физическим движением товара.
+- Резерв нельзя записывать в `wms.inventory` и нельзя отражать через `wms.movements`.
+- MVP резервируется только по `product_id + external_order_id`; location, container, batch/FIFO/FEFO не используются.
+- Входящее RabbitMQ-поле `wild` трактуется как `product_id` и должно соответствовать `public.products.id`.
+- Для MVP один `external_order_id` означает `reserved_qty = 1`.
+- Статусы `new`, `processing`, `fictitious` делают резерв активным (`is_reserved=true`).
+- Статусы `shipped`, `burned` снимают резерв (`is_reserved=false`).
+- `shipped` только снимает мягкий резерв и не создает физическое списание. Физическое списание остается в существующем FBS `ship` movement flow.
+- Неизвестный товар записывается в audit как `product_not_found` без изменения текущего состояния резервов.
+- Неизвестный статус записывается в audit как `unknown_status` без изменения текущего состояния резервов.
+- `free_qty` в доступности товара может быть отрицательным; это показывает нехватку под активные резервы.
+- `older_than_hours` в списке резервов только фильтрует по `last_event_at`; автоснятие резерва по TTL не выполняется.
+
+### Availability API
+
+- JSON-поля `physical_qty`, `reserved_qty`, `free_qty`, `shortage_qty` в availability responses отдаются числами, а не строками Decimal.
+- `GET /api/inventory/availability` читает `wms.v_product_availability` и не изменяет `wms.inventory`, `wms.movements` или резервы.
+- `only_shortage=true` показывает только строки с `shortage_qty > 0`.
+- `only_reserved=true` показывает только строки с `reserved_qty > 0`.
+- `GET /api/inventory/availability/totals` считает `shortage_qty` как `SUM(shortage_qty)` по строкам availability, а не как `GREATEST(SUM(reserved_qty) - SUM(physical_qty), 0)`.
+- `GET /api/inventory/location/{location_id}/availability` считает physical quantity внутри subtree локации через `wms.locations.path <@ parent.path`, а reserved quantity берет глобально по `product_id`.
+- Для location availability: `free_qty = physical_qty_in_location_subtree - reserved_qty_global`, `shortage_qty = GREATEST(reserved_qty_global - physical_qty_in_location_subtree, 0)`.
