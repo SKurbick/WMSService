@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from asyncpg import Pool
+import asyncpg.exceptions
 from pydantic import ValidationError
 
 from app.core.schemas.fbs_shipment import (
@@ -19,8 +20,17 @@ from app.core.schemas.fbs_shipment import (
     RetryResultItem,
 )
 from app.core.schemas.write_off_fbs import WriteOffAccordingToFBS
-from app.handlers.write_off_fbs_handler import handle_write_off_fbs
+from app.handlers.write_off_fbs_handler import (
+    _calc_next_retry_at,
+    _process_shipment_group,
+    handle_write_off_fbs,
+)
 from app.infrastructure.database.repositories.fbs_shipment_repository import FbsShipmentRepository
+from app.infrastructure.database.repositories.location_repository import LocationRepository
+from app.infrastructure.database.repositories.movement_repository import MovementRepository
+from app.core.services.movement_service import MovementService
+from app.core.enums import FbsShipmentSource
+from app.core.exceptions import AssemblyTasksAlreadyProcessedError
 from app.infrastructure.database.connection import get_db_pool
 
 logger = logging.getLogger(__name__)
@@ -33,6 +43,7 @@ _VALID_STATUSES = {"processing", "completed", "partially_completed", "failed", "
 # ─────────────────────────────────────────────
 #  GET /fbs-shipments/stats  (должен быть ДО /{shipment_id})
 # ─────────────────────────────────────────────
+
 
 @router.get(
     "/stats",
@@ -51,11 +62,12 @@ _VALID_STATUSES = {"processing", "completed", "partially_completed", "failed", "
     response_description="Общее количество и разбивка по статусам",
 )
 async def get_shipments_stats(
+    source: Optional[FbsShipmentSource] = Query(None, description="Фильтр по источнику"),
     pool: Pool = Depends(get_db_pool),
 ):
     repo = FbsShipmentRepository()
     async with pool.acquire() as conn:
-        rows = await repo.get_shipments_stats(conn)
+        rows = await repo.get_shipments_stats(conn, source.value if source else None)
 
     by_status: dict[str, int] = {row["status"]: row["count"] for row in rows}
     total = sum(by_status.values())
@@ -65,6 +77,7 @@ async def get_shipments_stats(
 # ─────────────────────────────────────────────
 #  GET /fbs-shipments  (должен быть ДО /{shipment_id})
 # ─────────────────────────────────────────────
+
 
 @router.get(
     "",
@@ -91,9 +104,12 @@ async def list_shipments(
         None,
         description="Фильтр по статусу: processing, completed, partially_completed, failed, validation_failed",
     ),
+    source: Optional[FbsShipmentSource] = Query(None, description="Фильтр по источнику"),
     limit: int = Query(50, ge=1, le=200, description="Количество записей на страницу"),
     offset: int = Query(0, ge=0, description="Смещение для пагинации"),
-    date_from: Optional[datetime] = Query(None, description="Начало периода (received_at >= date_from)"),
+    date_from: Optional[datetime] = Query(
+        None, description="Начало периода (received_at >= date_from)"
+    ),
     date_to: Optional[datetime] = Query(None, description="Конец периода (received_at <= date_to)"),
     pool: Pool = Depends(get_db_pool),
 ):
@@ -112,6 +128,7 @@ async def list_shipments(
             offset=offset,
             date_from=date_from,
             date_to=date_to,
+            source=source.value if source else None,
         )
 
     items = [FbsShipmentListItem(**dict(r)) for r in rows]
@@ -119,8 +136,76 @@ async def list_shipments(
 
 
 # ─────────────────────────────────────────────
+#  POST /fbs-shipments/items/{item_id}/retry
+# ─────────────────────────────────────────────
+
+
+@router.post(
+    "/items/{item_id}/retry",
+    response_model=FbsShipmentDetailResponse,
+    summary="Повторная обработка одной FBS-позиции",
+)
+async def retry_shipment_item(item_id: int, pool: Pool = Depends(get_db_pool)):
+    repo = FbsShipmentRepository()
+    async with pool.acquire() as conn:
+        item = await repo.get_item_by_id(conn, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="FBS item не найден")
+    if item["status"] not in {"failed", "pending_retry", "retry_exhausted"}:
+        raise HTTPException(
+            status_code=409, detail="Item со статусом {} нельзя повторить".format(item["status"])
+        )
+
+    movement_service = MovementService(MovementRepository(pool), LocationRepository(pool))
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await _process_shipment_group(
+                    conn=conn,
+                    product_id=item["product_id"],
+                    total_quantity=item["quantity"],
+                    all_assembly_tasks=list(item["assembly_tasks"]),
+                    author=item["author"],
+                    movement_service=movement_service,
+                    shipment_repo=repo,
+                    item_ids=[item_id],
+                    retry_count=item["retry_count"] + 1,
+                )
+    except AssemblyTasksAlreadyProcessedError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except asyncpg.exceptions.CheckViolationError as e:
+        retry_count = item["retry_count"] + 1
+        status = "retry_exhausted" if retry_count >= item["max_retries"] else "pending_retry"
+        next_retry_at = None if status == "retry_exhausted" else _calc_next_retry_at(retry_count)
+        async with pool.acquire() as conn:
+            await repo.update_item_status(
+                conn,
+                item_id=item_id,
+                status=status,
+                error_message=str(e),
+                retry_count=retry_count,
+                next_retry_at=next_retry_at,
+            )
+    except Exception as e:
+        logger.error(f"Ошибка ручного retry item_id={item_id}: {e}", exc_info=True)
+        async with pool.acquire() as conn:
+            await repo.update_item_status(
+                conn, item_id=item_id, status="failed", error_message=str(e)
+            )
+
+    async with pool.acquire() as conn:
+        await repo.update_shipment_status(conn, item["shipment_id"])
+        shipment = await repo.get_shipment_by_id(conn, item["shipment_id"])
+        item_rows = await repo.get_items_by_shipment_id(conn, item["shipment_id"])
+    return FbsShipmentDetailResponse(
+        **dict(shipment), items=[FbsShipmentItemResponse(**dict(row)) for row in item_rows]
+    )
+
+
+# ─────────────────────────────────────────────
 #  GET /fbs-shipments/{shipment_id}
 # ─────────────────────────────────────────────
+
 
 @router.get(
     "/{shipment_id}",
@@ -164,6 +249,7 @@ async def get_shipment(
 # ─────────────────────────────────────────────
 #  POST /fbs-shipments/retry  (должен быть ДО /{shipment_id})
 # ─────────────────────────────────────────────
+
 
 @router.post(
     "/retry",
@@ -214,19 +300,19 @@ async def retry_shipments(
         raw = row["raw_message"]
 
         try:
-            items: List[WriteOffAccordingToFBS] = [
-                WriteOffAccordingToFBS(**i) for i in raw
-            ]
+            items: List[WriteOffAccordingToFBS] = [WriteOffAccordingToFBS(**i) for i in raw]
         except (ValidationError, Exception) as e:
             error_str = str(e)
             logger.warning(f"Повторная ошибка валидации | shipment_id={shipment_id} | {error_str}")
             async with pool.acquire() as conn:
                 await repo.update_shipment_error(conn, shipment_id, error_str)
-            results.append(RetryResultItem(
-                shipment_id=shipment_id,
-                status="validation_failed",
-                error=error_str,
-            ))
+            results.append(
+                RetryResultItem(
+                    shipment_id=shipment_id,
+                    status="validation_failed",
+                    error=error_str,
+                )
+            )
             continue
 
         try:
@@ -238,12 +324,16 @@ async def retry_shipments(
             results.append(RetryResultItem(shipment_id=shipment_id, status=final_status))
         except Exception as e:
             error_str = str(e)
-            logger.error(f"Ошибка обработки | shipment_id={shipment_id} | {error_str}", exc_info=True)
-            results.append(RetryResultItem(
-                shipment_id=shipment_id,
-                status="failed",
-                error=error_str,
-            ))
+            logger.error(
+                f"Ошибка обработки | shipment_id={shipment_id} | {error_str}", exc_info=True
+            )
+            results.append(
+                RetryResultItem(
+                    shipment_id=shipment_id,
+                    status="failed",
+                    error=error_str,
+                )
+            )
 
     still_failed = sum(1 for r in results if r.status == "validation_failed")
 
@@ -258,6 +348,7 @@ async def retry_shipments(
 # ─────────────────────────────────────────────
 #  POST /fbs-shipments/{shipment_id}/retry
 # ─────────────────────────────────────────────
+
 
 @router.post(
     "/{shipment_id}/retry",
@@ -300,9 +391,7 @@ async def retry_shipment(
     raw = row["raw_message"]
 
     try:
-        items: List[WriteOffAccordingToFBS] = [
-            WriteOffAccordingToFBS(**i) for i in raw
-        ]
+        items: List[WriteOffAccordingToFBS] = [WriteOffAccordingToFBS(**i) for i in raw]
     except (ValidationError, Exception) as e:
         error_str = str(e)
         async with pool.acquire() as conn:

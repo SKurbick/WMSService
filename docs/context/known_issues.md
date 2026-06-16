@@ -85,3 +85,9 @@
 - Affected tables/functions: `wms.containers.qr_code`, `wms.locations.location_code`, indexes `idx_containers_qr`, `idx_locations_code`, unique constraints `containers_qr_code_key`, `locations_location_code_key`.
 - Possible impact: лишняя стоимость insert/update и обслуживания индексов без очевидной пользы для чтения.
 - Recommended next action: проверить query plans и удалить явные дублирующие индексы миграцией, если они не нужны для особых сценариев.
+
+## External FBS MVP: оставшийся техдолг (2026-06-14)
+
+Исправлены гонка из-за игнорирования результата UPDATE `assembly_task.is_shipped` и разрыв между movement и item success/movement_id.
+
+Остаются: ранний ACK; отсутствие message-level event_id/inbox/outbox; recovery зависших `processing/new`; retry worker без `FOR UPDATE SKIP LOCKED`; группировка только по product; `movement_id` без устойчивого FK и типа bigint; lookup location через отдельное соединение; отсутствие сверки product_id с assembly task; отсутствие integration-тестов транзакции с реальным PostgreSQL trigger.

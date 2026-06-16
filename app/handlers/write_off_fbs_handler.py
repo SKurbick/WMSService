@@ -2,15 +2,16 @@
 
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import asyncpg.exceptions
 from asyncpg import Connection, Pool
 
 from app.core.schemas.write_off_fbs import WriteOffAccordingToFBS
 from app.core.schemas.movement import MovementCreate
-from app.core.enums import MovementType
+from app.core.enums import FbsShipmentSource, MovementType
 from app.core.services.movement_service import MovementService
+from app.core.exceptions import AssemblyTasksAlreadyProcessedError, FbsShipmentItemsUpdateError
 from app.infrastructure.database.repositories.movement_repository import MovementRepository
 from app.infrastructure.database.repositories.location_repository import LocationRepository
 from app.infrastructure.database.repositories.fbs_shipment_repository import FbsShipmentRepository
@@ -32,6 +33,7 @@ MARK_ASSEMBLY_TASKS_SHIPPED = """
 UPDATE public.assembly_task
 SET is_shipped = TRUE
 WHERE task_id = ANY($1::bigint[]) AND is_shipped = FALSE
+RETURNING task_id
 """
 
 
@@ -41,7 +43,7 @@ class AssemblyTaskValidationError(Exception):
 
 def _calc_next_retry_at(retry_count: int) -> datetime:
     """Экспоненциальный backoff, максимум 30 минут."""
-    minutes = min(_RETRY_BASE_MINUTES * (2 ** retry_count), _RETRY_MAX_MINUTES)
+    minutes = min(_RETRY_BASE_MINUTES * (2**retry_count), _RETRY_MAX_MINUTES)
     return datetime.now(timezone.utc) + timedelta(minutes=minutes)
 
 
@@ -63,6 +65,9 @@ async def validate_assembly_tasks(
     except ValueError as e:
         raise ValueError(f"assembly_tasks содержит нечисловые значения: {e}")
 
+    if len(task_ids) != len(set(task_ids)):
+        raise AssemblyTaskValidationError("assembly_tasks содержит дубли")
+
     rows = await conn.fetch(VALIDATE_ASSEMBLY_TASKS, task_ids)
 
     found_ids = {row["task_id"] for row in rows}
@@ -71,17 +76,20 @@ async def validate_assembly_tasks(
 
     if non_existing_ids:
         logger.error(f"Сборочные задания не найдены в БД: {sorted(non_existing_ids)}")
-        raise AssemblyTaskValidationError(
-            f"Задания не найдены: {sorted(non_existing_ids)}"
-        )
+        raise AssemblyTaskValidationError(f"Задания не найдены: {sorted(non_existing_ids)}")
 
     if already_shipped:
         logger.error(f"Сборочные задания уже отгружены: {sorted(already_shipped)}")
-        raise AssemblyTaskValidationError(
+        raise AssemblyTasksAlreadyProcessedError(
             f"Задания уже отгружены: {sorted(already_shipped)}"
         )
 
-    await conn.execute(MARK_ASSEMBLY_TASKS_SHIPPED, task_ids)
+    updated_rows = await conn.fetch(MARK_ASSEMBLY_TASKS_SHIPPED, task_ids)
+    updated_ids = {row["task_id"] for row in updated_rows}
+    if updated_ids != set(task_ids):
+        raise AssemblyTasksAlreadyProcessedError(
+            f"Не удалось захватить все сборочные задания: expected={sorted(task_ids)}, updated={sorted(updated_ids)}"
+        )
     logger.info(f"Сборочные задания помечены как отгруженные: {sorted(task_ids)}")
 
 
@@ -92,6 +100,9 @@ async def _process_shipment_group(
     all_assembly_tasks: List[str],
     author: str,
     movement_service: MovementService,
+    shipment_repo: FbsShipmentRepository,
+    item_ids: Sequence[int],
+    retry_count: Optional[int] = None,
 ) -> int:
     """
     Выполняет списание для одной группы (по product_id).
@@ -107,7 +118,13 @@ async def _process_shipment_group(
         asyncpg.exceptions.CheckViolationError: нехватка остатка.
         AssemblyTaskValidationError: задания не найдены или уже отгружены.
     """
-    await validate_assembly_tasks(all_assembly_tasks, conn)
+    if settings.FBS_VALIDATE_ASSEMBLY_TASKS:
+        await validate_assembly_tasks(all_assembly_tasks, conn)
+    else:
+        logger.warning(
+            "Проверка assembly_tasks отключена настройкой "
+            "FBS_VALIDATE_ASSEMBLY_TASKS=false; public.assembly_task не используется"
+        )
 
     movement = MovementCreate(
         movement_type=MovementType.SHIP,
@@ -118,7 +135,17 @@ async def _process_shipment_group(
         reason=f"Списание из ФБС зоны. Сборочные задания: {all_assembly_tasks}",
     )
     created = await movement_service.create_movement_in_transaction(conn, [movement])
-    return created[0].movement_id
+    movement_id = created[0].movement_id
+    updated_item_ids = set(
+        await shipment_repo.mark_items_success_in_transaction(
+            conn, item_ids=item_ids, movement_id=movement_id, retry_count=retry_count
+        )
+    )
+    if updated_item_ids != set(item_ids):
+        raise FbsShipmentItemsUpdateError(
+            f"Не удалось обновить все FBS items: expected={sorted(item_ids)}, updated={sorted(updated_item_ids)}"
+        )
+    return movement_id
 
 
 def _group_items(
@@ -134,10 +161,12 @@ def _group_items(
             grouped[item.product_id] = item.model_copy(deep=True)
         else:
             acc = grouped[item.product_id]
-            grouped[item.product_id] = acc.model_copy(update={
-                "quantity": acc.quantity + item.quantity,
-                "assembly_tasks": acc.assembly_tasks + item.assembly_tasks,
-            })
+            grouped[item.product_id] = acc.model_copy(
+                update={
+                    "quantity": acc.quantity + item.quantity,
+                    "assembly_tasks": acc.assembly_tasks + item.assembly_tasks,
+                }
+            )
     return list(grouped.values())
 
 
@@ -151,6 +180,7 @@ async def handle_write_off_fbs(
     pool: Pool,
     raw_message: Optional[dict] = None,
     shipment_id: Optional[int] = None,
+    source: FbsShipmentSource = FbsShipmentSource.STANDARD,
 ) -> int:
     """
     Обрабатывает список объектов списания из ФБС зоны.
@@ -190,6 +220,7 @@ async def handle_write_off_fbs(
                     conn,
                     raw_message=raw_message if raw_message is not None else [],
                     total_items=len(items),
+                    source=source.value,
                 )
             item_ids = await shipment_repo.create_shipment_items(
                 conn,
@@ -219,21 +250,14 @@ async def handle_write_off_fbs(
                         all_assembly_tasks=group.assembly_tasks,
                         author=group.author,
                         movement_service=movement_service,
+                        shipment_repo=shipment_repo,
+                        item_ids=related_item_ids,
                     )
 
             logger.info(
                 f"Списание выполнено | product_id={group.product_id} | "
                 f"qty={group.quantity} | movement_id={movement_id}"
             )
-
-            async with pool.acquire() as conn:
-                for item_id in related_item_ids:
-                    await shipment_repo.update_item_status(
-                        conn,
-                        item_id=item_id,
-                        status="success",
-                        movement_id=movement_id,
-                    )
 
         except asyncpg.exceptions.CheckViolationError as e:
             retry_count = 0  # первая попытка

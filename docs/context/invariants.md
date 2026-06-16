@@ -65,3 +65,10 @@
 - Все входящие события резервов должны попадать в `wms.stock_reservation_events`, включая `unknown_status`, `product_not_found` и `invalid_payload`.
 - Бизнес-ошибки резервов ACK-аются после успешной записи audit.
 - Ошибки БД/транзакции при обработке резервов должны приводить к retry/NACK со стороны RabbitMQ consumer.
+
+## External FBS invariants
+
+- `fbs_shipments.source` принимает только `standard` и `external_detected`.
+- Успешно обработанный FBS item обязан иметь `movement_id`.
+- Все items одной успешно обработанной product group получают один `movement_id`.
+- `assembly_task.is_shipped` и movement атомарны; повторное списание assembly task запрещено.

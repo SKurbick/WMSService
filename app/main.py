@@ -11,7 +11,11 @@ from app.infrastructure.database.connection import get_db_pool, close_db_pool
 from app.api.v1.router import api_router
 from app.middleware.error_handler import add_exception_handlers
 from app.middleware.logging import add_logging_middleware
-from app.consumer import start_consumer, start_stock_reservation_consumer
+from app.consumer import (
+    start_consumer,
+    start_external_fbs_consumer,
+    start_stock_reservation_consumer,
+)
 from app.retry_worker import start_retry_worker
 
 # Настройка логирования
@@ -31,14 +35,21 @@ async def lifespan(app: FastAPI):
     logger.info("✅ База данных подключена")
 
     consumer_task = None
+    external_fbs_consumer_task = None
     reservation_consumer_task = None
     retry_task = None
 
     if settings.CONSUMER_ENABLED:
         consumer_task = asyncio.create_task(start_consumer())
         logger.info("✅ FBS RabbitMQ consumer запущен")
+
+    if settings.EXTERNAL_FBS_CONSUMER_ENABLED:
+        external_fbs_consumer_task = asyncio.create_task(start_external_fbs_consumer())
+        logger.info("External FBS RabbitMQ consumer запущен")
+
+    if settings.CONSUMER_ENABLED or settings.EXTERNAL_FBS_CONSUMER_ENABLED:
         retry_task = asyncio.create_task(start_retry_worker())
-        logger.info("✅ Retry worker запущен")
+        logger.info("Retry worker запущен")
 
     if settings.RESERVATION_CONSUMER_ENABLED:
         reservation_consumer_task = asyncio.create_task(start_stock_reservation_consumer())
@@ -51,6 +62,12 @@ async def lifespan(app: FastAPI):
         consumer_task.cancel()
         try:
             await consumer_task
+        except asyncio.CancelledError:
+            pass
+    if external_fbs_consumer_task:
+        external_fbs_consumer_task.cancel()
+        try:
+            await external_fbs_consumer_task
         except asyncio.CancelledError:
             pass
     if reservation_consumer_task:
@@ -127,7 +144,7 @@ app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 async def health_check():
     """
     Проверка здоровья сервиса
-    
+
     Возвращает статус работоспособности API.
     """
     return {
@@ -141,7 +158,7 @@ async def health_check():
 async def root():
     """
     Корневой endpoint
-    
+
     Информация о сервисе и ссылки на документацию.
     """
     return {

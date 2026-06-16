@@ -32,20 +32,20 @@ class Settings(BaseSettings):
     # RabbitMQ
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
     RABBITMQ_QUEUE: str = "wms.fbs.write_off"
+    EXTERNAL_FBS_QUEUE: str = "wms.fbs.external_write_off"
     STOCK_RESERVATION_QUEUE: str = "wms.stock.reservations"
     RABBITMQ_EXCHANGE: str = "orders"
     CONSUMER_ENABLED: bool = True
+    EXTERNAL_FBS_CONSUMER_ENABLED: bool = False
     RESERVATION_CONSUMER_ENABLED: bool = True
+    FBS_VALIDATE_ASSEMBLY_TASKS: bool = True
 
     # Локации
     FBS_LOCATION_CODE: str = "PUSHKINO-ФБС"
 
     # Настройки Pydantic v2
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=True,
-        extra="ignore"
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore"
     )
 
     @property

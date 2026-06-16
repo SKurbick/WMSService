@@ -82,3 +82,12 @@
 - `GET /api/inventory/availability/totals` считает `shortage_qty` как `SUM(shortage_qty)` по строкам availability, а не как `GREATEST(SUM(reserved_qty) - SUM(physical_qty), 0)`.
 - `GET /api/inventory/location/{location_id}/availability` считает physical quantity внутри subtree локации через `wms.locations.path <@ parent.path`, а reserved quantity берет глобально по `product_id`.
 - Для location availability: `free_qty = physical_qty_in_location_subtree - reserved_qty_global`, `shortage_qty = GREATEST(reserved_qty_global - physical_qty_in_location_subtree, 0)`.
+
+## External FBS write-off
+
+- Standard и external-detected FBS используют одну бизнес-логику и одну FBS location.
+- `fbs_shipments.source` задается consumer-ом, а не определяется из payload.
+- Movement создается только если атомарно захвачены все уникальные assembly tasks группы через `UPDATE ... RETURNING`. Дубли assembly tasks запрещены.
+- `assembly_task.is_shipped`, movement, inventory trigger и success/movement_id всех items группы атомарны.
+- Повторное списание уже отгруженной assembly task запрещено.
+- Если `settings.FBS_VALIDATE_ASSEMBLY_TASKS = False`, FBS flow не читает и не обновляет `public.assembly_task`; это тестовый режим для контуров без таблицы/данных СЗ. Pydantic-контракт payload сохраняется: `assembly_tasks` обязательны и `quantity == len(assembly_tasks)`.

@@ -2,14 +2,14 @@
 
 import json
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from asyncpg import Connection
 
 
 CREATE_SHIPMENT = """
-INSERT INTO wms.fbs_shipments (raw_message, total_items, status)
-VALUES ($1::jsonb, $2, $3)
+INSERT INTO wms.fbs_shipments (raw_message, total_items, status, source)
+VALUES ($1::jsonb, $2, $3, $4)
 RETURNING shipment_id
 """
 
@@ -33,14 +33,32 @@ SET
 WHERE item_id = $1
 """
 
+
+MARK_ITEMS_SUCCESS = """
+UPDATE wms.fbs_shipment_items
+SET status = 'success', movement_id = $1, error_message = NULL,
+    next_retry_at = NULL, retry_count = COALESCE($3, retry_count), updated_at = now()
+WHERE item_id = ANY($2::bigint[])
+RETURNING item_id
+"""
+
+GET_ITEM_BY_ID = """
+SELECT item_id, shipment_id, product_id, quantity, author, supply_id, account,
+       assembly_tasks, warehouse_id, delivery_type, wb_warehouse, shipment_date,
+       status, error_message, retry_count, max_retries, next_retry_at, movement_id,
+       created_at, updated_at
+FROM wms.fbs_shipment_items WHERE item_id = $1
+"""
+
 GET_SHIPMENTS = """
-SELECT shipment_id, received_at, total_items, status, error_message, completed_at
+SELECT shipment_id, received_at, total_items, status, source, error_message, completed_at
 FROM wms.fbs_shipments
 WHERE ($1::text IS NULL OR status = $1)
   AND ($2::timestamptz IS NULL OR received_at >= $2)
   AND ($3::timestamptz IS NULL OR received_at <= $3)
+  AND ($4::text IS NULL OR source = $4)
 ORDER BY received_at DESC
-LIMIT $4 OFFSET $5
+LIMIT $5 OFFSET $6
 """
 
 COUNT_SHIPMENTS = """
@@ -49,10 +67,11 @@ FROM wms.fbs_shipments
 WHERE ($1::text IS NULL OR status = $1)
   AND ($2::timestamptz IS NULL OR received_at >= $2)
   AND ($3::timestamptz IS NULL OR received_at <= $3)
+  AND ($4::text IS NULL OR source = $4)
 """
 
 GET_SHIPMENT_BY_ID = """
-SELECT shipment_id, received_at, raw_message, total_items, status, error_message, completed_at
+SELECT shipment_id, received_at, raw_message, total_items, status, source, error_message, completed_at
 FROM wms.fbs_shipments
 WHERE shipment_id = $1
 """
@@ -68,6 +87,7 @@ ORDER BY item_id
 GET_SHIPMENTS_STATS = """
 SELECT status, count(*)::int AS count
 FROM wms.fbs_shipments
+WHERE ($1::text IS NULL OR source = $1)
 GROUP BY status
 """
 
@@ -76,6 +96,12 @@ SELECT shipment_id, raw_message
 FROM wms.fbs_shipments
 WHERE status = $1
 ORDER BY shipment_id
+"""
+
+UPDATE_SHIPMENT_VALIDATION_FAILED = """
+UPDATE wms.fbs_shipments
+SET status = 'validation_failed', error_message = $2
+WHERE shipment_id = $1
 """
 
 UPDATE_SHIPMENT_ERROR = """
@@ -137,6 +163,7 @@ class FbsShipmentRepository:
         raw_message: dict,
         total_items: int,
         status: str = "processing",
+        source: str = "standard",
     ) -> int:
         """INSERT в fbs_shipments. Возвращает shipment_id."""
         row = await conn.fetchrow(
@@ -144,6 +171,7 @@ class FbsShipmentRepository:
             json.dumps(raw_message, ensure_ascii=False),
             total_items,
             status,
+            source,
         )
         return row["shipment_id"]
 
@@ -194,6 +222,20 @@ class FbsShipmentRepository:
             next_retry_at,
         )
 
+    async def mark_items_success_in_transaction(
+        self,
+        conn: Connection,
+        *,
+        item_ids: Sequence[int],
+        movement_id: int,
+        retry_count: Optional[int] = None,
+    ) -> List[int]:
+        rows = await conn.fetch(MARK_ITEMS_SUCCESS, movement_id, list(item_ids), retry_count)
+        return [row["item_id"] for row in rows]
+
+    async def get_item_by_id(self, conn: Connection, item_id: int):
+        return await conn.fetchrow(GET_ITEM_BY_ID, item_id)
+
     async def update_shipment_status(
         self,
         conn: Connection,
@@ -216,10 +258,11 @@ class FbsShipmentRepository:
         offset: int = 0,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
+        source: Optional[str] = None,
     ) -> tuple:
         """Список shipments с фильтрацией. Возвращает (записи, total_count)."""
-        rows = await conn.fetch(GET_SHIPMENTS, status, date_from, date_to, limit, offset)
-        total = await conn.fetchval(COUNT_SHIPMENTS, status, date_from, date_to)
+        rows = await conn.fetch(GET_SHIPMENTS, status, date_from, date_to, source, limit, offset)
+        total = await conn.fetchval(COUNT_SHIPMENTS, status, date_from, date_to, source)
         return rows, total
 
     async def get_shipment_by_id(self, conn: Connection, shipment_id: int):
@@ -230,13 +273,18 @@ class FbsShipmentRepository:
         """Все items конкретного shipment."""
         return await conn.fetch(GET_ITEMS_BY_SHIPMENT_ID, shipment_id)
 
-    async def get_shipments_stats(self, conn: Connection) -> list:
+    async def get_shipments_stats(self, conn: Connection, source: Optional[str] = None) -> list:
         """GROUP BY status — один запрос."""
-        return await conn.fetch(GET_SHIPMENTS_STATS)
+        return await conn.fetch(GET_SHIPMENTS_STATS, source)
 
     async def get_shipments_by_status(self, conn: Connection, status: str) -> list:
         """Все shipments с указанным статусом (shipment_id + raw_message)."""
         return await conn.fetch(GET_SHIPMENTS_BY_STATUS, status)
+
+    async def mark_validation_failed(
+        self, conn: Connection, shipment_id: int, error_message: str
+    ) -> None:
+        await conn.execute(UPDATE_SHIPMENT_VALIDATION_FAILED, shipment_id, error_message)
 
     async def update_shipment_error(
         self,
@@ -249,7 +297,8 @@ class FbsShipmentRepository:
 
     async def get_pending_retry_items(self, conn: Connection) -> list:
         """Возвращает все items со статусом pending_retry у которых next_retry_at <= now()."""
-        return await conn.fetch("""
+        return await conn.fetch(
+            """
             SELECT item_id, shipment_id, product_id, quantity, author,
                    supply_id, account, assembly_tasks, warehouse_id,
                    delivery_type, wb_warehouse, shipment_date,
@@ -258,4 +307,5 @@ class FbsShipmentRepository:
             WHERE status = 'pending_retry'
               AND next_retry_at <= now()
             ORDER BY next_retry_at ASC
-        """)
+        """
+        )

@@ -74,3 +74,10 @@ RabbitMQ обработка разделена по очередям:
 - stock reservation consumer запускается через `settings.RESERVATION_CONSUMER_ENABLED` и слушает `settings.STOCK_RESERVATION_QUEUE`;
 - пустая очередь резервов не создает записей в БД: consumer просто ожидает новое сообщение от RabbitMQ;
 - ошибки БД при обработке резервов логируются с `exc_info=True` и приводят к `nack(requeue=True)`, чтобы отсутствие таблиц/view резервов не маскировалось.
+
+## External FBS write-off MVP (2026-06-14)
+
+- Добавлен независимый consumer очереди `EXTERNAL_FBS_QUEUE` (`wms.fbs.external_write_off` по умолчанию), управляемый `EXTERNAL_FBS_CONSUMER_ENABLED`.
+- Standard и external-detected сообщения используют общий `consume_fbs_queue` и `handle_write_off_fbs`.
+- Источник хранится в `wms.fbs_shipments.source`: `standard` или `external_detected`.
+- Добавлен ручной retry позиции: `POST /api/fbs-shipments/items/{item_id}/retry`.

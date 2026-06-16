@@ -95,3 +95,9 @@ Retry worker:
 - `start_stock_reservation_consumer()` для мягких резервов, если `settings.RESERVATION_CONSUMER_ENABLED = True`; очередь - `settings.STOCK_RESERVATION_QUEUE`.
 
 Reservation consumer использует `passive=True`, поэтому ожидает заранее созданную очередь и не пересоздает её. Если сообщений нет, цикл `async for message in queue` ждет новые сообщения и не обращается к БД.
+
+## External FBS pipeline (2026-06-14)
+
+Два consumer adapter (`start_consumer`, `start_external_fbs_consumer`) передают одинаковый payload в общий FBS processing flow. Источник задается consumer-ом и хранится на shipment.
+
+Транзакция одной product group теперь включает `assembly_task.is_shipped`, movement, inventory trigger и атомарный update всех связанных items в `success` с одним `movement_id`. Пересчет общего shipment status остается отдельным запросом после обработки групп.

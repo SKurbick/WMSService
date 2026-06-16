@@ -109,3 +109,7 @@ Snapshot поступлений из 1С: `receipt_item_id`, `guid`, `product_id
 Назначение: read-only view доступности товара с учетом физического available остатка и активного мягкого резерва.
 
 Ожидаемые поля: `product_id`, `physical_qty`, `reserved_qty`, `free_qty`, `shortage_qty`. `free_qty` может быть отрицательным.
+
+## FBS source (2026-06-14)
+
+`wms.fbs_shipments.source varchar(30) NOT NULL DEFAULT standard` различает standard и external-detected потоки. Constraint разрешает только `standard/external_detected`; добавлены индексы `(source, received_at DESC)` и `(source, status)`.

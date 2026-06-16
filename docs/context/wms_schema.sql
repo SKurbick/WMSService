@@ -976,8 +976,10 @@ CREATE TABLE wms.fbs_shipments (
     raw_message jsonb NOT NULL,
     total_items integer NOT NULL,
     status character varying(30) DEFAULT 'processing'::character varying NOT NULL,
+    source character varying(30) DEFAULT 'standard'::character varying NOT NULL,
     error_message text,
     completed_at timestamp with time zone,
+    CONSTRAINT chk_fbs_shipments_source CHECK (((source)::text = ANY ((ARRAY['standard'::character varying, 'external_detected'::character varying])::text[]))),
     CONSTRAINT chk_fbs_shipments_status CHECK (((status)::text = ANY ((ARRAY['processing'::character varying, 'completed'::character varying, 'partially_completed'::character varying, 'failed'::character varying, 'validation_failed'::character varying])::text[])))
 );
 
@@ -2450,6 +2452,11 @@ CREATE INDEX idx_fbs_shipment_items_shipment_id ON wms.fbs_shipment_items USING 
 --
 
 CREATE INDEX idx_fbs_shipment_items_status ON wms.fbs_shipment_items USING btree (status);
+
+
+CREATE INDEX idx_fbs_shipments_source_received_at ON wms.fbs_shipments USING btree (source, received_at DESC);
+
+CREATE INDEX idx_fbs_shipments_source_status ON wms.fbs_shipments USING btree (source, status);
 
 
 --

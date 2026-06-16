@@ -85,6 +85,21 @@ class MovementNotFoundError(DomainException):
     pass
 
 
+# === FBS ===
+
+
+class AssemblyTasksAlreadyProcessedError(DomainException):
+    """Не все сборочные задания удалось атомарно захватить для списания"""
+
+    pass
+
+
+class FbsShipmentItemsUpdateError(DomainException):
+    """Не все FBS-позиции группы удалось атомарно отметить успешными"""
+
+    pass
+
+
 # === Products ===
 
 

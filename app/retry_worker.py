@@ -50,10 +50,7 @@ async def process_pending_retries(pool) -> None:
         by_shipment[row["shipment_id"]][row["product_id"]].append(row)
 
     for shipment_id, by_product in by_shipment.items():
-        logger.info(
-            f"Retry | shipment_id={shipment_id} | "
-            f"групп product_id={len(by_product)}"
-        )
+        logger.info(f"Retry | shipment_id={shipment_id} | " f"групп product_id={len(by_product)}")
 
         for product_id, group_rows in by_product.items():
             # Берём данные из первой записи группы
@@ -82,22 +79,15 @@ async def process_pending_retries(pool) -> None:
                             all_assembly_tasks=all_assembly_tasks,
                             author=first["author"],
                             movement_service=movement_service,
+                            shipment_repo=shipment_repo,
+                            item_ids=item_ids,
+                            retry_count=new_retry_count,
                         )
 
                 logger.info(
                     f"Retry успех | shipment_id={shipment_id} | product_id={product_id} | "
                     f"movement_id={movement_id} | попытка={new_retry_count}"
                 )
-
-                async with pool.acquire() as conn:
-                    for item_id in item_ids:
-                        await shipment_repo.update_item_status(
-                            conn,
-                            item_id=item_id,
-                            status="success",
-                            movement_id=movement_id,
-                            retry_count=new_retry_count,
-                        )
 
             except asyncpg.exceptions.CheckViolationError as e:
                 if new_retry_count >= max_retries:

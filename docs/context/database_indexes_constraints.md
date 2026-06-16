@@ -61,3 +61,9 @@ Parent indexes: `created_at`, `product_id`, `(product_id, created_at)`, `from_lo
 Containers: QR, location, parent, status partial `status <> 'empty'`, type. Contents: container, product, batch, active status partial.
 
 Notifications: `(user_id, is_read)`, `created_at DESC`, `notification_type`. Snapshots: `(snapshot_date, product_id)`, product, location. Receipts: guid, product, supplier partial. Materialized stock: unique `mv_product_stock(product_id)` for concurrent refresh.
+
+## FBS source (2026-06-14)
+
+- `chk_fbs_shipments_source`: `source IN (standard, external_detected)`.
+- `idx_fbs_shipments_source_received_at(source, received_at DESC)`.
+- `idx_fbs_shipments_source_status(source, status)`.

@@ -118,3 +118,10 @@
 - `GET /api/fbs-shipments/{shipment_id}` - детали записи с raw message и items.
 - `POST /api/fbs-shipments/retry` - массовая переобработка validation_failed.
 - `POST /api/fbs-shipments/{shipment_id}/retry` - переобработка одной записи.
+
+## FBS source и item retry (2026-06-14)
+
+- `GET /api/fbs-shipments?source=standard|external_detected` - фильтр истории по источнику.
+- `GET /api/fbs-shipments/stats?source=standard|external_detected` - статистика по источнику.
+- `GET /api/fbs-shipments/{shipment_id}` - возвращает `source`.
+- `POST /api/fbs-shipments/items/{item_id}/retry` - ручной retry `failed/pending_retry/retry_exhausted` позиции.
