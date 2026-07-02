@@ -4,6 +4,18 @@ from typing import List, Optional
 from datetime import date
 from asyncpg import Pool, Record
 from app.infrastructure.database.queries import system as queries
+from app.core.exceptions import NegativeCalculatedInventoryError
+
+
+def _format_negative_inventory_rows(rows: List[Record]) -> str:
+    details = []
+    for row in rows:
+        details.append(
+            "product_id={product_id}, location_id={location_id}, "
+            "batch_number={batch_number}, container_code={container_code}, "
+            "calculated_quantity={calculated_quantity}".format(**dict(row))
+        )
+    return "; ".join(details)
 
 
 class SystemRepository:
@@ -33,21 +45,26 @@ class SystemRepository:
         Пересчитать остатки из movements
 
         Выполняет транзакцию:
-        1. Удаляет записи из inventory
-        2. Пересчитывает из movements
-        3. Возвращает статистику
+        1. Проверяет, что пересчет available из movements не дает отрицательных остатков
+        2. Удаляет только available записи inventory
+        3. Пересчитывает available остатки из movements
+        4. Возвращает статистику available остатков
         """
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                # Шаг 1: Очистка
-                await conn.execute(queries.DELETE_INVENTORY, product_id)
-
-                # Шаг 2: Пересчёт
-                await conn.execute(
-                    queries.RECALCULATE_INVENTORY, product_id, from_date
+                negative_rows = await conn.fetch(
+                    queries.CHECK_NEGATIVE_CALCULATED_INVENTORY, product_id
                 )
+                if negative_rows:
+                    details = _format_negative_inventory_rows(negative_rows)
+                    raise NegativeCalculatedInventoryError(
+                        "Пересчет inventory из movements дал отрицательный available-остаток: "
+                        f"{details}"
+                    )
 
-                # Шаг 3: Статистика
+                await conn.execute(queries.DELETE_AVAILABLE_INVENTORY, product_id)
+                await conn.execute(queries.RECALCULATE_INVENTORY, product_id)
+
                 result = await conn.fetchrow(queries.GET_INVENTORY_STATS, product_id)
                 return result
 

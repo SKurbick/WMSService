@@ -72,3 +72,26 @@
 - При `FBS_VALIDATE_ASSEMBLY_TASKS=False` не обращаться к `public.assembly_task` в общем FBS pipeline, включая standard, external-detected и retry/manual reprocessing flows.
 - Не ослаблять Pydantic-контракт Rabbit payload: `assembly_tasks` остаются обязательными, `quantity` должен равняться их количеству.
 - Миграция не нужна, потому что меняется только runtime-настройка Python-кода.
+
+## 2026-07-01 - validate-integrity считает нетто-остаток по movements
+
+Исправлена логика сверки `POST /api/system/validate-integrity`: расчетная сторона должна строиться как ledger из `wms.movements`, где `to_location_id` дает `+quantity`, а `from_location_id` дает `-quantity`.
+
+Решения:
+
+- Сверять только `wms.inventory.status = 'available'` с нетто-остатком по ключу `(product_id, location_id, status, batch_number, container_code)`; `damaged` и `quarantine` не входят в movement-ledger сверку.
+- Использовать `FULL OUTER JOIN`, чтобы видеть строки только в movements и строки только в inventory.
+- Сравнивать nullable `batch_number` и `container_code` через `IS NOT DISTINCT FROM`.
+- Не менять `POST /api/system/recalculate-inventory` в рамках этого исправления: текущий SQL пересчета использует старый `COALESCE(to_location_id, from_location_id)` подход и требует отдельной безопасной правки перед использованием как maintenance operation.
+
+## 2026-07-01 - recalculate-inventory пересобирает только available по net ledger
+
+Исправлена логика `POST /api/system/recalculate-inventory`: maintenance-пересчет пересобирает только `status='available'` из `wms.movements` по той же ledger-модели, что и live trigger `wms.update_inventory_from_movement()`.
+
+Решения:
+
+- `from_date` временно запрещен, потому что частичный пересчет может удалить inventory шире, чем восстановить movements после даты.
+- Перед удалением available inventory выполняется диагностика calculated net остатков; отрицательные значения останавливают транзакцию с диагностикой ключа остатка.
+- Удаляются только строки `wms.inventory.status = 'available'`; `damaged` и `quarantine` не трогаются.
+- Вставляются только calculated available rows с `quantity > 0.0001`; нулевые остатки не материализуются.
+- Ключ пересчета: `(product_id, location_id, status, batch_number, container_code)` без нормализации nullable полей в пустую строку.

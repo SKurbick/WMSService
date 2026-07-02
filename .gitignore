@@ -9,3 +9,4 @@ docs/tasks/
 add_excel_data.py
 dev_insert_stock_reservation_test_data.py
 FBS_WRITE_OFF_AUDIT.md
+docs/context/saga_fbo_wms_analysis.md

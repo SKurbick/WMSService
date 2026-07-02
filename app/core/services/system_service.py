@@ -12,6 +12,7 @@ from app.core.schemas.system import (
     AuditSummaryResponse,
 )
 from app.infrastructure.database.repositories.system_repository import SystemRepository
+from app.core.exceptions import RecalculateInventoryFromDateNotAllowedError
 
 
 class SystemService:
@@ -50,9 +51,14 @@ class SystemService:
 
         Используйте для исправления расхождений или после восстановления БД.
         """
+        if data.from_date is not None:
+            raise RecalculateInventoryFromDateNotAllowedError(
+                "Частичный пересчет inventory по from_date временно запрещен: "
+                "для безопасного MVP разрешен только полный пересчет available-остатков."
+            )
+
         result = await self.system_repo.recalculate_inventory(
             product_id=data.product_id,
-            from_date=data.from_date,
         )
         return RecalculateInventoryResponse.model_validate(dict(result))
 

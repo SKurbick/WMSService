@@ -142,6 +142,21 @@ class TaskItemNotFoundError(DomainException):
     pass
 
 
+# === System ===
+
+
+class RecalculateInventoryFromDateNotAllowedError(DomainException):
+    """Частичный пересчет inventory по from_date временно запрещен"""
+
+    pass
+
+
+class NegativeCalculatedInventoryError(DomainException):
+    """Пересчет inventory из movements дал отрицательный остаток"""
+
+    pass
+
+
 # === Notifications ===
 
 

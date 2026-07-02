@@ -257,3 +257,181 @@ async def test_consumer_creates_shipment_with_adapter_source(monkeypatch, source
 
     assert recording_repo.sources == [source.value]
     assert message.acked is True
+
+
+def _valid_fbs_raw_item(product_id="SKU-1"):
+    return {
+        "author": "producer",
+        "supply_id": "SUP-1",
+        "product_id": product_id,
+        "warehouse_id": 1,
+        "delivery_type": "fbs",
+        "account": "a",
+        "quantity": 1,
+        "assembly_tasks": ["10"],
+    }
+
+
+
+def test_retry_raw_message_parser_accepts_list_of_dicts():
+    raw = [_valid_fbs_raw_item()]
+
+    parsed = endpoint._parse_retry_raw_message(raw)
+
+    assert parsed == raw
+
+
+def test_retry_raw_message_parser_accepts_json_string():
+    raw = [_valid_fbs_raw_item()]
+
+    parsed = endpoint._parse_retry_raw_message(json.dumps(raw))
+
+    assert parsed == raw
+
+
+def test_retry_raw_message_parser_accepts_double_encoded_json_string():
+    raw = [_valid_fbs_raw_item()]
+
+    parsed = endpoint._parse_retry_raw_message(json.dumps(json.dumps(raw)))
+
+    assert parsed == raw
+
+
+def test_retry_raw_message_parser_rejects_invalid_string():
+    with pytest.raises(ValueError, match="raw_message должен быть JSON array"):
+        endpoint._parse_retry_raw_message("not json")
+
+
+def test_retry_raw_message_parser_rejects_array_of_strings():
+    with pytest.raises(ValueError, match="raw_message elements must be objects"):
+        endpoint._parse_retry_raw_message(json.dumps(["not-object"]))
+
+
+
+class FakeEndpointAcquire:
+    async def __aenter__(self):
+        return object()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class FakeEndpointPool:
+    def acquire(self):
+        return FakeEndpointAcquire()
+
+
+class FakeRetryShipmentRepository:
+    def __init__(self, raw_message):
+        self.raw_message = raw_message
+        self.errors = []
+        self.get_calls = 0
+
+    async def get_shipment_by_id(self, conn, shipment_id):
+        self.get_calls += 1
+        if self.get_calls == 1:
+            return {
+                "shipment_id": shipment_id,
+                "raw_message": self.raw_message,
+                "status": "validation_failed",
+            }
+        return {"shipment_id": shipment_id, "status": "completed"}
+
+    async def update_shipment_error(self, conn, shipment_id, error_message):
+        self.errors.append((shipment_id, error_message))
+
+
+
+@pytest.mark.asyncio
+async def test_single_retry_parses_json_string_and_calls_handle_with_parsed_raw(monkeypatch):
+    raw = [_valid_fbs_raw_item()]
+    repo = FakeRetryShipmentRepository(json.dumps(raw))
+    calls = []
+
+    async def fake_handle(items, pool, raw_message, shipment_id):
+        calls.append(
+            {
+                "items": items,
+                "pool": pool,
+                "raw_message": raw_message,
+                "shipment_id": shipment_id,
+            }
+        )
+        return shipment_id
+
+    monkeypatch.setattr(endpoint, "FbsShipmentRepository", lambda: repo)
+    monkeypatch.setattr(endpoint, "handle_write_off_fbs", fake_handle)
+
+    result = await endpoint.retry_shipment(23023, pool=FakeEndpointPool())
+
+    assert result.shipment_id == 23023
+    assert result.status == "completed"
+    assert repo.errors == []
+    assert len(calls) == 1
+    assert calls[0]["shipment_id"] == 23023
+    assert calls[0]["raw_message"] == raw
+    assert calls[0]["items"][0].product_id == "SKU-1"
+
+
+@pytest.mark.asyncio
+async def test_single_retry_parse_error_does_not_call_handle(monkeypatch):
+    repo = FakeRetryShipmentRepository(json.dumps(["not-object"]))
+    calls = []
+
+    async def fake_handle(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("handle_write_off_fbs should not be called")
+
+    monkeypatch.setattr(endpoint, "FbsShipmentRepository", lambda: repo)
+    monkeypatch.setattr(endpoint, "handle_write_off_fbs", fake_handle)
+
+    result = await endpoint.retry_shipment(23023, pool=FakeEndpointPool())
+
+    assert result.shipment_id == 23023
+    assert result.status == "validation_failed"
+    assert "raw_message elements must be objects" in result.error
+    assert repo.errors == [(23023, result.error)]
+    assert calls == []
+
+
+
+class FakeMassRetryShipmentRepository:
+    def __init__(self, raw_message):
+        self.raw_message = raw_message
+        self.errors = []
+
+    async def get_shipments_by_status(self, conn, status):
+        return [{"shipment_id": 23023, "raw_message": self.raw_message}]
+
+    async def get_shipment_by_id(self, conn, shipment_id):
+        return {"shipment_id": shipment_id, "status": "completed"}
+
+    async def update_shipment_error(self, conn, shipment_id, error_message):
+        self.errors.append((shipment_id, error_message))
+
+
+@pytest.mark.asyncio
+async def test_mass_retry_parses_json_string_and_calls_handle_with_parsed_raw(monkeypatch):
+    raw = [_valid_fbs_raw_item(product_id="SKU-2")]
+    repo = FakeMassRetryShipmentRepository(json.dumps(raw))
+    calls = []
+
+    async def fake_handle(items, pool, raw_message, shipment_id):
+        calls.append((items, raw_message, shipment_id))
+        return shipment_id
+
+    monkeypatch.setattr(endpoint, "FbsShipmentRepository", lambda: repo)
+    monkeypatch.setattr(endpoint, "handle_write_off_fbs", fake_handle)
+
+    result = await endpoint.retry_shipments(
+        body=endpoint.RetryRequest(shipment_ids=[23023]), pool=FakeEndpointPool()
+    )
+
+    assert result.total_requested == 1
+    assert result.processed == 1
+    assert result.results[0].status == "completed"
+    assert repo.errors == []
+    assert len(calls) == 1
+    assert calls[0][1] == raw
+    assert calls[0][0][0].product_id == "SKU-2"
+    assert calls[0][2] == 23023

@@ -1,8 +1,9 @@
 """API endpoints для журнала отгрузок ФБС"""
 
+import json
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from asyncpg import Pool
@@ -38,6 +39,32 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["FBS Shipments"])
 
 _VALID_STATUSES = {"processing", "completed", "partially_completed", "failed", "validation_failed"}
+
+
+def _parse_retry_raw_message(raw_message: Any) -> List[dict]:
+    """Normalize raw_message from asyncpg/jsonb into a list of object dicts."""
+    raw = raw_message
+    for _ in range(2):
+        if not isinstance(raw, str):
+            break
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"raw_message должен быть JSON array: invalid JSON ({e.msg})") from e
+
+    if not isinstance(raw, list):
+        raise ValueError("raw_message должен быть JSON array")
+
+    if not all(isinstance(item, dict) for item in raw):
+        raise ValueError("raw_message elements must be objects")
+
+    return raw
+
+
+def _parse_retry_items(raw_message: Any) -> tuple[List[dict], List[WriteOffAccordingToFBS]]:
+    parsed_raw = _parse_retry_raw_message(raw_message)
+    items = [WriteOffAccordingToFBS(**item) for item in parsed_raw]
+    return parsed_raw, items
 
 
 # ─────────────────────────────────────────────
@@ -300,7 +327,7 @@ async def retry_shipments(
         raw = row["raw_message"]
 
         try:
-            items: List[WriteOffAccordingToFBS] = [WriteOffAccordingToFBS(**i) for i in raw]
+            parsed_raw, items = _parse_retry_items(raw)
         except (ValidationError, Exception) as e:
             error_str = str(e)
             logger.warning(f"Повторная ошибка валидации | shipment_id={shipment_id} | {error_str}")
@@ -316,7 +343,9 @@ async def retry_shipments(
             continue
 
         try:
-            await handle_write_off_fbs(items, pool, raw_message=raw, shipment_id=shipment_id)
+            await handle_write_off_fbs(
+                items, pool, raw_message=parsed_raw, shipment_id=shipment_id
+            )
             processed += 1
             async with pool.acquire() as conn:
                 record = await repo.get_shipment_by_id(conn, shipment_id)
@@ -391,7 +420,7 @@ async def retry_shipment(
     raw = row["raw_message"]
 
     try:
-        items: List[WriteOffAccordingToFBS] = [WriteOffAccordingToFBS(**i) for i in raw]
+        parsed_raw, items = _parse_retry_items(raw)
     except (ValidationError, Exception) as e:
         error_str = str(e)
         async with pool.acquire() as conn:
@@ -403,7 +432,9 @@ async def retry_shipment(
         )
 
     try:
-        await handle_write_off_fbs(items, pool, raw_message=raw, shipment_id=shipment_id)
+        await handle_write_off_fbs(
+            items, pool, raw_message=parsed_raw, shipment_id=shipment_id
+        )
     except Exception as e:
         return RetryResultItem(
             shipment_id=shipment_id,

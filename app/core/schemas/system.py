@@ -1,6 +1,7 @@
 """Pydantic схемы для системных операций"""
 
 from typing import Optional
+from decimal import Decimal
 from pydantic import BaseModel, Field
 from datetime import date, datetime
 
@@ -9,14 +10,14 @@ class RecalculateInventoryRequest(BaseModel):
     """Запрос на пересчёт остатков"""
 
     product_id: Optional[str] = Field(None, description="ID товара (опционально, если None - все)")
-    from_date: Optional[date] = Field(None, description="Пересчитать с даты (опционально)")
+    from_date: Optional[date] = Field(None, description="Временно запрещено: разрешен только полный пересчет available")
 
 
 class RecalculateInventoryResponse(BaseModel):
     """Результат пересчёта остатков"""
 
     inventory_records: int = Field(..., description="Количество записей в inventory")
-    total_units: int = Field(..., description="Общее количество единиц")
+    total_units: Decimal = Field(..., description="Общее количество единиц")
     products_count: int = Field(..., description="Количество уникальных товаров")
 
     class Config:
@@ -58,11 +59,12 @@ class IntegrityCheckResult(BaseModel):
 
     product_id: str
     location_code: Optional[str] = None
+    status: Optional[str] = None
     batch_number: Optional[str] = None
     container_code: Optional[str] = None
-    from_movements: int = Field(..., description="Рассчитано из movements")
-    from_inventory: int = Field(..., description="Текущее в inventory")
-    difference: int = Field(..., description="Разница")
+    from_movements: Decimal = Field(..., description="Рассчитано из movements")
+    from_inventory: Decimal = Field(..., description="Текущее в inventory")
+    difference: Decimal = Field(..., description="Разница")
 
     class Config:
         from_attributes = True
