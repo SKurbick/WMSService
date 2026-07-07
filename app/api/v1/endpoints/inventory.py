@@ -30,6 +30,8 @@ router = APIRouter(prefix="/inventory", tags=["Остатки"])
 @router.get(
     "/availability",
     response_model=List[ProductAvailabilityResponse],
+    summary="Получить доступность товаров",
+    description="Возвращает физический остаток, мягкий резерв, свободный остаток и нехватку по товарам.",
 )
 async def list_product_availability(
     product_id: Optional[str] = Query(None, description="ID товара"),
@@ -52,6 +54,8 @@ async def list_product_availability(
 @router.get(
     "/availability/totals",
     response_model=ProductAvailabilityTotalsResponse,
+    summary="Получить итоги доступности",
+    description="Возвращает агрегированные totals по физическим остаткам, резервам и нехватке.",
 )
 async def get_availability_totals(
     service: StockReservationService = Depends(get_stock_reservation_service),
@@ -63,6 +67,8 @@ async def get_availability_totals(
 @router.get(
     "/product/{product_id}/availability",
     response_model=ProductAvailabilityResponse,
+    summary="Получить доступность товара",
+    description="Возвращает availability для одного product_id с учетом мягких резервов.",
 )
 async def get_product_availability(
     product_id: str = Path(..., description="ID товара"),
@@ -75,6 +81,8 @@ async def get_product_availability(
 @router.get(
     "/reservations",
     response_model=List[StockReservationOrderResponse],
+    summary="Получить мягкие резервы",
+    description="Возвращает текущее состояние мягких резервов товаров с фильтрами.",
 )
 async def list_reservations(
     product_id: Optional[str] = Query(None, description="ID товара"),
@@ -105,6 +113,8 @@ async def list_reservations(
 @router.get(
     "/reservation-events",
     response_model=List[StockReservationEventResponse],
+    summary="Получить события резервов",
+    description="Возвращает audit входящих событий мягких резервов и результатов их обработки.",
 )
 async def list_reservation_events(
     product_id: Optional[str] = Query(None, description="ID товара"),
@@ -132,7 +142,12 @@ async def list_reservation_events(
     )
 
 
-@router.get("/product/{product_id}", response_model=List[InventoryItemResponse])
+@router.get(
+    "/product/{product_id}",
+    response_model=List[InventoryItemResponse],
+    summary="Получить остатки товара",
+    description="Возвращает остатки product_id по локациям, партиям, контейнерам и статусам.",
+)
 async def get_inventory_by_product(
     product_id: str = Path(..., description="ID товара"),
     service: InventoryService = Depends(get_inventory_service),
@@ -152,7 +167,12 @@ async def get_inventory_by_product(
     return await service.get_inventory_by_product(product_id)
 
 
-@router.get("/location/{location_id}", response_model=List[InventoryInLocationResponse])
+@router.get(
+    "/location/{location_id}",
+    response_model=List[InventoryInLocationResponse],
+    summary="Получить остатки в локации",
+    description="Возвращает все остатки, лежащие непосредственно в указанной WMS-локации.",
+)
 async def get_inventory_by_location(
     location_id: int = Path(..., description="ID локации"),
     service: InventoryService = Depends(get_inventory_service),
@@ -174,6 +194,8 @@ async def get_inventory_by_location(
 @router.get(
     "/location/{location_id}/availability",
     response_model=List[ProductAvailabilityResponse],
+    summary="Получить доступность по subtree локации",
+    description="Считает physical quantity внутри subtree локации и сопоставляет с глобальными мягкими резервами.",
 )
 async def get_location_subtree_availability(
     location_id: int = Path(..., description="ID локации"),
@@ -186,6 +208,8 @@ async def get_location_subtree_availability(
 @router.get(
     "/location/{location_id}/recursive-summary",
     response_model=List[InventoryLocationSummaryResponse],
+    summary="Получить сводку остатков по subtree",
+    description="Возвращает агрегированные остатки по локации и всем дочерним адресам.",
 )
 async def get_location_recursive_summary(
     location_id: int = Path(..., description="ID локации"),
@@ -206,7 +230,12 @@ async def get_location_recursive_summary(
     return await service.get_location_recursive_summary(location_id)
 
 
-@router.get("/location/by-code/{location_code}", response_model=List[InventoryInLocationResponse])
+@router.get(
+    "/location/by-code/{location_code}",
+    response_model=List[InventoryInLocationResponse],
+    summary="Получить остатки в локации по коду",
+    description="Возвращает остатки WMS-локации, найденной по location_code.",
+)
 async def get_inventory_by_location_code(
     location_code: str = Path(..., description="Код локации"),
     service: InventoryService = Depends(get_inventory_service),
@@ -225,7 +254,12 @@ async def get_inventory_by_location_code(
     return await service.get_inventory_by_location_code(location_code)
 
 
-@router.get("/summary", response_model=List[InventorySummaryResponse])
+@router.get(
+    "/summary",
+    response_model=List[InventorySummaryResponse],
+    summary="Получить сводку остатков",
+    description="Возвращает агрегированные остатки по всем товарам через представление склада.",
+)
 async def get_inventory_summary(
     category: Optional[str] = Query(None, description="Фильтр по категории"),
     service: InventoryService = Depends(get_inventory_service),
@@ -245,7 +279,12 @@ async def get_inventory_summary(
     return await service.get_inventory_summary(category)
 
 
-@router.get("/container/{qr_code}", response_model=List[InventoryInContainerResponse])
+@router.get(
+    "/container/{qr_code}",
+    response_model=List[InventoryInContainerResponse],
+    summary="Получить остатки в контейнере",
+    description="Возвращает товары и партии, связанные с QR-кодом контейнера.",
+)
 async def get_inventory_in_container(
     qr_code: str = Path(..., description="QR-код контейнера"),
     service: InventoryService = Depends(get_inventory_service),
@@ -264,7 +303,12 @@ async def get_inventory_in_container(
     return await service.get_inventory_in_container(qr_code)
 
 
-@router.get("/location/{location_id}/loose", response_model=List[LooseInventoryResponse])
+@router.get(
+    "/location/{location_id}/loose",
+    response_model=List[LooseInventoryResponse],
+    summary="Получить россыпь в локации",
+    description="Возвращает только остатки без container_code в указанной WMS-локации.",
+)
 async def get_loose_inventory(
     location_id: int = Path(..., description="ID локации"),
     service: InventoryService = Depends(get_inventory_service),
@@ -283,7 +327,12 @@ async def get_loose_inventory(
     return await service.get_loose_inventory(location_id)
 
 
-@router.get("/search", response_model=List[InventorySearchResult])
+@router.get(
+    "/search",
+    response_model=List[InventorySearchResult],
+    summary="Найти остатки на складе",
+    description="Ищет остатки по product_id, названию товара, номеру партии или коду контейнера.",
+)
 async def search_inventory(
     query: str = Query(..., min_length=2, description="Поисковый запрос"),
     service: InventoryService = Depends(get_inventory_service),

@@ -40,7 +40,7 @@
 
 ## Миграции и тесты
 
-В репозитории не обнаружены миграции (`alembic`, `migrations`) и тесты. Карта БД составлена по SQL-запросам, схемам ответов и вызовам PostgreSQL-функций.
+В репозитории есть SQL-миграции в `scripts/migrations/` и pytest-тесты в `tests/`. Alembic не используется. Карта БД составлена по SQL-запросам, схемам ответов, миграциям и вызовам PostgreSQL-функций.
 
 ## Важное текущее состояние
 
@@ -81,3 +81,21 @@ RabbitMQ обработка разделена по очередям:
 - Standard и external-detected сообщения используют общий `consume_fbs_queue` и `handle_write_off_fbs`.
 - Источник хранится в `wms.fbs_shipments.source`: `standard` или `external_detected`.
 - Добавлен ручной retry позиции: `POST /api/fbs-shipments/items/{item_id}/retry`.
+
+## Kit operations MVP (2026-07-07)
+
+Добавлен HTTP flow комплектации и разукомплектации комплектов без вызовов 1С и без RabbitMQ. Состав комплекта читается из `public.products.kit_components`.
+
+Основные компоненты:
+
+- `POST /api/kit-operations` - атомарно создает запись операции, строки операции и movements;
+- `GET /api/kit-operations` и `GET /api/kit-operations/{operation_id}` - read endpoints журнала;
+- `GET/POST/PATCH /api/kit-operations/locations` - управление разрешёнными direct-локациями комплектации;
+- `wms.operation_locations` - список WMS-локаций, где разрешены kit operations;
+- `wms.kit_operations` и `wms.kit_operation_items` - журнал операций и строк;
+- `wms.movements.source_type/source_id/source_item_id` связывает movement с источником `kit_operation`;
+- `POST /api/kit-operations` требует активную `wms.operation_locations` строку с `operation_code='kit_operations'`, `scope='direct'`, `is_active=true`;
+- расходные остатки проверяются и блокируются через `SELECT ... FOR UPDATE`;
+- параллельные операции одного `kit_product_id + location_id` сериализуются advisory lock внутри transaction.
+
+MVP работает только с россыпью на выбранной direct-локации: `inventory.location_id = operation_locations.location_id`, `status='available'`, `batch_number IS NULL`, `container_code IS NULL`. Дочерние адреса не учитываются.

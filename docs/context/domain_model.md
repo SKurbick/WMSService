@@ -45,7 +45,10 @@
 
 - `id`;
 - `name`;
-- `category`.
+- `category`;
+- `is_active` - используется kit operations;
+- `is_kit` - признак комплекта для kit operations;
+- `kit_components` - JSON-состав комплекта для kit operations.
 
 `product_id` в WMS-таблицах соответствует `public.products.id`.
 
@@ -216,3 +219,19 @@
 Audit всех входящих событий резервов хранится в `wms.stock_reservation_events`, включая успешные события, повторные события, неизвестные статусы, неизвестные товары и невалидные payload.
 
 Доступность товара читается из `wms.v_product_availability` и включает `physical_qty`, `reserved_qty`, `free_qty`, `shortage_qty`.
+
+## Операции комплектов
+
+Разрешённые места выполнения операций хранятся в `wms.operation_locations`.
+
+`operation_locations`: `operation_location_id`, `operation_code`, `location_id`, `location_code`, `scope`, `is_active`, `author`, `metadata`, `created_at`, `updated_at`.
+
+Для комплектаций используется `operation_code='kit_operations'`, `scope='direct'`. Direct scope означает, что используются только остатки непосредственно на `location_id`; subtree дочерних адресов не включается.
+
+Операции комплектации/разукомплектации хранятся в `wms.kit_operations`, строки операции - в `wms.kit_operation_items`.
+
+`kit_operations`: `operation_id`, `operation_location_id`, `operation_type` (`assembly/disassembly`), `kit_product_id`, `quantity`, `location_id`, `location_code`, `author`, `status`, `created_at`, `completed_at`.
+
+`kit_operation_items`: `item_id`, `operation_id`, `role`, `product_id`, `quantity_per_kit`, `total_quantity`, `movement_id`, `movement_created_at`, `created_at`.
+
+Источник состава комплекта - `public.products.kit_components`. Для assembly компоненты списываются, комплект приходуется; для disassembly комплект списывается, компоненты приходуются. Остатки меняются только через `wms.movements` с `movement_type = kit_assembly/kit_disassembly` и `source_type = kit_operation`.

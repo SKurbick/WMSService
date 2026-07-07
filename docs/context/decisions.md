@@ -95,3 +95,29 @@
 - Удаляются только строки `wms.inventory.status = 'available'`; `damaged` и `quarantine` не трогаются.
 - Вставляются только calculated available rows с `quantity > 0.0001`; нулевые остатки не материализуются.
 - Ключ пересчета: `(product_id, location_id, status, batch_number, container_code)` без нормализации nullable полей в пустую строку.
+
+## 2026-07-07 - MVP операций комплектации и разукомплектации комплектов
+
+Добавлен отдельный HTTP flow `POST /api/kit-operations` и read endpoints для журнала операций комплектов.
+
+Решения:
+
+- Не вызывать 1С и не использовать RabbitMQ: операция выполняется полностью внутри WMS service.
+- Состав комплекта читать из `public.products.kit_components`; отдельную таблицу состава не вводить.
+- Остатки менять только через `INSERT INTO wms.movements`, без прямых изменений `wms.inventory`.
+- Добавить `wms.kit_operations` и `wms.kit_operation_items` для audit операции и связи строк с movements.
+- Расширить `wms.movements` полями `source_type/source_id/source_item_id` и разрешить `kit_assembly/kit_disassembly` в check constraint.
+- Для конкурентности использовать одну DB transaction, advisory lock по `kit_product_id + location_id`, и `SELECT ... FOR UPDATE` для расходной россыпи.
+- FK от `kit_operation_items.movement_id` к `wms.movements` не добавлять, пока у parent `wms.movements` нет PK/unique constraint.
+
+## 2026-07-07 - Разрешённые локации kit operations
+
+Рефакторинг kit operations перевел выбор места выполнения с произвольного `location_code` на явный allow-list `wms.operation_locations`.
+
+Решения:
+
+- `location_code` в `POST /api/kit-operations` сохранить, но требовать активную строку `wms.operation_locations` с `operation_code='kit_operations'`, `scope='direct'`, `is_active=true`.
+- Убрать требование `locations.level=5`: разрешённой локацией может быть зона или адрес другого уровня.
+- Для текущего MVP реализовать только `scope='direct'`: использовать `inventory.location_id = operation_locations.location_id`, без subtree дочерних адресов.
+- В `wms.kit_operations` сохранять `operation_location_id`, `location_id`, `location_code` как audit-связь с разрешённой локацией.
+- Добавить endpoints управления разрешёнными локациями под `/api/kit-operations/locations`.

@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     tasks,
     notifications,
     fbs_shipments,
+    kit_operations,
 )
 
 api_router = APIRouter()
@@ -25,3 +26,4 @@ api_router.include_router(system.router)
 api_router.include_router(tasks.router)
 api_router.include_router(notifications.router)
 api_router.include_router(fbs_shipments.router, prefix="/fbs-shipments")
+api_router.include_router(kit_operations.router)

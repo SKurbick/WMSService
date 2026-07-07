@@ -18,7 +18,12 @@ from app.api.v1.dependencies import get_system_service
 router = APIRouter(prefix="/system", tags=["Системные"])
 
 
-@router.post("/validate-integrity", response_model=List[IntegrityCheckResult])
+@router.post(
+    "/validate-integrity",
+    response_model=List[IntegrityCheckResult],
+    summary="Проверить целостность остатков",
+    description="Сравнивает текущие inventory с расчётом из wms.movements и возвращает расхождения.",
+)
 async def validate_integrity(
     service: SystemService = Depends(get_system_service),
 ):
@@ -34,7 +39,12 @@ async def validate_integrity(
     return await service.validate_integrity()
 
 
-@router.get("/audit-summary", response_model=AuditSummaryResponse)
+@router.get(
+    "/audit-summary",
+    response_model=AuditSummaryResponse,
+    summary="Получить сводку аудита данных",
+    description="Проверки известных рисков качества данных только на чтение через агрегированные SELECT-запросы.",
+)
 async def get_audit_summary(
     service: SystemService = Depends(get_system_service),
 ):
@@ -51,6 +61,8 @@ async def get_audit_summary(
     "/recalculate-inventory",
     response_model=RecalculateInventoryResponse,
     status_code=status.HTTP_200_OK,
+    summary="Пересчитать остатки из движений",
+    description="Сервисная операция: пересобирает available inventory из журнала wms.movements.",
 )
 async def recalculate_inventory(
     data: RecalculateInventoryRequest = RecalculateInventoryRequest(),
@@ -81,6 +93,8 @@ async def recalculate_inventory(
     "/create-snapshot",
     response_model=CreateSnapshotResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Создать снимок остатков",
+    description="Сохраняет текущее состояние inventory в таблицу снимков.",
 )
 async def create_snapshot(
     data: CreateSnapshotRequest = CreateSnapshotRequest(),
@@ -101,7 +115,12 @@ async def create_snapshot(
     return await service.create_snapshot(data)
 
 
-@router.post("/refresh-materialized-views", response_model=RefreshViewsResponse)
+@router.post(
+    "/refresh-materialized-views",
+    response_model=RefreshViewsResponse,
+    summary="Обновить материализованные представления",
+    description="Обновляет агрегированные materialized views, включая mv_product_stock.",
+)
 async def refresh_materialized_views(
     service: SystemService = Depends(get_system_service),
 ):

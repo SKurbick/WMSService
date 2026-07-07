@@ -17,6 +17,10 @@ from app.core.exceptions import (
     TaskPermissionDeniedError,
     TaskItemNotFoundError,
     NotificationNotFoundError,
+    ProductNotFoundError,
+    KitOperationNotFoundError,
+    KitOperationValidationError,
+    KitOperationConflictError,
 )
 import logging
 
@@ -130,6 +134,45 @@ def add_exception_handlers(app: FastAPI):
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={"detail": str(exc), "error_code": "NOTIFICATION_NOT_FOUND"},
+        )
+
+
+    @app.exception_handler(ProductNotFoundError)
+    async def product_not_found_handler(request: Request, exc: ProductNotFoundError):
+        logger.warning(f"Товар не найден: {exc}")
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": str(exc), "error_code": "PRODUCT_NOT_FOUND"},
+        )
+
+    @app.exception_handler(KitOperationNotFoundError)
+    async def kit_operation_not_found_handler(
+        request: Request, exc: KitOperationNotFoundError
+    ):
+        logger.warning(f"Операция комплекта не найдена: {exc}")
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": str(exc), "error_code": "KIT_OPERATION_NOT_FOUND"},
+        )
+
+    @app.exception_handler(KitOperationValidationError)
+    async def kit_operation_validation_handler(
+        request: Request, exc: KitOperationValidationError
+    ):
+        logger.warning(f"Некорректная операция комплекта: {exc}")
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc), "error_code": "KIT_OPERATION_VALIDATION_ERROR"},
+        )
+
+    @app.exception_handler(KitOperationConflictError)
+    async def kit_operation_conflict_handler(
+        request: Request, exc: KitOperationConflictError
+    ):
+        logger.warning(f"Конфликт операции комплекта: {exc}")
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": str(exc), "error_code": "KIT_OPERATION_CONFLICT"},
         )
 
     @app.exception_handler(DomainException)

@@ -36,7 +36,7 @@ from app.infrastructure.database.connection import get_db_pool
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["FBS Shipments"])
+router = APIRouter(tags=["ФБС-отгрузки"])
 
 _VALID_STATUSES = {"processing", "completed", "partially_completed", "failed", "validation_failed"}
 

@@ -24,6 +24,32 @@ class MovementType(str, Enum):
     ADJUST = "adjust"  # Корректировка остатков
     WRITE_OFF = "write_off"  # Списание
     UNPACK = "unpack"
+    KIT_ASSEMBLY = "kit_assembly"  # Комплектация комплекта
+    KIT_DISASSEMBLY = "kit_disassembly"  # Разукомплектация комплекта
+
+
+class KitOperationType(str, Enum):
+    """Типы операций с комплектами"""
+
+    ASSEMBLY = "assembly"
+    DISASSEMBLY = "disassembly"
+
+
+class KitOperationStatus(str, Enum):
+    """Статусы операций с комплектами"""
+
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class KitOperationItemRole(str, Enum):
+    """Роль строки операции комплекта"""
+
+    COMPONENT_CONSUMPTION = "component_consumption"
+    KIT_RESULT = "kit_result"
+    KIT_CONSUMPTION = "kit_consumption"
+    COMPONENT_RESULT = "component_result"
 
 
 class FbsShipmentSource(str, Enum):

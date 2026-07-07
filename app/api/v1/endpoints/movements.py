@@ -15,7 +15,13 @@ from app.api.v1.dependencies import get_movement_service
 router = APIRouter(prefix="/movements", tags=["Движения"])
 
 
-@router.post("", response_model=MovementBulkCreateResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=MovementBulkCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Создать движения товаров",
+    description="Атомарно создаёт batch из 1-500 movements. Остатки обновляются триггером БД через wms.movements.",
+)
 async def create_movement(
     data: List[MovementCreate] = Body(
         ...,
@@ -57,7 +63,12 @@ async def create_movement(
     return await service.create_movement(data)
 
 
-@router.get("", response_model=List[MovementResponse])
+@router.get(
+    "",
+    response_model=List[MovementResponse],
+    summary="Получить историю движений",
+    description="Возвращает журнал движений товаров с фильтрами по товару, контейнеру, типу движения и датам.",
+)
 async def get_movements(
     product_id: Optional[str] = Query(None, description="Фильтр по ID товара"),
     container_code: Optional[str] = Query(None, description="Фильтр по коду контейнера"),
@@ -97,7 +108,12 @@ async def get_movements(
     )
 
 
-@router.get("/product/{product_id}", response_model=List[MovementResponse])
+@router.get(
+    "/product/{product_id}",
+    response_model=List[MovementResponse],
+    summary="Получить движения товара",
+    description="Возвращает последние движения по конкретному product_id.",
+)
 async def get_movements_by_product(
     product_id: str = Path(..., description="ID товара"),
     limit: int = Query(100, ge=1, le=1000, description="Лимит записей"),

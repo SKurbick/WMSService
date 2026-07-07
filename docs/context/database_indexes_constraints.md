@@ -67,3 +67,14 @@ Notifications: `(user_id, is_read)`, `created_at DESC`, `notification_type`. Sna
 - `chk_fbs_shipments_source`: `source IN (standard, external_detected)`.
 - `idx_fbs_shipments_source_received_at(source, received_at DESC)`.
 - `idx_fbs_shipments_source_status(source, status)`.
+
+## Kit operations (2026-07-07)
+
+- `wms.movements` check `chk_movement_type` расширен значениями `kit_assembly` и `kit_disassembly`.
+- `wms.movements` добавлены nullable поля `source_type`, `source_id`, `source_item_id` и индекс `idx_movements_source(source_type, source_id, source_item_id)`.
+- `wms.operation_locations`: PK `operation_location_id`; FK на `wms.locations(location_id)`; unique `(operation_code, location_id, scope)`; check `scope IN (direct)`.
+- Индексы для разрешённых локаций: `idx_operation_locations_code_active`, `idx_operation_locations_location_active`.
+- `wms.kit_operations`: PK `operation_id`; FK на `wms.operation_locations(operation_location_id)`, `public.products(id)` и `wms.locations(location_id)`; checks для `operation_type`, `status`, `quantity > 0`.
+- `wms.kit_operation_items`: PK `item_id`; FK на `wms.kit_operations(operation_id)` и `public.products(id)`; checks для `role`, `quantity_per_kit > 0`, `total_quantity > 0`.
+- Индексы: `idx_kit_operations_created_at`, `idx_kit_operations_filters`, `idx_kit_operations_operation_location`, `idx_kit_operation_items_operation`.
+- FK `kit_operation_items.movement_id -> wms.movements` не добавлен, потому что parent `wms.movements` не имеет PK/unique constraint.

@@ -26,6 +26,8 @@ router = APIRouter(prefix="/containers", tags=["Контейнеры"])
     "/register",
     response_model=ContainerRegisterResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Зарегистрировать контейнер",
+    description="Создаёт контейнер с содержимым и запускает DB flow регистрации остатков через movements.",
 )
 async def register_container(
     data: ContainerRegister,
@@ -49,7 +51,12 @@ async def register_container(
     return await service.register_container(data)
 
 
-@router.get("/{qr_code}", response_model=ContainerResponse)
+@router.get(
+    "/{qr_code}",
+    response_model=ContainerResponse,
+    summary="Получить контейнер по QR-коду",
+    description="Возвращает карточку контейнера, его локацию, статус, вложенность и содержимое.",
+)
 async def get_container(
     qr_code: str = Path(..., description="QR-код контейнера"),
     service: ContainerService = Depends(get_container_service),
@@ -69,7 +76,12 @@ async def get_container(
     return await service.get_container_by_qr(qr_code)
 
 
-@router.put("/{container_id}/location", response_model=ContainerLocationUpdateResponse)
+@router.put(
+    "/{container_id}/location",
+    response_model=ContainerLocationUpdateResponse,
+    summary="Переместить контейнер",
+    description="Обновляет локацию контейнера; DB trigger создаёт transfer movements по содержимому.",
+)
 async def update_container_location(
     container_id: int = Path(..., description="ID контейнера"),
     data: ContainerLocationUpdate = ...,
@@ -91,7 +103,12 @@ async def update_container_location(
     return await service.update_container_location(container_id, data)
 
 
-@router.post("/{container_id}/unpack", response_model=ContainerUnpackResponse)
+@router.post(
+    "/{container_id}/unpack",
+    response_model=ContainerUnpackResponse,
+    summary="Распаковать товар из контейнера",
+    description="Извлекает часть товара из контейнера в россыпь и создаёт movements.",
+)
 async def unpack_container(
     container_id: int = Path(..., description="ID контейнера"),
     data: ContainerUnpack = ...,
@@ -115,7 +132,12 @@ async def unpack_container(
     return await service.unpack_container(container_id, data)
 
 
-@router.patch("/{container_id}/status", response_model=ContainerStatusUpdateResponse)
+@router.patch(
+    "/{container_id}/status",
+    response_model=ContainerStatusUpdateResponse,
+    summary="Изменить статус контейнера",
+    description="Меняет статус контейнера; заблокированный контейнер нельзя разблокировать этим endpoint.",
+)
 async def update_container_status(
     container_id: int = Path(..., description="ID контейнера"),
     data: ContainerStatusUpdate = ...,
@@ -137,7 +159,12 @@ async def update_container_status(
     return await service.update_container_status(container_id, data)
 
 
-@router.get("/{qr_code}/history", response_model=List[ContainerHistoryItem])
+@router.get(
+    "/{qr_code}/history",
+    response_model=List[ContainerHistoryItem],
+    summary="Получить историю контейнера",
+    description="Возвращает движения товаров, связанные с указанным QR-кодом контейнера.",
+)
 async def get_container_history(
     qr_code: str = Path(..., description="QR-код контейнера"),
     service: ContainerService = Depends(get_container_service),
@@ -160,6 +187,8 @@ async def get_container_history(
 @router.get(
     "/location/{location_id}",
     response_model=List[ContainerInLocation],
+    summary="Получить контейнеры в локации",
+    description="Возвращает контейнеры в указанной WMS-локации с фильтрами по статусу и типу.",
 )
 async def get_containers_in_location(
     location_id: int = Path(..., description="ID локации"),

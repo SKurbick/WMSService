@@ -34,9 +34,9 @@
 
 Назначение: event log движений товаров и источник правды для пересчета inventory.
 
-Поля: `movement_id`, `movement_type`, `product_id`, `from_location_id`, `to_location_id`, `quantity`, `batch_number`, `container_code`, `from_container_id`, `to_container_id`, `user_name`, `reason`, `metadata`, `created_at`.
+Поля: `movement_id`, `movement_type`, `product_id`, `from_location_id`, `to_location_id`, `quantity`, `batch_number`, `container_code`, `from_container_id`, `to_container_id`, `user_name`, `reason`, `metadata`, `source_type`, `source_id`, `source_item_id`, `created_at`.
 
-Ограничения: partitioned by range `created_at`; FK `product_id -> public.products(id)`, `from_location_id/to_location_id -> locations(location_id)`; check `movement_type` in `receive/putaway/transfer/pick/ship/unpack/adjust`; defaults `movement_id=nextval(...)`, `created_at=now()`. PK на parent table в DDL не задан. Нет check на `quantity > 0` и нет check, что заполнена хотя бы одна сторона movement.
+Ограничения: partitioned by range `created_at`; FK `product_id -> public.products(id)`, `from_location_id/to_location_id -> locations(location_id)`; check `movement_type` in `receive/putaway/transfer/pick/ship/unpack/adjust/kit_assembly/kit_disassembly`; defaults `movement_id=nextval(...)`, `created_at=now()`. PK на parent table в DDL не задан. Нет check на `quantity > 0` и нет check, что заполнена хотя бы одна сторона movement.
 
 Партиции: `movements_2026_01` ... `movements_2026_12` с месячными диапазонами UTC, соответствующими московской границе месяца (`21:00:00+00`).
 
@@ -89,6 +89,32 @@
 ### `wms.receipt_items`
 
 Snapshot поступлений из 1С: `receipt_item_id`, `guid`, `product_id`, `quantity`, `document_number`, `supplier_name`, `supplier_code`, timestamps. PK; unique `(guid, product_id)`; FK `product_id -> public.products(id) ON DELETE RESTRICT`; check `quantity >= 0`.
+
+## `wms.operation_locations`
+
+Назначение: список WMS-локаций, где разрешены конкретные доменные операции.
+
+Поля: `operation_location_id`, `operation_code`, `location_id`, `location_code`, `scope`, `is_active`, `author`, `metadata`, `created_at`, `updated_at`.
+
+Ограничения: PK `operation_location_id`; FK `location_id -> wms.locations(location_id)`; unique `(operation_code, location_id, scope)`; check `scope in ('direct')`.
+
+Для комплектаций используется `operation_code='kit_operations'`, `scope='direct'`, `is_active=true`.
+
+## `wms.kit_operations`
+
+Назначение: журнал операций комплектации и разукомплектации комплектов.
+
+Поля: `operation_id`, `operation_location_id`, `operation_type`, `kit_product_id`, `quantity`, `location_id`, `location_code`, `author`, `status`, `created_at`, `completed_at`.
+
+Ограничения: PK `operation_id`; FK `operation_location_id -> wms.operation_locations(operation_location_id)`; FK `kit_product_id -> public.products(id)`; FK `location_id -> wms.locations(location_id)`; check `operation_type` in `assembly/disassembly`; check `status` in `processing/completed/failed`; check `quantity > 0`.
+
+## `wms.kit_operation_items`
+
+Назначение: строки операций комплектов и связь строк с созданными movements.
+
+Поля: `item_id`, `operation_id`, `role`, `product_id`, `quantity_per_kit`, `total_quantity`, `movement_id`, `movement_created_at`, `created_at`.
+
+Ограничения: PK `item_id`; FK `operation_id -> wms.kit_operations(operation_id) ON DELETE CASCADE`; FK `product_id -> public.products(id)`; check `role` in `component_consumption/kit_result/kit_consumption/component_result`; check `quantity_per_kit > 0`; check `total_quantity > 0`. FK на `movement_id` отсутствует из-за отсутствия PK/unique constraint на parent `wms.movements`.
 
 ## `wms.stock_reservation_orders`
 

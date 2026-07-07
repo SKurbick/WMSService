@@ -11,7 +11,12 @@ from app.api.v1.dependencies import get_notification_service
 router = APIRouter(prefix="/notifications", tags=["Уведомления"])
 
 
-@router.get("/unread", response_model=List[NotificationResponse])
+@router.get(
+    "/unread",
+    response_model=List[NotificationResponse],
+    summary="Получить непрочитанные уведомления",
+    description="Возвращает список непрочитанных уведомлений для указанного пользователя.",
+)
 async def get_unread_notifications(
     user_id: int = Query(..., description="ID пользователя"),
     service: NotificationService = Depends(get_notification_service),
@@ -20,7 +25,12 @@ async def get_unread_notifications(
     return await service.get_unread(user_id)
 
 
-@router.put("/{notification_id}/read", response_model=NotificationReadResponse)
+@router.put(
+    "/{notification_id}/read",
+    response_model=NotificationReadResponse,
+    summary="Пометить уведомление прочитанным",
+    description="Устанавливает флаг прочтения для уведомления.",
+)
 async def mark_notification_read(
     notification_id: int,
     service: NotificationService = Depends(get_notification_service),

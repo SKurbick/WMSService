@@ -72,3 +72,19 @@
 - Успешно обработанный FBS item обязан иметь `movement_id`.
 - Все items одной успешно обработанной product group получают один `movement_id`.
 - `assembly_task.is_shipped` и movement атомарны; повторное списание assembly task запрещено.
+
+## Kit operations invariants
+
+- `operation_locations.operation_code='kit_operations'` и `scope='direct'` определяют разрешённые локации комплектации.
+- `operation_locations.scope` должен быть `direct` для текущего MVP.
+- `operation_locations` не должно иметь дублей по `(operation_code, location_id, scope)`.
+- `POST /api/kit-operations` должен проверять активную строку `operation_locations` перед проверкой остатков и созданием movements.
+- Direct scope означает, что расходные остатки ищутся только по `inventory.location_id = operation_locations.location_id`; дочерние адреса не учитываются.
+- `kit_operations.operation_location_id` должен ссылаться на использованную разрешённую локацию.
+- `kit_operations.operation_type` должен быть `assembly` или `disassembly`.
+- `kit_operations.status` должен быть `processing`, `completed` или `failed`.
+- `kit_operations.quantity > 0`.
+- `kit_operation_items.role` должен быть одной из ролей: `component_consumption`, `kit_result`, `kit_consumption`, `component_result`.
+- `kit_operation_items.quantity_per_kit > 0` и `total_quantity > 0`.
+- `kit_operation_items.movement_id` должен указывать на созданный movement, но FK не enforced, потому что parent `wms.movements` не имеет PK/unique constraint.
+- Для write flow kit operations приложение обязано использовать transaction, advisory lock по `kit_product_id + location_id` и row lock расходных inventory rows.

@@ -21,7 +21,7 @@
 - Inventory row удаляется при `quantity <= 0`.
 - `inventory.quantity` не может быть отрицательным.
 - Inventory уникален по `product_id/location_id/status/batch_number/container_code` с `NULLS NOT DISTINCT`.
-- `movement_type` ограничен набором `receive`, `putaway`, `transfer`, `pick`, `ship`, `unpack`, `adjust`.
+- `movement_type` ограничен набором `receive`, `putaway`, `transfer`, `pick`, `ship`, `unpack`, `adjust`, `kit_assembly`, `kit_disassembly` после применения kit operations migration.
 - DDL не требует положительного `movements.quantity` и не требует заполнения хотя бы одной стороны movement.
 
 ### Контейнеры
@@ -91,3 +91,19 @@
 - `assembly_task.is_shipped`, movement, inventory trigger и success/movement_id всех items группы атомарны.
 - Повторное списание уже отгруженной assembly task запрещено.
 - Если `settings.FBS_VALIDATE_ASSEMBLY_TASKS = False`, FBS flow не читает и не обновляет `public.assembly_task`; это тестовый режим для контуров без таблицы/данных СЗ. Pydantic-контракт payload сохраняется: `assembly_tasks` обязательны и `quantity == len(assembly_tasks)`.
+
+## Kit operations MVP
+
+- Комплектация и разукомплектация комплектов выполняются без вызовов 1С и без RabbitMQ.
+- Источник состава комплекта - `public.products.kit_components`; комплект должен быть `is_active=true`, `is_kit=true`, с непустым составом.
+- Все компоненты из состава должны существовать в `public.products`, быть активными, а `quantity_per_kit` должен быть больше 0.
+- `location_code` для `POST /api/kit-operations` обязателен, должен существовать в `wms.locations`, быть активным и иметь активную настройку в `wms.operation_locations` с `operation_code='kit_operations'` и `scope='direct'`.
+- Разрешённых локаций комплектации может быть несколько; они управляются через `GET/POST/PATCH /api/kit-operations/locations`.
+- Проверка `level=5` для kit operations не применяется: разрешённой может быть зона или адрес другого уровня.
+- `scope='direct'` означает, что операция использует только остатки непосредственно на `operation_locations.location_id`; дочерние адреса/subtree не учитываются.
+- MVP поддерживает только россыпь на выбранной локации: `wms.inventory.status='available'`, `batch_number IS NULL`, `container_code IS NULL`. Если расходный остаток есть только в контейнере, операция возвращает conflict.
+- Write flow выполняется в одной DB transaction: validation, проверка `operation_locations`, advisory lock, `SELECT inventory ... FOR UPDATE`, создание operation/items/movements, completion.
+- Остатки не меняются напрямую через `wms.inventory`; создаются только `wms.movements`.
+- Assembly создает `kit_assembly` movements: компоненты с `from_location_id`, результат-комплект с `to_location_id`.
+- Disassembly создает `kit_disassembly` movements: комплект с `from_location_id`, компоненты с `to_location_id`.
+- Все movements kit operations имеют `source_type='kit_operation'`, `source_id=operation_id`, `source_item_id=item_id` и metadata с ролью строки.

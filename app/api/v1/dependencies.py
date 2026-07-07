@@ -17,6 +17,7 @@ from app.infrastructure.database.repositories.notification_repository import Not
 from app.infrastructure.database.repositories.stock_reservation_repository import (
     StockReservationRepository,
 )
+from app.infrastructure.database.repositories.kit_operation_repository import KitOperationRepository
 
 # Services
 from app.core.services.location_service import LocationService
@@ -28,6 +29,7 @@ from app.core.services.system_service import SystemService
 from app.core.services.task_service import TaskService
 from app.core.services.notification_service import NotificationService
 from app.core.services.stock_reservation_service import StockReservationService
+from app.core.services.kit_operation_service import KitOperationService
 
 
 # === Repositories ===
@@ -129,6 +131,11 @@ def get_stock_reservation_repository(
     return StockReservationRepository(pool)
 
 
+def get_kit_operation_repository(pool: Pool = Depends(get_db_pool)) -> KitOperationRepository:
+    """DI для KitOperationRepository"""
+    return KitOperationRepository(pool)
+
+
 def get_notification_service(
     repository: NotificationRepository = Depends(get_notification_repository),
 ) -> NotificationService:
@@ -142,6 +149,13 @@ def get_stock_reservation_service(
 ) -> StockReservationService:
     """DI для StockReservationService"""
     return StockReservationService(repository, location_repository)
+
+
+def get_kit_operation_service(
+    repository: KitOperationRepository = Depends(get_kit_operation_repository),
+) -> KitOperationService:
+    """DI для KitOperationService"""
+    return KitOperationService(repository)
 
 
 def get_task_service(

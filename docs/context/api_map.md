@@ -50,6 +50,17 @@
 - `GET /api/movements` - история движений с фильтрами.
 - `GET /api/movements/product/{product_id}` - история движений товара.
 
+## Kit Operations
+
+Префикс: `/api/kit-operations`.
+
+- `POST /api/kit-operations` - выполнить комплектацию или разукомплектацию комплекта.
+- `GET /api/kit-operations` - список операций с фильтрами `operation_type`, `kit_product_id`, `status`, `location_code`, `date_from`, `date_to`, `limit`, `offset`.
+- `GET /api/kit-operations/{operation_id}` - детальная карточка операции и созданные movement-связи.
+- `GET /api/kit-operations/locations` - список разрешённых локаций комплектации с фильтрами `is_active`, `limit`, `offset`.
+- `POST /api/kit-operations/locations` - добавить или реактивировать разрешённую direct-локацию для комплектаций.
+- `PATCH /api/kit-operations/locations/{operation_location_id}/deactivate` - деактивировать разрешённую локацию.
+
 ## Containers
 
 Префикс: `/api/containers`.

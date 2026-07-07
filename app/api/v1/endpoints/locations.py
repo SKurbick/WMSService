@@ -20,7 +20,13 @@ from app.api.v1.dependencies import get_location_service
 router = APIRouter(prefix="/locations", tags=["Локации"])
 
 
-@router.post("", response_model=LocationResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=LocationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Создать локацию",
+    description="Создаёт WMS-локацию в иерархии склада. Код и LTREE path генерируются триггерами БД.",
+)
 async def create_location(
         data: LocationCreate, service: LocationService = Depends(get_location_service)
 ):
@@ -47,7 +53,12 @@ async def create_location(
     return await service.create_location(data)
 
 
-@router.get("/zones", response_model=List[ZoneResponse])
+@router.get(
+    "/zones",
+    response_model=List[ZoneResponse],
+    summary="Получить активные зоны",
+    description="Возвращает активные зоны склада уровня 1 с информацией о родительском складе.",
+)
 async def get_zones(
         service: LocationService = Depends(get_location_service)
 ):
@@ -62,7 +73,12 @@ async def get_zones(
     return await service.get_zones()
 
 
-@router.get("/zones/tree", response_model=List[LocationTreeNode])
+@router.get(
+    "/zones/tree",
+    response_model=List[LocationTreeNode],
+    summary="Получить дерево локаций",
+    description="Возвращает иерархическое дерево складов, зон и вложенных адресов до заданного уровня.",
+)
 async def get_zones_tree(
         max_level: int = Query(5, ge=0, le=5, description="Максимальный уровень вложенности (0-5)"),
         service: LocationService = Depends(get_location_service)
@@ -87,7 +103,12 @@ async def get_zones_tree(
     return await service.get_zones_tree(max_level)
 
 
-@router.get("/{location_id}", response_model=LocationResponse)
+@router.get(
+    "/{location_id}",
+    response_model=LocationResponse,
+    summary="Получить локацию по ID",
+    description="Возвращает карточку WMS-локации: код, путь, родителя, тип зоны и параметры вместимости.",
+)
 async def get_location(
         location_id: int, service: LocationService = Depends(get_location_service)
 ):
@@ -106,7 +127,12 @@ async def get_location(
     return await service.get_location_by_id(location_id)
 
 
-@router.get("/by-code/{location_code}", response_model=LocationResponse)
+@router.get(
+    "/by-code/{location_code}",
+    response_model=LocationResponse,
+    summary="Получить локацию по коду",
+    description="Возвращает WMS-локацию по человекочитаемому location_code.",
+)
 async def get_location_by_code(
         location_code: str, service: LocationService = Depends(get_location_service)
 ):
@@ -124,7 +150,12 @@ async def get_location_by_code(
     return await service.get_location_by_code(location_code)
 
 
-@router.get("/{location_id}/children", response_model=List[LocationChildResponse])
+@router.get(
+    "/{location_id}/children",
+    response_model=List[LocationChildResponse],
+    summary="Получить дочерние локации",
+    description="Возвращает прямых или рекурсивных потомков локации через LTREE-иерархию.",
+)
 async def get_location_children(
         location_id: int,
         recursive: bool = Query(
@@ -148,7 +179,12 @@ async def get_location_children(
     return await service.get_children(location_id, recursive)
 
 
-@router.put("/{location_id}", response_model=LocationResponse)
+@router.put(
+    "/{location_id}",
+    response_model=LocationResponse,
+    summary="Обновить локацию",
+    description="Обновляет параметры WMS-локации без пересоздания location_code.",
+)
 async def update_location(
         location_id: int,
         data: LocationUpdate,
@@ -175,7 +211,12 @@ async def update_location(
     return await service.update_location(location_id, data)
 
 
-@router.patch("/{location_id}/deactivate", response_model=LocationDeactivateResponse)
+@router.patch(
+    "/{location_id}/deactivate",
+    response_model=LocationDeactivateResponse,
+    summary="Деактивировать локацию",
+    description="Помечает WMS-локацию неактивной, чтобы запретить новые операции размещения.",
+)
 async def deactivate_location(
         location_id: int, service: LocationService = Depends(get_location_service)
 ):
@@ -194,7 +235,12 @@ async def deactivate_location(
     return await service.deactivate_location(location_id)
 
 
-@router.get("/find-available", response_model=dict)
+@router.get(
+    "/find-available",
+    response_model=dict,
+    summary="Найти доступную ячейку",
+    description="Вызывает wms.find_available_location и возвращает подходящую активную ячейку для размещения товара.",
+)
 async def find_available_location(
         product_id: str = Query(..., description="ID товара"),
         quantity: int = Query(..., ge=1, description="Количество товара"),
@@ -220,7 +266,11 @@ async def find_available_location(
     return await service.find_available_location(product_id, quantity, zone_type)
 
 
-@router.get("/{zone_id}/qr-codes")
+@router.get(
+    "/{zone_id}/qr-codes",
+    summary="Скачать QR-коды зоны",
+    description="Генерирует ZIP-архив с PDF-ярлыками QR-кодов для всех локаций выбранной зоны.",
+)
 async def generate_zone_qr_codes(
         zone_id: int,
         size: int = Query(300, ge=100, le=1000, description="Размер каждого QR-кода в пикселях"),
@@ -251,7 +301,11 @@ async def generate_zone_qr_codes(
     )
 
 
-@router.get("/{location_id}/qr-code")
+@router.get(
+    "/{location_id}/qr-code",
+    summary="Скачать QR-код локации",
+    description="Генерирует ZIP-архив с PDF-ярлыком QR-кода одной WMS-локации.",
+)
 async def generate_location_qr_code(
         location_id: int,
         size: int = Query(300, ge=100, le=1000, description="Размер QR-кода в пикселях"),

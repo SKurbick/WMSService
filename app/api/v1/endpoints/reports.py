@@ -17,7 +17,12 @@ from app.api.v1.dependencies import get_report_service
 router = APIRouter(prefix="/reports", tags=["Отчёты"])
 
 
-@router.get("/zones", response_model=List[ZoneReportItem])
+@router.get(
+    "/zones",
+    response_model=List[ZoneReportItem],
+    summary="Получить отчёт по зонам",
+    description="Показывает загрузку складских зон: локации, товары, количество и контейнеры.",
+)
 async def get_zones_report(
     service: ReportService = Depends(get_report_service),
 ):
@@ -33,7 +38,12 @@ async def get_zones_report(
     return await service.get_zones_report()
 
 
-@router.get("/top-products", response_model=List[TopProductItem])
+@router.get(
+    "/top-products",
+    response_model=List[TopProductItem],
+    summary="Получить топ товаров по движениям",
+    description="Возвращает самые активные товары за выбранный период.",
+)
 async def get_top_products(
     from_date: Optional[date] = Query(None, description="Дата начала периода"),
     to_date: Optional[date] = Query(None, description="Дата окончания периода"),
@@ -56,7 +66,12 @@ async def get_top_products(
     return await service.get_top_products(from_date, to_date, limit)
 
 
-@router.get("/abc-analysis", response_model=List[ABCAnalysisItem])
+@router.get(
+    "/abc-analysis",
+    response_model=List[ABCAnalysisItem],
+    summary="Выполнить ABC-анализ товаров",
+    description="Классифицирует товары по доле движений за период: A, B, C.",
+)
 async def get_abc_analysis(
     from_date: date = Query(..., description="Дата начала периода"),
     to_date: date = Query(..., description="Дата окончания периода"),
@@ -80,7 +95,12 @@ async def get_abc_analysis(
     return await service.get_abc_analysis(from_date, to_date)
 
 
-@router.get("/turnover", response_model=List[TurnoverItem])
+@router.get(
+    "/turnover",
+    response_model=List[TurnoverItem],
+    summary="Получить отчёт оборачиваемости",
+    description="Показывает коэффициент оборачиваемости и запас в днях по товарам.",
+)
 async def get_turnover_report(
     from_date: date = Query(..., description="Дата начала периода"),
     to_date: date = Query(..., description="Дата окончания периода"),
@@ -103,7 +123,12 @@ async def get_turnover_report(
     return await service.get_turnover_report(from_date, to_date)
 
 
-@router.get("/batches", response_model=List[BatchReportItem])
+@router.get(
+    "/batches",
+    response_model=List[BatchReportItem],
+    summary="Получить отчёт по партиям",
+    description="Возвращает остатки по партиям для FIFO/FEFO-контроля.",
+)
 async def get_batches_report(
     product_id: Optional[str] = Query(None, description="Фильтр по ID товара"),
     service: ReportService = Depends(get_report_service),

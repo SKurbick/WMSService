@@ -109,6 +109,27 @@ class ProductNotFoundError(DomainException):
     pass
 
 
+# === Kit Operations ===
+
+
+class KitOperationNotFoundError(DomainException):
+    """Операция комплекта не найдена"""
+
+    pass
+
+
+class KitOperationValidationError(DomainException):
+    """Некорректный запрос операции комплекта"""
+
+    pass
+
+
+class KitOperationConflictError(DomainException):
+    """Конфликт состояния для операции комплекта"""
+
+    pass
+
+
 # === Tasks ===
 
 
