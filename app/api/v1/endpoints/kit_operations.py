@@ -21,6 +21,79 @@ from app.core.services.kit_operation_service import KitOperationService
 router = APIRouter(prefix="/kit-operations", tags=["Операции комплектов"])
 
 
+@router.get(
+    "/locations",
+    response_model=KitOperationLocationListResponse,
+    summary="Получить разрешённые локации комплектации",
+    description=(
+        "Возвращает allow-list WMS-локаций, где разрешены kit operations. "
+        "В MVP поддерживается только `scope='direct'`: используются остатки прямо на этой location_id."
+    ),
+)
+async def list_kit_operation_locations(
+    is_active: Optional[bool] = Query(
+        None,
+        description="Фильтр активности разрешения. true - только активные, false - только деактивированные.",
+    ),
+    limit: int = Query(50, ge=1, le=1000, description="Размер страницы."),
+    offset: int = Query(0, ge=0, description="Смещение страницы."),
+    service: KitOperationService = Depends(get_kit_operation_service),
+):
+    return await service.list_operation_locations(
+        is_active=is_active,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post(
+    "/locations",
+    response_model=KitOperationLocationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Добавить разрешённую локацию комплектации",
+    description=(
+        "Добавляет или реактивирует active allow-list запись для `kit_operations/direct`. "
+        "Локация должна существовать в `wms.locations` и быть активной. Проверка `level=5` не применяется."
+    ),
+    responses={
+        201: {"description": "Разрешённая локация создана или реактивирована."},
+        404: {"description": "location_code не найден в wms.locations."},
+        409: {"description": "Локация неактивна."},
+    },
+)
+async def create_kit_operation_location(
+    data: KitOperationLocationCreate,
+    service: KitOperationService = Depends(get_kit_operation_service),
+):
+    return await service.create_operation_location(data)
+
+
+@router.patch(
+    "/locations/{operation_location_id}/deactivate",
+    response_model=KitOperationLocationResponse,
+    summary="Деактивировать разрешённую локацию комплектации",
+    description=(
+        "Переводит allow-list запись kit operations в `is_active=false`. "
+        "Если запись уже неактивна, возвращает её текущее состояние."
+    ),
+    responses={
+        200: {"description": "Разрешённая локация деактивирована или уже была неактивна."},
+        404: {"description": "operation_location_id не найден."},
+    },
+)
+async def deactivate_kit_operation_location(
+    data: KitOperationLocationDeactivate,
+    operation_location_id: int = Path(
+        ...,
+        ge=1,
+        description="ID разрешённой локации из wms.operation_locations.",
+        examples=[1],
+    ),
+    service: KitOperationService = Depends(get_kit_operation_service),
+):
+    return await service.deactivate_operation_location(operation_location_id, data)
+
+
 @router.post(
     "",
     response_model=KitOperationResponse,
@@ -95,79 +168,6 @@ async def list_kit_operations(
         limit=limit,
         offset=offset,
     )
-
-
-@router.get(
-    "/locations",
-    response_model=KitOperationLocationListResponse,
-    summary="Получить разрешённые локации комплектации",
-    description=(
-        "Возвращает allow-list WMS-локаций, где разрешены kit operations. "
-        "В MVP поддерживается только `scope='direct'`: используются остатки прямо на этой location_id."
-    ),
-)
-async def list_kit_operation_locations(
-    is_active: Optional[bool] = Query(
-        None,
-        description="Фильтр активности разрешения. true - только активные, false - только деактивированные.",
-    ),
-    limit: int = Query(50, ge=1, le=1000, description="Размер страницы."),
-    offset: int = Query(0, ge=0, description="Смещение страницы."),
-    service: KitOperationService = Depends(get_kit_operation_service),
-):
-    return await service.list_operation_locations(
-        is_active=is_active,
-        limit=limit,
-        offset=offset,
-    )
-
-
-@router.post(
-    "/locations",
-    response_model=KitOperationLocationResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Добавить разрешённую локацию комплектации",
-    description=(
-        "Добавляет или реактивирует active allow-list запись для `kit_operations/direct`. "
-        "Локация должна существовать в `wms.locations` и быть активной. Проверка `level=5` не применяется."
-    ),
-    responses={
-        201: {"description": "Разрешённая локация создана или реактивирована."},
-        404: {"description": "location_code не найден в wms.locations."},
-        409: {"description": "Локация неактивна."},
-    },
-)
-async def create_kit_operation_location(
-    data: KitOperationLocationCreate,
-    service: KitOperationService = Depends(get_kit_operation_service),
-):
-    return await service.create_operation_location(data)
-
-
-@router.patch(
-    "/locations/{operation_location_id}/deactivate",
-    response_model=KitOperationLocationResponse,
-    summary="Деактивировать разрешённую локацию комплектации",
-    description=(
-        "Переводит allow-list запись kit operations в `is_active=false`. "
-        "Если запись уже неактивна, возвращает её текущее состояние."
-    ),
-    responses={
-        200: {"description": "Разрешённая локация деактивирована или уже была неактивна."},
-        404: {"description": "operation_location_id не найден."},
-    },
-)
-async def deactivate_kit_operation_location(
-    data: KitOperationLocationDeactivate,
-    operation_location_id: int = Path(
-        ...,
-        ge=1,
-        description="ID разрешённой локации из wms.operation_locations.",
-        examples=[1],
-    ),
-    service: KitOperationService = Depends(get_kit_operation_service),
-):
-    return await service.deactivate_operation_location(operation_location_id, data)
 
 
 @router.get(

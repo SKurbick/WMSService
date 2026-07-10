@@ -101,3 +101,23 @@ Reservation consumer использует `passive=True`, поэтому ожи�
 Два consumer adapter (`start_consumer`, `start_external_fbs_consumer`) передают одинаковый payload в общий FBS processing flow. Источник задается consumer-ом и хранится на shipment.
 
 Транзакция одной product group теперь включает `assembly_task.is_shipped`, movement, inventory trigger и атомарный update всех связанных items в `success` с одним `movement_id`. Пересчет общего shipment status остается отдельным запросом после обработки групп.
+
+
+## Kit operations pipeline (2026-07-07)
+
+Kit operations реализованы как синхронный HTTP flow без RabbitMQ, без 1С и без внешней синхронизации. API слой вызывает `KitOperationService`, сервис работает через `KitOperationRepository` и SQL из `app/infrastructure/database/queries/kit_operations.py`.
+
+Write path `POST /api/kit-operations` выполняется в одной DB transaction:
+
+- проверка `location_code` и активной allow-list строки `wms.operation_locations` для `kit_operations/direct`;
+- проверка комплекта и компонентов по `public.products.kit_components`;
+- advisory lock по `kit_product_id + location_id`;
+- `SELECT ... FOR UPDATE` по расходной loose inventory;
+- insert в `wms.kit_operations`;
+- insert строк `wms.kit_operation_items`;
+- insert movements `kit_assembly` или `kit_disassembly`;
+- completion операции.
+
+`scope='direct'` намеренно не использует subtree: запросы остатков работают по точному `inventory.location_id = operation_locations.location_id`. Container stock и batch stock в MVP не расходуются; расход поддержан только для `status='available'`, `batch_number IS NULL`, `container_code IS NULL`.
+
+Идемпотентный ключ и retry orchestration для kit operations отсутствуют. Повторный HTTP-запрос является новой операцией.

@@ -2,7 +2,14 @@
 
 ## Назначение
 
-Kit operations добавляют MVP комплектации и разукомплектации комплектов/metawild внутри WMS Service. 1С из этого flow не вызывается, RabbitMQ не используется.
+Kit operations добавляют MVP комплектации и разукомплектации комплектов/metawild внутри WMS Service. 1С из этого flow не вызывается, RabbitMQ не используется, внешняя синхронизация не выполняется.
+
+Поддерживаемые операции:
+
+- `assembly` - собрать готовый комплект из компонентов;
+- `disassembly` - разобрать готовый комплект обратно на компоненты.
+
+Retry/idempotency key не реализован. Повторный одинаковый `POST /api/kit-operations` считается новой операцией, если валидация и остатки позволяют ее выполнить.
 
 ## Разрешённые локации
 
@@ -17,6 +24,8 @@ Kit operations добавляют MVP комплектации и разуком
 `scope='direct'` означает: используются только остатки непосредственно на `operation_locations.location_id`. Дочерние адреса и subtree не учитываются.
 
 Проверка `level=5` для kit operations отсутствует: разрешённой может быть зона или адрес другого уровня.
+
+В БД для `wms.operation_locations` нужен unique index `uq_operation_locations_operation_location_scope` на `(operation_code, location_id, scope)`.
 
 ## Источник состава
 
@@ -44,6 +53,11 @@ Kit operations добавляют MVP комплектации и разуком
 - создает item `kit_result` и movement `kit_assembly` с `to_location_id`;
 - обновляет operation до `completed`.
 
+Роли строк при сборке:
+
+- `component_consumption` - списание компонента;
+- `kit_result` - приход готового комплекта.
+
 ## Disassembly Flow
 
 `operation_type = disassembly`:
@@ -51,6 +65,11 @@ Kit operations добавляют MVP комплектации и разуком
 - блокирует расходную россыпь самого комплекта на выбранной direct-локации;
 - создает item `kit_consumption` и movement `kit_disassembly` с `from_location_id`;
 - для каждого компонента создает item `component_result` и movement `kit_disassembly` с `to_location_id`.
+
+Роли строк при разукомплектации:
+
+- `kit_consumption` - списание готового комплекта;
+- `component_result` - приход компонентов.
 
 ## MVP Ограничения
 
@@ -63,11 +82,22 @@ Kit operations добавляют MVP комплектации и разуком
 
 Если нужный расходный остаток есть только в контейнере, endpoint возвращает HTTP 409 с detail `Kit operation supports only loose stock in MVP`.
 
-## Location Management API
+Не реализовано в MVP:
+
+- subtree mode;
+- расход container stock;
+- расход batch stock;
+- retry/idempotency key;
+- синхронизация с 1С или другой внешней системой.
+
+## API
 
 - `GET /api/kit-operations/locations` - список разрешённых локаций.
 - `POST /api/kit-operations/locations` - добавить или реактивировать разрешённую direct-локацию.
 - `PATCH /api/kit-operations/locations/{operation_location_id}/deactivate` - деактивировать разрешённую локацию.
+- `POST /api/kit-operations` - выполнить `assembly` или `disassembly`.
+- `GET /api/kit-operations` - журнал операций с фильтрами.
+- `GET /api/kit-operations/{operation_id}` - детальная карточка операции со строками и movement-связями.
 
 ## Movements
 

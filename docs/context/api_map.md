@@ -46,7 +46,7 @@
 
 Префикс: `/api/movements`.
 
-- `POST /api/movements` - создать batch movements, 1-500 элементов, атомарно.
+- `POST /api/movements` - создать batch movements, 1-500 элементов, атомарно. Используется также для ручной корректировки остатков через `movement_type="adjust"`: приходная корректировка задается через `to_location_code`, расходная - через `from_location_code`.
 - `GET /api/movements` - история движений с фильтрами.
 - `GET /api/movements/product/{product_id}` - история движений товара.
 
@@ -54,12 +54,14 @@
 
 Префикс: `/api/kit-operations`.
 
-- `POST /api/kit-operations` - выполнить комплектацию или разукомплектацию комплекта.
-- `GET /api/kit-operations` - список операций с фильтрами `operation_type`, `kit_product_id`, `status`, `location_code`, `date_from`, `date_to`, `limit`, `offset`.
-- `GET /api/kit-operations/{operation_id}` - детальная карточка операции и созданные movement-связи.
 - `GET /api/kit-operations/locations` - список разрешённых локаций комплектации с фильтрами `is_active`, `limit`, `offset`.
 - `POST /api/kit-operations/locations` - добавить или реактивировать разрешённую direct-локацию для комплектаций.
 - `PATCH /api/kit-operations/locations/{operation_location_id}/deactivate` - деактивировать разрешённую локацию.
+- `POST /api/kit-operations` - выполнить комплектацию (`operation_type=assembly`) или разукомплектацию (`operation_type=disassembly`) комплекта. Принимает `location_code`, но это не произвольный адрес: код должен быть разрешен в `wms.operation_locations` для `operation_code='kit_operations'`, `scope='direct'`, `is_active=true`.
+- `GET /api/kit-operations` - список операций с фильтрами `operation_type`, `kit_product_id`, `status`, `location_code`, `date_from`, `date_to`, `limit`, `offset`.
+- `GET /api/kit-operations/{operation_id}` - детальная карточка операции, строки `wms.kit_operation_items` с ролями и созданные movement-связи.
+
+Роли строк: `component_consumption`, `kit_result`, `kit_consumption`, `component_result`. `scope='direct'` означает работу только с остатками на выбранной `location_id`; subtree дочерних адресов не используется.
 
 ## Containers
 

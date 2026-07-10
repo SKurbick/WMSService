@@ -121,3 +121,5 @@
 - Для текущего MVP реализовать только `scope='direct'`: использовать `inventory.location_id = operation_locations.location_id`, без subtree дочерних адресов.
 - В `wms.kit_operations` сохранять `operation_location_id`, `location_id`, `location_code` как audit-связь с разрешённой локацией.
 - Добавить endpoints управления разрешёнными локациями под `/api/kit-operations/locations`.
+- Зафиксировать unique index `uq_operation_locations_operation_location_scope` на `(operation_code, location_id, scope)`, чтобы одна и та же локация не дублировалась в рамках операции и scope.
+- Не реализовывать subtree mode в MVP: direct scope читает только остатки выбранной `location_id`.

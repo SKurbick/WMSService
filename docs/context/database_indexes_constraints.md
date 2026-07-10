@@ -72,7 +72,7 @@ Notifications: `(user_id, is_read)`, `created_at DESC`, `notification_type`. Sna
 
 - `wms.movements` check `chk_movement_type` расширен значениями `kit_assembly` и `kit_disassembly`.
 - `wms.movements` добавлены nullable поля `source_type`, `source_id`, `source_item_id` и индекс `idx_movements_source(source_type, source_id, source_item_id)`.
-- `wms.operation_locations`: PK `operation_location_id`; FK на `wms.locations(location_id)`; unique `(operation_code, location_id, scope)`; check `scope IN (direct)`.
+- `wms.operation_locations`: PK `operation_location_id`; FK на `wms.locations(location_id)`; unique index `uq_operation_locations_operation_location_scope` на `(operation_code, location_id, scope)`; check `scope IN (direct)`.
 - Индексы для разрешённых локаций: `idx_operation_locations_code_active`, `idx_operation_locations_location_active`.
 - `wms.kit_operations`: PK `operation_id`; FK на `wms.operation_locations(operation_location_id)`, `public.products(id)` и `wms.locations(location_id)`; checks для `operation_type`, `status`, `quantity > 0`.
 - `wms.kit_operation_items`: PK `item_id`; FK на `wms.kit_operations(operation_id)` и `public.products(id)`; checks для `role`, `quantity_per_kit > 0`, `total_quantity > 0`.

@@ -91,3 +91,15 @@
 Исправлены гонка из-за игнорирования результата UPDATE `assembly_task.is_shipped` и разрыв между movement и item success/movement_id.
 
 Остаются: ранний ACK; отсутствие message-level event_id/inbox/outbox; recovery зависших `processing/new`; retry worker без `FOR UPDATE SKIP LOCKED`; группировка только по product; `movement_id` без устойчивого FK и типа bigint; lookup location через отдельное соединение; отсутствие сверки product_id с assembly task; отсутствие integration-тестов транзакции с реальным PostgreSQL trigger.
+
+
+## Kit operations MVP: ограничения (2026-07-08)
+
+- Severity: medium
+- Affected endpoints/tables: `POST /api/kit-operations`, `wms.operation_locations`, `wms.kit_operations`, `wms.kit_operation_items`, `wms.movements`, `wms.inventory`.
+- Subtree mode не реализован: `scope='direct'` использует только остатки на выбранной `location_id`, дочерние адреса не учитываются.
+- Container stock для kit operations не поддерживается: расход возможен только из loose stock с `container_code IS NULL`; при наличии остатка только в контейнере endpoint возвращает conflict.
+- Batch stock для расхода kit operations не поддерживается: MVP расходует только строки с `batch_number IS NULL`.
+- Retry/idempotency key для kit operations не реализован: повторный одинаковый HTTP-запрос не дедуплицируется.
+- Внешняя синхронизация с 1С для kit operations не выполняется.
+- Recommended next action: перед расширением MVP отдельно спроектировать subtree semantics, расход из контейнеров/партий, idempotency key и внешнюю интеграцию, чтобы не ломать event log `wms.movements`.

@@ -15,19 +15,156 @@ from app.api.v1.dependencies import get_movement_service
 router = APIRouter(prefix="/movements", tags=["Движения"])
 
 
+MOVEMENT_TYPES_DESCRIPTION = """
+Типы движения:
+
+- `receive` — приход товара на склад. Обычно используется с `to_location_code`. Увеличивает остаток в локации-получателе.
+- `putaway` — размещение товара после приемки. Обычно используется как перемещение между локациями: `from_location_code` + `to_location_code`.
+- `transfer` — перемещение товара между локациями. Используйте `from_location_code` + `to_location_code`.
+- `pick` — отбор товара. Обычно используется с `from_location_code`, если операция должна уменьшить остаток в локации отбора.
+- `ship` — отгрузка/списание товара со склада. Используйте `from_location_code`. Уменьшает остаток.
+- `unpack` — распаковка товара из контейнера в россыпь. Обычно создается специализированной контейнерной операцией, не рекомендуется фронту создавать вручную без отдельного сценария.
+- `adjust` — ручная корректировка остатка: увеличение — `to_location_code` заполнен и `from_location_code = null`; уменьшение — `from_location_code` заполнен и `to_location_code = null`.
+- `write_off` — списание по Python enum. Перед ручным использованием проверьте, что значение разрешено constraint целевой БД; для обычной отгрузки/списания используйте `ship`.
+- `kit_assembly` — служебное движение комплектации. Создается через `POST /api/kit-operations`, фронту не нужно создавать вручную через `POST /api/movements`.
+- `kit_disassembly` — служебное движение разукомплектации. Создается через `POST /api/kit-operations`, фронту не нужно создавать вручную через `POST /api/movements`.
+"""
+
+CREATE_MOVEMENTS_DESCRIPTION = """
+Создает одно или несколько движений товара. Endpoint принимает массив движений и выполняет batch атомарно.
+
+Остатки в `wms.inventory` не меняются напрямую. Остаток изменяется через создание movement:
+
+- `to_location_code` увеличивает остаток;
+- `from_location_code` уменьшает остаток;
+- если заполнены обе стороны, происходит расход из `from_location_code` и приход в `to_location_code`.
+
+Для ручной корректировки остатков используйте `movement_type="adjust"`:
+
+- увеличение остатка: укажите `to_location_code` и не указывайте `from_location_code`;
+- уменьшение остатка: укажите `from_location_code` и не указывайте `to_location_code`.
+
+`quantity` всегда должен быть положительным числом. Не передавайте отрицательные `quantity` для списаний.
+
+Важно для фронта:
+
+1. Не меняйте `wms.inventory` напрямую.
+2. Не передавайте отрицательный `quantity`. Для списания используйте `from_location_code`.
+3. Для увеличения остатка через `adjust` используйте только `to_location_code`.
+4. Для уменьшения остатка через `adjust` используйте только `from_location_code`.
+5. Для `transfer` используйте обе стороны: `from_location_code` и `to_location_code`.
+6. Для container stock передавайте `container_code` только если операция действительно относится к существующему контейнеру.
+7. Для обычной россыпи `container_code` должен быть `null`.
+8. `reason` желательно заполнять всегда, особенно для `adjust`.
+
+""" + MOVEMENT_TYPES_DESCRIPTION
+
+MOVEMENT_REQUEST_EXAMPLES = {
+    "adjust_increase": {
+        "summary": "Корректировка в плюс",
+        "description": "Остаток товара wild1825 увеличится на 10 шт в локации RECEIVING-001.",
+        "value": [
+            {
+                "movement_type": "adjust",
+                "product_id": "wild1825",
+                "from_location_code": None,
+                "to_location_code": "RECEIVING-001",
+                "quantity": 10,
+                "batch_number": None,
+                "container_code": None,
+                "user_name": "admin",
+                "reason": "Ручная корректировка: добавление 10 шт после пересчета",
+            }
+        ],
+    },
+    "adjust_decrease": {
+        "summary": "Корректировка в минус",
+        "description": "Остаток товара wild1825 уменьшится на 3 шт в локации RECEIVING-001.",
+        "value": [
+            {
+                "movement_type": "adjust",
+                "product_id": "wild1825",
+                "from_location_code": "RECEIVING-001",
+                "to_location_code": None,
+                "quantity": 3,
+                "batch_number": None,
+                "container_code": None,
+                "user_name": "admin",
+                "reason": "Ручная корректировка: списание 3 шт после пересчета",
+            }
+        ],
+    },
+    "transfer": {
+        "summary": "Перемещение между локациями",
+        "description": "Из from_location_code спишется 5 шт, в to_location_code добавится 5 шт.",
+        "value": [
+            {
+                "movement_type": "transfer",
+                "product_id": "wild1825",
+                "from_location_code": "RECEIVING-001",
+                "to_location_code": "STORAGE-A-01",
+                "quantity": 5,
+                "batch_number": None,
+                "container_code": None,
+                "user_name": "operator",
+                "reason": "Перемещение из зоны приемки в хранение",
+            }
+        ],
+    },
+    "ship": {
+        "summary": "Отгрузка или списание",
+        "description": "Остаток уменьшится в from_location_code.",
+        "value": [
+            {
+                "movement_type": "ship",
+                "product_id": "wild1825",
+                "from_location_code": "FBS-001",
+                "to_location_code": None,
+                "quantity": 1,
+                "batch_number": None,
+                "container_code": None,
+                "user_name": "operator",
+                "reason": "Ручное списание/отгрузка",
+            }
+        ],
+    },
+    "receive": {
+        "summary": "Приход",
+        "description": "Остаток увеличится в to_location_code.",
+        "value": [
+            {
+                "movement_type": "receive",
+                "product_id": "wild1825",
+                "from_location_code": None,
+                "to_location_code": "RECEIVING-001",
+                "quantity": 20,
+                "batch_number": None,
+                "container_code": None,
+                "user_name": "operator",
+                "reason": "Приход товара",
+            }
+        ],
+    },
+}
+
+
 @router.post(
     "",
     response_model=MovementBulkCreateResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Создать движения товаров",
-    description="Атомарно создаёт batch из 1-500 movements. Остатки обновляются триггером БД через wms.movements.",
+    summary="Создать движения товаров / ручная корректировка остатков",
+    description=CREATE_MOVEMENTS_DESCRIPTION,
 )
 async def create_movement(
     data: List[MovementCreate] = Body(
         ...,
         min_length=1,
         max_length=500,
-        description="Список movements для создания (1-500 элементов)",
+        description=(
+            "Список movements для создания (1-500 элементов). Batch выполняется атомарно: "
+            "если один movement не прошёл валидацию или insert, не создаётся ни один."
+        ),
+        openapi_examples=MOVEMENT_REQUEST_EXAMPLES,
     ),
     service: MovementService = Depends(get_movement_service),
 ):

@@ -18,7 +18,7 @@
 
 Ограничения: PK `location_id`; unique `location_code`; FK `parent_location_id -> wms.locations(location_id) ON DELETE RESTRICT`; check `zone_type` in `receiving/storage/picking/packing/shipping/quarantine/NULL`. Defaults: `is_active=true`, `is_pickable=false`, timestamps `now()`, sequence for id.
 
-Связи: referenced by `containers`, `inventory`, `movements`, `tasks`, `task_items`. `get_child_locations` использует `path <@ parent_path`.
+Связи: referenced by `containers`, `inventory`, `movements`, `tasks`, `task_items`, `operation_locations`, `kit_operations`. `get_child_locations` использует `path <@ parent_path`.
 
 ## `wms.inventory`
 
@@ -37,6 +37,8 @@
 Поля: `movement_id`, `movement_type`, `product_id`, `from_location_id`, `to_location_id`, `quantity`, `batch_number`, `container_code`, `from_container_id`, `to_container_id`, `user_name`, `reason`, `metadata`, `source_type`, `source_id`, `source_item_id`, `created_at`.
 
 Ограничения: partitioned by range `created_at`; FK `product_id -> public.products(id)`, `from_location_id/to_location_id -> locations(location_id)`; check `movement_type` in `receive/putaway/transfer/pick/ship/unpack/adjust/kit_assembly/kit_disassembly`; defaults `movement_id=nextval(...)`, `created_at=now()`. PK на parent table в DDL не задан. Нет check на `quantity > 0` и нет check, что заполнена хотя бы одна сторона movement.
+
+Для kit operations используются source-связи: `source_type='kit_operation'`, `source_id = wms.kit_operations.operation_id`, `source_item_id = wms.kit_operation_items.item_id`. FK на эти source-поля отсутствует.
 
 Партиции: `movements_2026_01` ... `movements_2026_12` с месячными диапазонами UTC, соответствующими московской границе месяца (`21:00:00+00`).
 
@@ -96,9 +98,9 @@ Snapshot поступлений из 1С: `receipt_item_id`, `guid`, `product_id
 
 Поля: `operation_location_id`, `operation_code`, `location_id`, `location_code`, `scope`, `is_active`, `author`, `metadata`, `created_at`, `updated_at`.
 
-Ограничения: PK `operation_location_id`; FK `location_id -> wms.locations(location_id)`; unique `(operation_code, location_id, scope)`; check `scope in ('direct')`.
+Ограничения: PK `operation_location_id`; FK `location_id -> wms.locations(location_id)`; unique index `uq_operation_locations_operation_location_scope` on `(operation_code, location_id, scope)`; check `scope in ('direct')`.
 
-Для комплектаций используется `operation_code='kit_operations'`, `scope='direct'`, `is_active=true`.
+Для комплектаций используется `operation_code='kit_operations'`, `scope='direct'`, `is_active=true`. Проверка `locations.level=5` не применяется; разрешенной может быть любая активная WMS location, если она явно добавлена в allow-list.
 
 ## `wms.kit_operations`
 
@@ -115,6 +117,8 @@ Snapshot поступлений из 1С: `receipt_item_id`, `guid`, `product_id
 Поля: `item_id`, `operation_id`, `role`, `product_id`, `quantity_per_kit`, `total_quantity`, `movement_id`, `movement_created_at`, `created_at`.
 
 Ограничения: PK `item_id`; FK `operation_id -> wms.kit_operations(operation_id) ON DELETE CASCADE`; FK `product_id -> public.products(id)`; check `role` in `component_consumption/kit_result/kit_consumption/component_result`; check `quantity_per_kit > 0`; check `total_quantity > 0`. FK на `movement_id` отсутствует из-за отсутствия PK/unique constraint на parent `wms.movements`.
+
+Роли: `component_consumption` - списание компонента при `assembly`; `kit_result` - приход готового комплекта при `assembly`; `kit_consumption` - списание комплекта при `disassembly`; `component_result` - приход компонентов при `disassembly`.
 
 ## `wms.stock_reservation_orders`
 

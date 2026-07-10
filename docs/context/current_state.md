@@ -84,7 +84,12 @@ RabbitMQ обработка разделена по очередям:
 
 ## Kit operations MVP (2026-07-07)
 
-Добавлен HTTP flow комплектации и разукомплектации комплектов без вызовов 1С и без RabbitMQ. Состав комплекта читается из `public.products.kit_components`.
+Добавлен HTTP flow комплектации и разукомплектации комплектов без вызовов 1С, без RabbitMQ и без внешней синхронизации. Состав комплекта читается из `public.products.kit_components`.
+
+Поддерживаемые типы операции:
+
+- `assembly` - сборка комплекта из компонентов;
+- `disassembly` - разборка комплекта обратно на компоненты.
 
 Основные компоненты:
 
@@ -99,3 +104,7 @@ RabbitMQ обработка разделена по очередям:
 - параллельные операции одного `kit_product_id + location_id` сериализуются advisory lock внутри transaction.
 
 MVP работает только с россыпью на выбранной direct-локации: `inventory.location_id = operation_locations.location_id`, `status='available'`, `batch_number IS NULL`, `container_code IS NULL`. Дочерние адреса не учитываются.
+
+Роли строк `wms.kit_operation_items`: `component_consumption` - списание компонента при `assembly`; `kit_result` - приход готового комплекта при `assembly`; `kit_consumption` - списание комплекта при `disassembly`; `component_result` - приход компонентов при `disassembly`.
+
+Retry/idempotency key для `POST /api/kit-operations` не реализован: повторный одинаковый запрос создаст новую операцию, если пройдет валидацию и остатков достаточно.

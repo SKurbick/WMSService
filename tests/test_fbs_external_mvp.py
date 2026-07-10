@@ -435,3 +435,182 @@ async def test_mass_retry_parses_json_string_and_calls_handle_with_parsed_raw(mo
     assert calls[0][1] == raw
     assert calls[0][0][0].product_id == "SKU-2"
     assert calls[0][2] == 23023
+
+
+def test_normalize_assembly_tasks_accepts_list_and_json_string():
+    expected = ["5292292386", "5292439182", "5292467594"]
+
+    assert endpoint.normalize_assembly_tasks(expected) == expected
+    assert endpoint.normalize_assembly_tasks(json.dumps(expected)) == expected
+
+
+def test_normalize_assembly_tasks_rejects_non_numeric_values():
+    with pytest.raises(ValueError, match="assembly_tasks содержит нечисловые значения"):
+        endpoint.normalize_assembly_tasks('["5292292386", "abc"]')
+
+
+class FakeItemRetryTransaction:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class FakeItemRetryConnection:
+    def transaction(self):
+        return FakeItemRetryTransaction()
+
+
+class FakeItemRetryAcquire:
+    def __init__(self, conn):
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class FakeItemRetryPool:
+    def __init__(self):
+        self.conn = FakeItemRetryConnection()
+
+    def acquire(self):
+        return FakeItemRetryAcquire(self.conn)
+
+
+class FakeItemRetryRepository:
+    def __init__(self, assembly_tasks, sibling_status="failed"):
+        self.item = {
+            "item_id": 101247,
+            "shipment_id": 25570,
+            "product_id": "wild163",
+            "quantity": 3,
+            "author": "FBS-service",
+            "assembly_tasks": assembly_tasks,
+            "status": "failed",
+            "retry_count": 0,
+            "max_retries": 5,
+        }
+        self.sibling_status = sibling_status
+        self.status_updates = []
+        self.shipment_status_updates = []
+
+    async def get_item_by_id(self, conn, item_id):
+        if item_id == self.item["item_id"]:
+            return self.item
+        return None
+
+    async def update_item_status(self, conn, **kwargs):
+        self.status_updates.append(kwargs)
+
+    async def update_shipment_status(self, conn, shipment_id):
+        self.shipment_status_updates.append(shipment_id)
+
+    async def get_shipment_by_id(self, conn, shipment_id):
+        return {
+            "shipment_id": shipment_id,
+            "received_at": "2026-07-10T12:00:00+03:00",
+            "raw_message": [],
+            "total_items": 2,
+            "status": "partially_completed",
+            "source": "standard",
+            "error_message": None,
+            "completed_at": None,
+        }
+
+    async def get_items_by_shipment_id(self, conn, shipment_id):
+        return [
+            {
+                "item_id": 101247,
+                "product_id": "wild163",
+                "quantity": 3,
+                "author": "FBS-service",
+                "supply_id": "SUP-1",
+                "account": "Вектор",
+                "assembly_tasks": self.item["assembly_tasks"],
+                "status": "success",
+                "error_message": None,
+                "retry_count": 1,
+                "movement_id": 501,
+                "created_at": "2026-07-10T12:00:00+03:00",
+                "updated_at": "2026-07-10T12:01:00+03:00",
+            },
+            {
+                "item_id": 101248,
+                "product_id": "wild163",
+                "quantity": 3,
+                "author": "FBS-service",
+                "supply_id": "SUP-1",
+                "account": "ВЕКТОР3745",
+                "assembly_tasks": ["5292645222"],
+                "status": self.sibling_status,
+                "error_message": "original error",
+                "retry_count": 0,
+                "movement_id": None,
+                "created_at": "2026-07-10T12:00:00+03:00",
+                "updated_at": "2026-07-10T12:01:00+03:00",
+            },
+        ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_json_string", [False, True])
+async def test_item_retry_normalizes_tasks_and_processes_only_requested_item(
+    monkeypatch, as_json_string
+):
+    tasks = ["5292292386", "5292439182", "5292467594"]
+    stored_tasks = json.dumps(tasks) if as_json_string else list(tasks)
+    repo = FakeItemRetryRepository(stored_tasks)
+    calls = []
+
+    async def fake_process_shipment_group(**kwargs):
+        calls.append(kwargs)
+        return 501
+
+    async def fail_if_shipment_level_retry_is_used(*args, **kwargs):
+        raise AssertionError("item-level retry must not call shipment-level handle_write_off_fbs")
+
+    monkeypatch.setattr(endpoint, "FbsShipmentRepository", lambda: repo)
+    monkeypatch.setattr(endpoint, "_process_shipment_group", fake_process_shipment_group)
+    monkeypatch.setattr(endpoint, "handle_write_off_fbs", fail_if_shipment_level_retry_is_used)
+
+    result = await endpoint.retry_shipment_item(101247, pool=FakeItemRetryPool())
+
+    assert len(calls) == 1
+    assert calls[0]["product_id"] == "wild163"
+    # Response contains the whole shipment, but retry side effects are scoped to item A only.
+    assert calls[0]["total_quantity"] == 3
+    assert calls[0]["all_assembly_tasks"] == tasks
+    assert calls[0]["item_ids"] == [101247]
+    assert calls[0]["retry_count"] == 1
+    assert result.items[0].item_id == 101247
+    assert result.items[1].item_id == 101248
+    assert result.items[1].status == "failed"
+    assert result.items[1].movement_id is None
+    assert result.items[1].error_message == "original error"
+    assert result.items[1].updated_at.isoformat() == "2026-07-10T12:01:00+03:00"
+    assert repo.status_updates == []
+
+
+@pytest.mark.asyncio
+async def test_item_retry_invalid_assembly_tasks_does_not_call_process_and_marks_failed(monkeypatch):
+    repo = FakeItemRetryRepository('["5292292386", "abc"]')
+    calls = []
+
+    async def fake_process_shipment_group(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("process should not be called")
+
+    monkeypatch.setattr(endpoint, "FbsShipmentRepository", lambda: repo)
+    monkeypatch.setattr(endpoint, "_process_shipment_group", fake_process_shipment_group)
+
+    await endpoint.retry_shipment_item(101247, pool=FakeItemRetryPool())
+
+    assert calls == []
+    assert repo.status_updates
+    assert repo.status_updates[0]["item_id"] == 101247
+    assert repo.status_updates[0]["status"] == "failed"
+    assert "assembly_tasks содержит нечисловые значения" in repo.status_updates[0]["error_message"]

@@ -95,6 +95,7 @@
 ## Kit operations MVP
 
 - Комплектация и разукомплектация комплектов выполняются без вызовов 1С и без RabbitMQ.
+- Внешняя синхронизация с 1С для kit operations не выполняется.
 - Источник состава комплекта - `public.products.kit_components`; комплект должен быть `is_active=true`, `is_kit=true`, с непустым составом.
 - Все компоненты из состава должны существовать в `public.products`, быть активными, а `quantity_per_kit` должен быть больше 0.
 - `location_code` для `POST /api/kit-operations` обязателен, должен существовать в `wms.locations`, быть активным и иметь активную настройку в `wms.operation_locations` с `operation_code='kit_operations'` и `scope='direct'`.
@@ -107,3 +108,5 @@
 - Assembly создает `kit_assembly` movements: компоненты с `from_location_id`, результат-комплект с `to_location_id`.
 - Disassembly создает `kit_disassembly` movements: комплект с `from_location_id`, компоненты с `to_location_id`.
 - Все movements kit operations имеют `source_type='kit_operation'`, `source_id=operation_id`, `source_item_id=item_id` и metadata с ролью строки.
+- Роли строк: `component_consumption` - списание компонента при `assembly`; `kit_result` - приход готового комплекта при `assembly`; `kit_consumption` - списание комплекта при `disassembly`; `component_result` - приход компонентов при `disassembly`.
+- Retry/idempotency key для kit operations не реализован; повторный одинаковый запрос не дедуплицируется на уровне API/БД.

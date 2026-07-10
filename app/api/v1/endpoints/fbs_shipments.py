@@ -67,6 +67,38 @@ def _parse_retry_items(raw_message: Any) -> tuple[List[dict], List[WriteOffAccor
     return parsed_raw, items
 
 
+def normalize_assembly_tasks(value: Any) -> List[str]:
+    """Normalize assembly_tasks from jsonb/list/string into a validated list of IDs."""
+    if value is None:
+        return []
+
+    if isinstance(value, list):
+        raw_tasks = value
+    elif isinstance(value, tuple):
+        raw_tasks = list(value)
+    elif isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"assembly_tasks должен быть JSON array: invalid JSON ({exc.msg})"
+            ) from exc
+        if not isinstance(parsed, list):
+            raise ValueError("assembly_tasks JSON должен быть массивом")
+        raw_tasks = parsed
+    else:
+        raise ValueError(f"Unsupported assembly_tasks type: {type(value).__name__}")
+
+    normalized: List[str] = []
+    for task_id in raw_tasks:
+        try:
+            int(task_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"assembly_tasks содержит нечисловые значения: {exc}") from exc
+        normalized.append(str(task_id))
+    return normalized
+
+
 # ─────────────────────────────────────────────
 #  GET /fbs-shipments/stats  (должен быть ДО /{shipment_id})
 # ─────────────────────────────────────────────
@@ -191,7 +223,7 @@ async def retry_shipment_item(item_id: int, pool: Pool = Depends(get_db_pool)):
                     conn=conn,
                     product_id=item["product_id"],
                     total_quantity=item["quantity"],
-                    all_assembly_tasks=list(item["assembly_tasks"]),
+                    all_assembly_tasks=normalize_assembly_tasks(item["assembly_tasks"]),
                     author=item["author"],
                     movement_service=movement_service,
                     shipment_repo=repo,

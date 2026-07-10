@@ -2,8 +2,10 @@
 -- PostgreSQL database dump
 --
 
+\restrict g11SeWnLY19L5j56w2dL60Ju6WZ5br47Y9BMO5Nu3NnKaQ7Uuaod2F9MB4jLF0b
+
 -- Dumped from database version 17.4 (Debian 17.4-1.pgdg120+2)
--- Dumped by pg_dump version 17.4 (Debian 17.4-1.pgdg120+2)
+-- Dumped by pg_dump version 18.1 (Ubuntu 18.1-1.pgdg24.04+2)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -46,28 +48,28 @@ BEGIN
     SELECT container_id INTO v_container_id
     FROM wms.containers
     WHERE qr_code = p_qr_code;
-    
+
     IF v_container_id IS NULL THEN
         RAISE EXCEPTION 'Container % not found', p_qr_code;
     END IF;
-    
+
     -- Проверяем, есть ли активное содержимое
     SELECT EXISTS(
         SELECT 1 FROM wms.container_contents
         WHERE container_id = v_container_id
           AND status = 'active'
     ) INTO v_has_contents;
-    
+
     IF v_has_contents THEN
         RAISE EXCEPTION 'Container % is not empty, cannot block', p_qr_code;
     END IF;
-    
+
     -- Блокируем контейнер
     UPDATE wms.containers
     SET status = 'blocked',
         updated_at = NOW()
     WHERE container_id = v_container_id;
-    
+
     RETURN TRUE;
 END;
 $$;
@@ -89,7 +91,7 @@ CREATE FUNCTION wms.find_available_location(p_product_id character varying, p_qu
     AS $$
 BEGIN
     RETURN QUERY
-    SELECT 
+    SELECT
         l.location_id,
         l.location_code,
         COALESCE(l.max_weight - SUM(i.quantity * p.weight), l.max_weight) as available_space
@@ -100,7 +102,7 @@ BEGIN
       AND l.is_active = TRUE
       AND l.level = 5  -- Только ячейки
     GROUP BY l.location_id, l.location_code, l.max_weight
-    HAVING COALESCE(l.max_weight - SUM(i.quantity * p.weight), l.max_weight) >= 
+    HAVING COALESCE(l.max_weight - SUM(i.quantity * p.weight), l.max_weight) >=
            (SELECT weight * p_quantity FROM public.products WHERE id = p_product_id)
     ORDER BY available_space DESC
     LIMIT 1;
@@ -234,7 +236,7 @@ CREATE FUNCTION wms.get_approvers() RETURNS TABLE(user_id integer, username char
     AS $$
 BEGIN
     RETURN QUERY
-    SELECT 
+    SELECT
         u.id,
         u.username,
         u.full_name,
@@ -269,11 +271,11 @@ BEGIN
     SELECT l.path INTO v_path
     FROM wms.locations l
     WHERE l.location_id = p_location_id;
-    
+
     IF v_path IS NULL THEN
         RAISE EXCEPTION 'Location % not found', p_location_id;
     END IF;
-    
+
     -- Возвращаем все дочерние локации через LTREE
     RETURN QUERY
     SELECT l.location_id, l.location_code, l.level, l.path
@@ -301,7 +303,7 @@ CREATE FUNCTION wms.get_task_items_summary(p_task_id bigint) RETURNS TABLE(item_
     AS $$
 BEGIN
     RETURN QUERY
-    SELECT 
+    SELECT
         ti.item_id,  -- добавляем
         ti.product_id,
         p.name as product_name,
@@ -334,15 +336,15 @@ CREATE FUNCTION wms.move_container_inventory() RETURNS trigger
     AS $$
 BEGIN
     IF OLD.location_id IS DISTINCT FROM NEW.location_id THEN
-        
+
         -- 1. Логируем перемещение в movements (с batch_number!)
         INSERT INTO wms.movements (
-            movement_type, product_id, 
-            from_location_id, to_location_id, 
+            movement_type, product_id,
+            from_location_id, to_location_id,
             quantity, batch_number, container_code, reason
         )
-        SELECT 
-            'transfer', 
+        SELECT
+            'transfer',
             i.product_id,
             OLD.location_id,
             NEW.location_id,
@@ -352,12 +354,12 @@ BEGIN
             'Container moved'
         FROM wms.inventory i
         WHERE i.container_code = NEW.qr_code;
-        
+
         -- 2. НЕ обновляем inventory напрямую!
         --    Триггер update_inventory_from_movement() сделает это автоматически
-        
+
     END IF;
-    
+
     RETURN NEW;
 END;
 $$;
@@ -390,34 +392,34 @@ BEGIN
 		SELECT EXISTS(
 		    SELECT 1 FROM wms.containers c WHERE c.qr_code = p_qr_code
 		) INTO v_existing_container;
-    
+
     IF v_existing_container THEN
         RAISE EXCEPTION 'Container with QR code % already exists. Cannot register twice.', p_qr_code;
     END IF;
-    
+
     -- ============================================================================
     -- Основная логика (без изменений)
     -- ============================================================================
-    
+
     -- 1. Получаем location_id
     SELECT location_id INTO v_location_id
     FROM wms.locations
     WHERE location_code = p_location_code;
-    
+
     IF v_location_id IS NULL THEN
         RAISE EXCEPTION 'Location % not found', p_location_code;
     END IF;
-    
+
     -- 2. Создаём контейнер
     INSERT INTO wms.containers (qr_code, container_type, location_id, status)
     VALUES (p_qr_code, p_container_type, v_location_id, 'sealed')
     RETURNING wms.containers.container_id INTO v_container_id;
-    
+
     -- 3. Добавляем содержимое
     FOR v_item IN SELECT * FROM jsonb_array_elements(p_contents)
     LOOP
         INSERT INTO wms.container_contents (
-            container_id, product_id, quantity, 
+            container_id, product_id, quantity,
             batch_number, is_scanned
         )
         VALUES (
@@ -427,11 +429,11 @@ BEGIN
             v_item->>'batch_number',
             COALESCE((v_item->>'is_scanned')::BOOLEAN, FALSE)
         );
-        
+
         -- Триггер sync_container_to_inventory() автоматически создаст movements
         v_count := v_count + 1;
     END LOOP;
-    
+
     -- 4. Возвращаем результат
     RETURN QUERY
     SELECT v_container_id, p_qr_code, v_count;
@@ -461,16 +463,16 @@ BEGIN
     IF NEW.status != 'active' THEN
         RETURN NEW;
     END IF;
-    
+
     -- Получаем location_id и qr_code контейнера
     SELECT location_id, qr_code INTO v_location_id, v_qr_code
     FROM wms.containers
     WHERE container_id = NEW.container_id;
-    
+
     IF v_location_id IS NULL THEN
         RAISE EXCEPTION 'Container % has no location assigned', NEW.container_id;
     END IF;
-    
+
     -- ВМЕСТО прямого INSERT в inventory → создаём movements!
     -- Триггер update_inventory_from_movement() сам создаст inventory
     INSERT INTO wms.movements (
@@ -493,9 +495,9 @@ BEGIN
         v_qr_code,
         'Container registered'
     );
-    
+
     -- Триггер update_inventory_from_movement() автоматически создаст inventory!
-    
+
     RETURN NEW;
 END;
 $$;
@@ -525,73 +527,73 @@ BEGIN
     SELECT container_id, location_id INTO v_container_id, v_location_id
     FROM wms.containers
     WHERE qr_code = p_qr_code;
-    
+
     IF v_container_id IS NULL THEN
         RAISE EXCEPTION 'Container % not found', p_qr_code;
     END IF;
-    
+
     -- 2. Проверяем количество в контейнере
     SELECT quantity, batch_number INTO v_current_qty, v_batch_number
     FROM wms.container_contents
-    WHERE container_id = v_container_id 
+    WHERE container_id = v_container_id
       AND product_id = p_product_id
       AND status = 'active';
-    
+
     IF v_current_qty IS NULL OR v_current_qty < p_quantity THEN
-        RAISE EXCEPTION 'Not enough quantity in container. Available: %, requested: %', 
+        RAISE EXCEPTION 'Not enough quantity in container. Available: %, requested: %',
                         COALESCE(v_current_qty, 0), p_quantity;
     END IF;
-    
+
     -- ============================================================================
     -- ИЗМЕНЕНИЕ: Не создаём новую запись, а ОБНОВЛЯЕМ существующую!
     -- ============================================================================
-    
+
     -- 3. Обновляем количество в container_contents (НЕ INSERT!)
     UPDATE wms.container_contents
     SET quantity = v_current_qty - p_quantity,
         updated_at = NOW()
-    WHERE container_id = v_container_id 
+    WHERE container_id = v_container_id
       AND product_id = p_product_id
       AND status = 'active';
-    
+
     -- 4. Если количество стало 0 → меняем status на 'empty'
     UPDATE wms.container_contents
     SET status = 'empty'
-    WHERE container_id = v_container_id 
+    WHERE container_id = v_container_id
       AND product_id = p_product_id
       AND quantity = 0
       AND status = 'active';
-    
+
     -- ============================================================================
     -- Movements (без изменений)
     -- ============================================================================
-    
+
     -- 5. Логируем убыль из контейнера
     INSERT INTO wms.movements (
-        movement_type, product_id, 
+        movement_type, product_id,
         from_location_id, to_location_id,
         quantity, batch_number, container_code, reason
     )
     VALUES (
-        'unpack', 
-        p_product_id, 
+        'unpack',
+        p_product_id,
         v_location_id,
         NULL,
         p_quantity,
         v_batch_number,
-        p_qr_code, 
+        p_qr_code,
         'Unpacked from container'
     );
-    
+
     -- 6. Логируем прибыль в россыпь
     INSERT INTO wms.movements (
-        movement_type, product_id, 
+        movement_type, product_id,
         from_location_id, to_location_id,
         quantity, batch_number, container_code, reason
     )
     VALUES (
-        'unpack', 
-        p_product_id, 
+        'unpack',
+        p_product_id,
         NULL,
         v_location_id,
         p_quantity,
@@ -599,15 +601,15 @@ BEGIN
         NULL,
         'Unpacked from ' || p_qr_code
     );
-    
+
     -- 7. Меняем статус контейнера на opened
-    UPDATE wms.containers 
-    SET status = 'opened' 
+    UPDATE wms.containers
+    SET status = 'opened'
     WHERE container_id = v_container_id AND status = 'sealed';
-    
+
     -- 8. Возвращаем результат
     RETURN QUERY
-    SELECT 
+    SELECT
         TRUE,
         COALESCE(v_current_qty - p_quantity, 0),
         p_quantity;
@@ -662,20 +664,34 @@ DECLARE
     change_quantity DECIMAL(10,2);
     current_qty DECIMAL(10,2);
 BEGIN
-    -- Если товар ПРИШЁЛ в локацию (to_location_id)
+    -- Приход в локацию
     IF NEW.to_location_id IS NOT NULL THEN
         affected_location_id := NEW.to_location_id;
         change_quantity := NEW.quantity;
 
-        INSERT INTO wms.inventory (product_id, location_id, quantity, status, batch_number, container_code)
-        VALUES (NEW.product_id, affected_location_id, change_quantity, 'available', NEW.batch_number, NEW.container_code)
+        INSERT INTO wms.inventory (
+            product_id,
+            location_id,
+            quantity,
+            status,
+            batch_number,
+            container_code
+        )
+        VALUES (
+            NEW.product_id,
+            affected_location_id,
+            change_quantity,
+            'available',
+            NEW.batch_number,
+            NEW.container_code
+        )
         ON CONFLICT (product_id, location_id, status, batch_number, container_code)
         DO UPDATE SET
             quantity = wms.inventory.quantity + EXCLUDED.quantity,
             updated_at = NOW();
     END IF;
 
-    -- Если товар УШЁЛ из локации (from_location_id)
+    -- Расход из локации
     IF NEW.from_location_id IS NOT NULL THEN
         affected_location_id := NEW.from_location_id;
         change_quantity := -ABS(NEW.quantity);
@@ -689,15 +705,27 @@ BEGIN
           AND COALESCE(batch_number, '') = COALESCE(NEW.batch_number, '')
           AND COALESCE(container_code, '') = COALESCE(NEW.container_code, '');
 
-        IF NOT FOUND AND NEW.movement_type IN ('ship', 'transfer') THEN
-            -- Узнаём сколько реально есть на локации
-            SELECT COALESCE(SUM(quantity), 0) INTO current_qty
+        IF NOT FOUND
+           AND NEW.movement_type IN (
+               'ship',
+               'transfer',
+               'kit_assembly',
+               'kit_disassembly'
+           )
+        THEN
+            SELECT COALESCE(SUM(quantity), 0)
+            INTO current_qty
             FROM wms.inventory
             WHERE product_id = NEW.product_id
               AND location_id = affected_location_id;
 
-            RAISE EXCEPTION 'Недостаточно остатка для списания: product_id=%, location_id=%, movement_type=%, запрошено=%, текущий остаток=%',
-                NEW.product_id, affected_location_id, NEW.movement_type, ABS(change_quantity), current_qty;
+            RAISE EXCEPTION
+                'Недостаточно остатка для списания: product_id=%, location_id=%, movement_type=%, запрошено=%, текущий остаток=%',
+                NEW.product_id,
+                affected_location_id,
+                NEW.movement_type,
+                ABS(change_quantity),
+                current_qty;
         END IF;
 
         DELETE FROM wms.inventory
@@ -715,7 +743,7 @@ $$;
 -- Name: FUNCTION update_inventory_from_movement(); Type: COMMENT; Schema: wms; Owner: -
 --
 
-COMMENT ON FUNCTION wms.update_inventory_from_movement() IS 'Автоматически обновляет INVENTORY при добавлении события в MOVEMENTS. Реализует Event Sourcing → Materialized State. При to_location_id добавляет товар, при from_location_id убирает. Записи с quantity <= 0 удаляются автоматически.';
+COMMENT ON FUNCTION wms.update_inventory_from_movement() IS 'Автоматически обновляет inventory при insert в movements. Для kit_assembly/kit_disassembly расход без inventory row считается ошибкой.';
 
 
 --
@@ -976,9 +1004,9 @@ CREATE TABLE wms.fbs_shipments (
     raw_message jsonb NOT NULL,
     total_items integer NOT NULL,
     status character varying(30) DEFAULT 'processing'::character varying NOT NULL,
-    source character varying(30) DEFAULT 'standard'::character varying NOT NULL,
     error_message text,
     completed_at timestamp with time zone,
+    source character varying(30) DEFAULT 'standard'::character varying NOT NULL,
     CONSTRAINT chk_fbs_shipments_source CHECK (((source)::text = ANY ((ARRAY['standard'::character varying, 'external_detected'::character varying])::text[]))),
     CONSTRAINT chk_fbs_shipments_status CHECK (((status)::text = ANY ((ARRAY['processing'::character varying, 'completed'::character varying, 'partially_completed'::character varying, 'failed'::character varying, 'validation_failed'::character varying])::text[])))
 );
@@ -1120,6 +1148,152 @@ ALTER SEQUENCE wms.inventory_snapshots_snapshot_id_seq OWNED BY wms.inventory_sn
 
 
 --
+-- Name: kit_operation_items; Type: TABLE; Schema: wms; Owner: -
+--
+
+CREATE TABLE wms.kit_operation_items (
+    item_id bigint NOT NULL,
+    operation_id bigint NOT NULL,
+    role character varying(64) NOT NULL,
+    product_id character varying(50) NOT NULL,
+    quantity_per_kit numeric(10,2) NOT NULL,
+    total_quantity numeric(10,2) NOT NULL,
+    movement_id bigint,
+    movement_created_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_kit_operation_item_qty_per_kit CHECK ((quantity_per_kit > (0)::numeric)),
+    CONSTRAINT chk_kit_operation_item_role CHECK (((role)::text = ANY ((ARRAY['component_consumption'::character varying, 'kit_result'::character varying, 'kit_consumption'::character varying, 'component_result'::character varying])::text[]))),
+    CONSTRAINT chk_kit_operation_item_total_qty CHECK ((total_quantity > (0)::numeric))
+);
+
+
+--
+-- Name: TABLE kit_operation_items; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON TABLE wms.kit_operation_items IS 'Детализация WMS операции комплектации: какие компоненты/комплект были списаны или оприходованы.';
+
+
+--
+-- Name: COLUMN kit_operation_items.role; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.kit_operation_items.role IS 'component_consumption, kit_result, kit_consumption, component_result.';
+
+
+--
+-- Name: COLUMN kit_operation_items.movement_id; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.kit_operation_items.movement_id IS 'ID movement, созданного для этой строки операции. FK не задан из-за partitioned wms.movements без устойчивой PK/FK модели.';
+
+
+--
+-- Name: COLUMN kit_operation_items.movement_created_at; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.kit_operation_items.movement_created_at IS 'created_at movement. Нужен как дополнительная ссылка на partitioned wms.movements.';
+
+
+--
+-- Name: kit_operation_items_item_id_seq; Type: SEQUENCE; Schema: wms; Owner: -
+--
+
+CREATE SEQUENCE wms.kit_operation_items_item_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: kit_operation_items_item_id_seq; Type: SEQUENCE OWNED BY; Schema: wms; Owner: -
+--
+
+ALTER SEQUENCE wms.kit_operation_items_item_id_seq OWNED BY wms.kit_operation_items.item_id;
+
+
+--
+-- Name: kit_operations; Type: TABLE; Schema: wms; Owner: -
+--
+
+CREATE TABLE wms.kit_operations (
+    operation_id bigint NOT NULL,
+    operation_type character varying(32) NOT NULL,
+    kit_product_id character varying(50) NOT NULL,
+    quantity numeric(10,2) NOT NULL,
+    location_id bigint NOT NULL,
+    location_code character varying(100) NOT NULL,
+    status character varying(32) DEFAULT 'processing'::character varying NOT NULL,
+    author character varying(100),
+    error_message text,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    completed_at timestamp with time zone,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    operation_location_id bigint,
+    CONSTRAINT chk_kit_operation_quantity CHECK ((quantity > (0)::numeric)),
+    CONSTRAINT chk_kit_operation_status CHECK (((status)::text = ANY ((ARRAY['processing'::character varying, 'completed'::character varying, 'failed'::character varying])::text[]))),
+    CONSTRAINT chk_kit_operation_type CHECK (((operation_type)::text = ANY ((ARRAY['assembly'::character varying, 'disassembly'::character varying])::text[])))
+);
+
+
+--
+-- Name: TABLE kit_operations; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON TABLE wms.kit_operations IS 'WMS операции комплектации/разукомплектации комплектов. Не синхронизируется с 1С. Остатки меняются через wms.movements.';
+
+
+--
+-- Name: COLUMN kit_operations.operation_type; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.kit_operations.operation_type IS 'assembly = собрать комплект из компонентов; disassembly = разобрать комплект на компоненты.';
+
+
+--
+-- Name: COLUMN kit_operations.kit_product_id; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.kit_operations.kit_product_id IS 'ID товара-комплекта из public.products.id.';
+
+
+--
+-- Name: COLUMN kit_operations.location_id; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.kit_operations.location_id IS 'Техническая WMS-локация, внутри которой выполняется комплектация/разукомплектация.';
+
+
+--
+-- Name: COLUMN kit_operations.operation_location_id; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.kit_operations.operation_location_id IS 'Ссылка на wms.operation_locations: какая разрешённая WMS-локация использовалась для комплектации/разукомплектации.';
+
+
+--
+-- Name: kit_operations_operation_id_seq; Type: SEQUENCE; Schema: wms; Owner: -
+--
+
+CREATE SEQUENCE wms.kit_operations_operation_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: kit_operations_operation_id_seq; Type: SEQUENCE OWNED BY; Schema: wms; Owner: -
+--
+
+ALTER SEQUENCE wms.kit_operations_operation_id_seq OWNED BY wms.kit_operations.operation_id;
+
+
+--
 -- Name: locations; Type: TABLE; Schema: wms; Owner: -
 --
 
@@ -1229,7 +1403,10 @@ CREATE TABLE wms.movements (
     reason text,
     metadata jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying])::text[])))
+    source_type character varying(64),
+    source_id bigint,
+    source_item_id bigint,
+    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying, 'kit_assembly'::character varying, 'kit_disassembly'::character varying])::text[])))
 )
 PARTITION BY RANGE (created_at);
 
@@ -1277,6 +1454,27 @@ COMMENT ON COLUMN wms.movements.reason IS 'Причина движения то�
 
 
 --
+-- Name: COLUMN movements.source_type; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.movements.source_type IS 'Тип доменной операции-источника movement. Например: kit_operation.';
+
+
+--
+-- Name: COLUMN movements.source_id; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.movements.source_id IS 'ID доменной операции-источника. Для source_type=kit_operation это wms.kit_operations.operation_id.';
+
+
+--
+-- Name: COLUMN movements.source_item_id; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.movements.source_item_id IS 'ID строки детализации доменной операции. Для source_type=kit_operation это wms.kit_operation_items.item_id.';
+
+
+--
 -- Name: movements_movement_id_seq; Type: SEQUENCE; Schema: wms; Owner: -
 --
 
@@ -1314,7 +1512,10 @@ CREATE TABLE wms.movements_2026_01 (
     reason text,
     metadata jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying])::text[])))
+    source_type character varying(64),
+    source_id bigint,
+    source_item_id bigint,
+    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying, 'kit_assembly'::character varying, 'kit_disassembly'::character varying])::text[])))
 );
 
 
@@ -1337,7 +1538,10 @@ CREATE TABLE wms.movements_2026_02 (
     reason text,
     metadata jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying])::text[])))
+    source_type character varying(64),
+    source_id bigint,
+    source_item_id bigint,
+    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying, 'kit_assembly'::character varying, 'kit_disassembly'::character varying])::text[])))
 );
 
 
@@ -1360,7 +1564,10 @@ CREATE TABLE wms.movements_2026_03 (
     reason text,
     metadata jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying])::text[])))
+    source_type character varying(64),
+    source_id bigint,
+    source_item_id bigint,
+    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying, 'kit_assembly'::character varying, 'kit_disassembly'::character varying])::text[])))
 );
 
 
@@ -1383,7 +1590,10 @@ CREATE TABLE wms.movements_2026_04 (
     reason text,
     metadata jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying])::text[])))
+    source_type character varying(64),
+    source_id bigint,
+    source_item_id bigint,
+    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying, 'kit_assembly'::character varying, 'kit_disassembly'::character varying])::text[])))
 );
 
 
@@ -1406,7 +1616,10 @@ CREATE TABLE wms.movements_2026_05 (
     reason text,
     metadata jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying])::text[])))
+    source_type character varying(64),
+    source_id bigint,
+    source_item_id bigint,
+    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying, 'kit_assembly'::character varying, 'kit_disassembly'::character varying])::text[])))
 );
 
 
@@ -1429,7 +1642,10 @@ CREATE TABLE wms.movements_2026_06 (
     reason text,
     metadata jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying])::text[])))
+    source_type character varying(64),
+    source_id bigint,
+    source_item_id bigint,
+    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying, 'kit_assembly'::character varying, 'kit_disassembly'::character varying])::text[])))
 );
 
 
@@ -1452,7 +1668,10 @@ CREATE TABLE wms.movements_2026_07 (
     reason text,
     metadata jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying])::text[])))
+    source_type character varying(64),
+    source_id bigint,
+    source_item_id bigint,
+    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying, 'kit_assembly'::character varying, 'kit_disassembly'::character varying])::text[])))
 );
 
 
@@ -1475,7 +1694,10 @@ CREATE TABLE wms.movements_2026_08 (
     reason text,
     metadata jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying])::text[])))
+    source_type character varying(64),
+    source_id bigint,
+    source_item_id bigint,
+    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying, 'kit_assembly'::character varying, 'kit_disassembly'::character varying])::text[])))
 );
 
 
@@ -1498,7 +1720,10 @@ CREATE TABLE wms.movements_2026_09 (
     reason text,
     metadata jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying])::text[])))
+    source_type character varying(64),
+    source_id bigint,
+    source_item_id bigint,
+    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying, 'kit_assembly'::character varying, 'kit_disassembly'::character varying])::text[])))
 );
 
 
@@ -1521,7 +1746,10 @@ CREATE TABLE wms.movements_2026_10 (
     reason text,
     metadata jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying])::text[])))
+    source_type character varying(64),
+    source_id bigint,
+    source_item_id bigint,
+    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying, 'kit_assembly'::character varying, 'kit_disassembly'::character varying])::text[])))
 );
 
 
@@ -1544,7 +1772,10 @@ CREATE TABLE wms.movements_2026_11 (
     reason text,
     metadata jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying])::text[])))
+    source_type character varying(64),
+    source_id bigint,
+    source_item_id bigint,
+    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying, 'kit_assembly'::character varying, 'kit_disassembly'::character varying])::text[])))
 );
 
 
@@ -1567,7 +1798,10 @@ CREATE TABLE wms.movements_2026_12 (
     reason text,
     metadata jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying])::text[])))
+    source_type character varying(64),
+    source_id bigint,
+    source_item_id bigint,
+    CONSTRAINT chk_movement_type CHECK (((movement_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'transfer'::character varying, 'pick'::character varying, 'ship'::character varying, 'unpack'::character varying, 'adjust'::character varying, 'kit_assembly'::character varying, 'kit_disassembly'::character varying])::text[])))
 );
 
 
@@ -1662,6 +1896,80 @@ ALTER SEQUENCE wms.notifications_notification_id_seq OWNED BY wms.notifications.
 
 
 --
+-- Name: operation_locations; Type: TABLE; Schema: wms; Owner: -
+--
+
+CREATE TABLE wms.operation_locations (
+    operation_location_id bigint NOT NULL,
+    operation_code character varying(64) NOT NULL,
+    location_id bigint NOT NULL,
+    location_code character varying(100) NOT NULL,
+    scope character varying(32) DEFAULT 'direct'::character varying NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    author character varying(100),
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_operation_locations_operation_code CHECK (((operation_code)::text = 'kit_operations'::text)),
+    CONSTRAINT chk_operation_locations_scope CHECK (((scope)::text = 'direct'::text))
+);
+
+
+--
+-- Name: TABLE operation_locations; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON TABLE wms.operation_locations IS 'Список WMS-локаций, на которых разрешены доменные операции. Для комплектации используется operation_code=kit_operations. Разрешённых локаций может быть несколько.';
+
+
+--
+-- Name: COLUMN operation_locations.operation_code; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.operation_locations.operation_code IS 'Код доменной операции. Сейчас поддерживается kit_operations.';
+
+
+--
+-- Name: COLUMN operation_locations.location_id; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.operation_locations.location_id IS 'WMS location_id, на котором разрешена операция.';
+
+
+--
+-- Name: COLUMN operation_locations.location_code; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.operation_locations.location_code IS 'Кешированный location_code для удобства чтения и аудита. Источник истины — location_id.';
+
+
+--
+-- Name: COLUMN operation_locations.scope; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.operation_locations.scope IS 'direct = использовать только остатки, лежащие непосредственно на этой location_id. Subtree не используется.';
+
+
+--
+-- Name: operation_locations_operation_location_id_seq; Type: SEQUENCE; Schema: wms; Owner: -
+--
+
+CREATE SEQUENCE wms.operation_locations_operation_location_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: operation_locations_operation_location_id_seq; Type: SEQUENCE OWNED BY; Schema: wms; Owner: -
+--
+
+ALTER SEQUENCE wms.operation_locations_operation_location_id_seq OWNED BY wms.operation_locations.operation_location_id;
+
+
+--
 -- Name: receipt_items; Type: TABLE; Schema: wms; Owner: -
 --
 
@@ -1731,6 +2039,139 @@ CREATE SEQUENCE wms.receipt_items_receipt_item_id_seq
 --
 
 ALTER SEQUENCE wms.receipt_items_receipt_item_id_seq OWNED BY wms.receipt_items.receipt_item_id;
+
+
+--
+-- Name: stock_reservation_events; Type: TABLE; Schema: wms; Owner: -
+--
+
+CREATE TABLE wms.stock_reservation_events (
+    reservation_event_id bigint NOT NULL,
+    source_type text DEFAULT 'fbs'::text NOT NULL,
+    product_id text,
+    external_order_id bigint,
+    external_status text,
+    reserved_qty numeric(20,3),
+    external_created_at timestamp with time zone,
+    event_received_at timestamp with time zone DEFAULT now() NOT NULL,
+    processing_result text NOT NULL,
+    error_message text,
+    raw_payload jsonb NOT NULL
+);
+
+
+--
+-- Name: TABLE stock_reservation_events; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON TABLE wms.stock_reservation_events IS 'Audit-log входящих RabbitMQ-событий по резервам: успешные, повторные, неизвестные статусы, неизвестные товары, ошибки валидации.';
+
+
+--
+-- Name: COLUMN stock_reservation_events.processing_result; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.stock_reservation_events.processing_result IS 'Результат обработки события: processed, released, unknown_status, product_not_found, invalid_payload, db_error и т.д.';
+
+
+--
+-- Name: stock_reservation_events_reservation_event_id_seq; Type: SEQUENCE; Schema: wms; Owner: -
+--
+
+CREATE SEQUENCE wms.stock_reservation_events_reservation_event_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: stock_reservation_events_reservation_event_id_seq; Type: SEQUENCE OWNED BY; Schema: wms; Owner: -
+--
+
+ALTER SEQUENCE wms.stock_reservation_events_reservation_event_id_seq OWNED BY wms.stock_reservation_events.reservation_event_id;
+
+
+--
+-- Name: stock_reservation_orders; Type: TABLE; Schema: wms; Owner: -
+--
+
+CREATE TABLE wms.stock_reservation_orders (
+    reservation_order_id bigint NOT NULL,
+    source_type text DEFAULT 'fbs'::text NOT NULL,
+    product_id text NOT NULL,
+    external_order_id bigint NOT NULL,
+    external_status text NOT NULL,
+    is_reserved boolean NOT NULL,
+    reserved_qty numeric(20,3) DEFAULT 1 NOT NULL,
+    external_created_at timestamp with time zone,
+    last_event_at timestamp with time zone DEFAULT now() NOT NULL,
+    raw_payload jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE stock_reservation_orders; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON TABLE wms.stock_reservation_orders IS 'Текущее состояние мягких резервов товаров по внешним заказам. Резерв не меняет wms.inventory и не создает wms.movements.';
+
+
+--
+-- Name: COLUMN stock_reservation_orders.source_type; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.stock_reservation_orders.source_type IS 'Источник резерва, например fbs.';
+
+
+--
+-- Name: COLUMN stock_reservation_orders.product_id; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.stock_reservation_orders.product_id IS 'Product ID из public.products.id / wms.inventory.product_id. Приходит из RabbitMQ поля wild.';
+
+
+--
+-- Name: COLUMN stock_reservation_orders.external_order_id; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.stock_reservation_orders.external_order_id IS 'Внешний order_id. По бизнес-правилу 1 order_id = 1 штука товара.';
+
+
+--
+-- Name: COLUMN stock_reservation_orders.is_reserved; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.stock_reservation_orders.is_reserved IS 'true = заказ держит активный резерв, false = резерв снят.';
+
+
+--
+-- Name: COLUMN stock_reservation_orders.reserved_qty; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON COLUMN wms.stock_reservation_orders.reserved_qty IS 'Количество в резерве. В MVP всегда 1, но поле оставлено для будущего расширения.';
+
+
+--
+-- Name: stock_reservation_orders_reservation_order_id_seq; Type: SEQUENCE; Schema: wms; Owner: -
+--
+
+CREATE SEQUENCE wms.stock_reservation_orders_reservation_order_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: stock_reservation_orders_reservation_order_id_seq; Type: SEQUENCE OWNED BY; Schema: wms; Owner: -
+--
+
+ALTER SEQUENCE wms.stock_reservation_orders_reservation_order_id_seq OWNED BY wms.stock_reservation_orders.reservation_order_id;
 
 
 --
@@ -1958,6 +2399,40 @@ CREATE VIEW wms.v_container_details AS
 --
 
 COMMENT ON VIEW wms.v_container_details IS 'Детальная информация о контейнерах с их содержимым в JSON формате. Показывает что лежит в каждом контейнере. Использование: SELECT * FROM wms.v_container_details WHERE qr_code = ''QR-00001'';';
+
+
+--
+-- Name: v_product_availability; Type: VIEW; Schema: wms; Owner: -
+--
+
+CREATE VIEW wms.v_product_availability AS
+ WITH physical AS (
+         SELECT inventory.product_id,
+            sum(inventory.quantity) AS physical_qty
+           FROM wms.inventory
+          WHERE ((inventory.status)::text = 'available'::text)
+          GROUP BY inventory.product_id
+        ), reserved AS (
+         SELECT stock_reservation_orders.product_id,
+            sum(stock_reservation_orders.reserved_qty) AS reserved_qty
+           FROM wms.stock_reservation_orders
+          WHERE (stock_reservation_orders.is_reserved = true)
+          GROUP BY stock_reservation_orders.product_id
+        )
+ SELECT COALESCE(p.product_id, (r.product_id)::character varying) AS product_id,
+    COALESCE(p.physical_qty, (0)::numeric) AS physical_qty,
+    COALESCE(r.reserved_qty, (0)::numeric) AS reserved_qty,
+    (COALESCE(p.physical_qty, (0)::numeric) - COALESCE(r.reserved_qty, (0)::numeric)) AS free_qty,
+    GREATEST((COALESCE(r.reserved_qty, (0)::numeric) - COALESCE(p.physical_qty, (0)::numeric)), (0)::numeric) AS shortage_qty
+   FROM (physical p
+     FULL JOIN reserved r ON ((r.product_id = (p.product_id)::text)));
+
+
+--
+-- Name: VIEW v_product_availability; Type: COMMENT; Schema: wms; Owner: -
+--
+
+COMMENT ON VIEW wms.v_product_availability IS 'Расчет доступности товара: физический available остаток минус активные мягкие резервы. free_qty может быть отрицательным и показывает нехватку.';
 
 
 --
@@ -2201,6 +2676,20 @@ ALTER TABLE ONLY wms.inventory_snapshots ALTER COLUMN snapshot_id SET DEFAULT ne
 
 
 --
+-- Name: kit_operation_items item_id; Type: DEFAULT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.kit_operation_items ALTER COLUMN item_id SET DEFAULT nextval('wms.kit_operation_items_item_id_seq'::regclass);
+
+
+--
+-- Name: kit_operations operation_id; Type: DEFAULT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.kit_operations ALTER COLUMN operation_id SET DEFAULT nextval('wms.kit_operations_operation_id_seq'::regclass);
+
+
+--
 -- Name: locations location_id; Type: DEFAULT; Schema: wms; Owner: -
 --
 
@@ -2222,10 +2711,31 @@ ALTER TABLE ONLY wms.notifications ALTER COLUMN notification_id SET DEFAULT next
 
 
 --
+-- Name: operation_locations operation_location_id; Type: DEFAULT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.operation_locations ALTER COLUMN operation_location_id SET DEFAULT nextval('wms.operation_locations_operation_location_id_seq'::regclass);
+
+
+--
 -- Name: receipt_items receipt_item_id; Type: DEFAULT; Schema: wms; Owner: -
 --
 
 ALTER TABLE ONLY wms.receipt_items ALTER COLUMN receipt_item_id SET DEFAULT nextval('wms.receipt_items_receipt_item_id_seq'::regclass);
+
+
+--
+-- Name: stock_reservation_events reservation_event_id; Type: DEFAULT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.stock_reservation_events ALTER COLUMN reservation_event_id SET DEFAULT nextval('wms.stock_reservation_events_reservation_event_id_seq'::regclass);
+
+
+--
+-- Name: stock_reservation_orders reservation_order_id; Type: DEFAULT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.stock_reservation_orders ALTER COLUMN reservation_order_id SET DEFAULT nextval('wms.stock_reservation_orders_reservation_order_id_seq'::regclass);
 
 
 --
@@ -2240,6 +2750,22 @@ ALTER TABLE ONLY wms.task_items ALTER COLUMN item_id SET DEFAULT nextval('wms.ta
 --
 
 ALTER TABLE ONLY wms.tasks ALTER COLUMN task_id SET DEFAULT nextval('wms.tasks_task_id_seq'::regclass);
+
+
+--
+-- Name: movements chk_movements_has_side; Type: CHECK CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE wms.movements
+    ADD CONSTRAINT chk_movements_has_side CHECK (((from_location_id IS NOT NULL) OR (to_location_id IS NOT NULL))) NOT VALID;
+
+
+--
+-- Name: movements chk_movements_quantity_positive; Type: CHECK CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE wms.movements
+    ADD CONSTRAINT chk_movements_quantity_positive CHECK ((quantity > (0)::numeric)) NOT VALID;
 
 
 --
@@ -2299,6 +2825,22 @@ ALTER TABLE ONLY wms.inventory_snapshots
 
 
 --
+-- Name: kit_operation_items kit_operation_items_pkey; Type: CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.kit_operation_items
+    ADD CONSTRAINT kit_operation_items_pkey PRIMARY KEY (item_id);
+
+
+--
+-- Name: kit_operations kit_operations_pkey; Type: CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.kit_operations
+    ADD CONSTRAINT kit_operations_pkey PRIMARY KEY (operation_id);
+
+
+--
 -- Name: locations locations_location_code_key; Type: CONSTRAINT; Schema: wms; Owner: -
 --
 
@@ -2323,11 +2865,35 @@ ALTER TABLE ONLY wms.notifications
 
 
 --
+-- Name: operation_locations operation_locations_pkey; Type: CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.operation_locations
+    ADD CONSTRAINT operation_locations_pkey PRIMARY KEY (operation_location_id);
+
+
+--
 -- Name: receipt_items receipt_items_pkey; Type: CONSTRAINT; Schema: wms; Owner: -
 --
 
 ALTER TABLE ONLY wms.receipt_items
     ADD CONSTRAINT receipt_items_pkey PRIMARY KEY (receipt_item_id);
+
+
+--
+-- Name: stock_reservation_events stock_reservation_events_pkey; Type: CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.stock_reservation_events
+    ADD CONSTRAINT stock_reservation_events_pkey PRIMARY KEY (reservation_event_id);
+
+
+--
+-- Name: stock_reservation_orders stock_reservation_orders_pkey; Type: CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.stock_reservation_orders
+    ADD CONSTRAINT stock_reservation_orders_pkey PRIMARY KEY (reservation_order_id);
 
 
 --
@@ -2368,6 +2934,14 @@ ALTER TABLE ONLY wms.inventory
 
 ALTER TABLE ONLY wms.receipt_items
     ADD CONSTRAINT uq_receipt_guid_product UNIQUE (guid, product_id);
+
+
+--
+-- Name: stock_reservation_orders uq_stock_reservation_order; Type: CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.stock_reservation_orders
+    ADD CONSTRAINT uq_stock_reservation_order UNIQUE (source_type, product_id, external_order_id);
 
 
 --
@@ -2454,7 +3028,16 @@ CREATE INDEX idx_fbs_shipment_items_shipment_id ON wms.fbs_shipment_items USING 
 CREATE INDEX idx_fbs_shipment_items_status ON wms.fbs_shipment_items USING btree (status);
 
 
+--
+-- Name: idx_fbs_shipments_source_received_at; Type: INDEX; Schema: wms; Owner: -
+--
+
 CREATE INDEX idx_fbs_shipments_source_received_at ON wms.fbs_shipments USING btree (source, received_at DESC);
+
+
+--
+-- Name: idx_fbs_shipments_source_status; Type: INDEX; Schema: wms; Owner: -
+--
 
 CREATE INDEX idx_fbs_shipments_source_status ON wms.fbs_shipments USING btree (source, status);
 
@@ -2499,6 +3082,69 @@ CREATE INDEX idx_inventory_product_location ON wms.inventory USING btree (produc
 --
 
 CREATE INDEX idx_inventory_status ON wms.inventory USING btree (status);
+
+
+--
+-- Name: idx_kit_operation_items_movement; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_kit_operation_items_movement ON wms.kit_operation_items USING btree (movement_id) WHERE (movement_id IS NOT NULL);
+
+
+--
+-- Name: idx_kit_operation_items_operation; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_kit_operation_items_operation ON wms.kit_operation_items USING btree (operation_id);
+
+
+--
+-- Name: idx_kit_operation_items_product; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_kit_operation_items_product ON wms.kit_operation_items USING btree (product_id);
+
+
+--
+-- Name: idx_kit_operations_created_at; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_kit_operations_created_at ON wms.kit_operations USING btree (created_at DESC);
+
+
+--
+-- Name: idx_kit_operations_location; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_kit_operations_location ON wms.kit_operations USING btree (location_id);
+
+
+--
+-- Name: idx_kit_operations_operation_location; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_kit_operations_operation_location ON wms.kit_operations USING btree (operation_location_id);
+
+
+--
+-- Name: idx_kit_operations_product; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_kit_operations_product ON wms.kit_operations USING btree (kit_product_id);
+
+
+--
+-- Name: idx_kit_operations_status; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_kit_operations_status ON wms.kit_operations USING btree (status);
+
+
+--
+-- Name: idx_kit_operations_type; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_kit_operations_type ON wms.kit_operations USING btree (operation_type);
 
 
 --
@@ -2558,6 +3204,13 @@ CREATE INDEX idx_movements_from_location ON ONLY wms.movements USING btree (from
 
 
 --
+-- Name: idx_movements_kit_operation; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_movements_kit_operation ON ONLY wms.movements USING btree (source_id, created_at) WHERE ((source_type)::text = 'kit_operation'::text);
+
+
+--
 -- Name: idx_movements_product; Type: INDEX; Schema: wms; Owner: -
 --
 
@@ -2569,6 +3222,13 @@ CREATE INDEX idx_movements_product ON ONLY wms.movements USING btree (product_id
 --
 
 CREATE INDEX idx_movements_product_created ON ONLY wms.movements USING btree (product_id, created_at);
+
+
+--
+-- Name: idx_movements_source; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_movements_source ON ONLY wms.movements USING btree (source_type, source_id, created_at);
 
 
 --
@@ -2614,6 +3274,27 @@ CREATE INDEX idx_notifications_user ON wms.notifications USING btree (user_id, i
 
 
 --
+-- Name: idx_operation_locations_location; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_operation_locations_location ON wms.operation_locations USING btree (location_id);
+
+
+--
+-- Name: idx_operation_locations_location_code; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_operation_locations_location_code ON wms.operation_locations USING btree (location_code);
+
+
+--
+-- Name: idx_operation_locations_operation_active; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_operation_locations_operation_active ON wms.operation_locations USING btree (operation_code, is_active);
+
+
+--
 -- Name: idx_receipt_items_guid; Type: INDEX; Schema: wms; Owner: -
 --
 
@@ -2653,6 +3334,97 @@ CREATE INDEX idx_snapshots_location ON wms.inventory_snapshots USING btree (loca
 --
 
 CREATE INDEX idx_snapshots_product ON wms.inventory_snapshots USING btree (product_id);
+
+
+--
+-- Name: idx_stock_reservation_events_external_order; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_stock_reservation_events_external_order ON wms.stock_reservation_events USING btree (external_order_id);
+
+
+--
+-- Name: idx_stock_reservation_events_processing_result; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_stock_reservation_events_processing_result ON wms.stock_reservation_events USING btree (processing_result);
+
+
+--
+-- Name: idx_stock_reservation_events_product; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_stock_reservation_events_product ON wms.stock_reservation_events USING btree (product_id);
+
+
+--
+-- Name: idx_stock_reservation_events_product_received_at; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_stock_reservation_events_product_received_at ON wms.stock_reservation_events USING btree (product_id, event_received_at DESC);
+
+
+--
+-- Name: idx_stock_reservation_events_received_at; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_stock_reservation_events_received_at ON wms.stock_reservation_events USING btree (event_received_at DESC);
+
+
+--
+-- Name: idx_stock_reservation_events_status; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_stock_reservation_events_status ON wms.stock_reservation_events USING btree (external_status);
+
+
+--
+-- Name: idx_stock_reservation_orders_external_order; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_stock_reservation_orders_external_order ON wms.stock_reservation_orders USING btree (external_order_id);
+
+
+--
+-- Name: idx_stock_reservation_orders_is_reserved; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_stock_reservation_orders_is_reserved ON wms.stock_reservation_orders USING btree (is_reserved);
+
+
+--
+-- Name: idx_stock_reservation_orders_last_event_at; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_stock_reservation_orders_last_event_at ON wms.stock_reservation_orders USING btree (last_event_at);
+
+
+--
+-- Name: idx_stock_reservation_orders_product; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_stock_reservation_orders_product ON wms.stock_reservation_orders USING btree (product_id);
+
+
+--
+-- Name: idx_stock_reservation_orders_product_reserved; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_stock_reservation_orders_product_reserved ON wms.stock_reservation_orders USING btree (product_id, is_reserved);
+
+
+--
+-- Name: idx_stock_reservation_orders_stale_active; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_stock_reservation_orders_stale_active ON wms.stock_reservation_orders USING btree (last_event_at) WHERE (is_reserved = true);
+
+
+--
+-- Name: idx_stock_reservation_orders_status; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX idx_stock_reservation_orders_status ON wms.stock_reservation_orders USING btree (external_status);
 
 
 --
@@ -2768,6 +3540,20 @@ CREATE INDEX movements_2026_01_product_id_idx ON wms.movements_2026_01 USING btr
 
 
 --
+-- Name: movements_2026_01_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_01_source_id_created_at_idx ON wms.movements_2026_01 USING btree (source_id, created_at) WHERE ((source_type)::text = 'kit_operation'::text);
+
+
+--
+-- Name: movements_2026_01_source_type_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_01_source_type_source_id_created_at_idx ON wms.movements_2026_01 USING btree (source_type, source_id, created_at);
+
+
+--
 -- Name: movements_2026_01_to_location_id_idx; Type: INDEX; Schema: wms; Owner: -
 --
 
@@ -2814,6 +3600,20 @@ CREATE INDEX movements_2026_02_product_id_created_at_idx ON wms.movements_2026_0
 --
 
 CREATE INDEX movements_2026_02_product_id_idx ON wms.movements_2026_02 USING btree (product_id);
+
+
+--
+-- Name: movements_2026_02_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_02_source_id_created_at_idx ON wms.movements_2026_02 USING btree (source_id, created_at) WHERE ((source_type)::text = 'kit_operation'::text);
+
+
+--
+-- Name: movements_2026_02_source_type_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_02_source_type_source_id_created_at_idx ON wms.movements_2026_02 USING btree (source_type, source_id, created_at);
 
 
 --
@@ -2866,6 +3666,20 @@ CREATE INDEX movements_2026_03_product_id_idx ON wms.movements_2026_03 USING btr
 
 
 --
+-- Name: movements_2026_03_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_03_source_id_created_at_idx ON wms.movements_2026_03 USING btree (source_id, created_at) WHERE ((source_type)::text = 'kit_operation'::text);
+
+
+--
+-- Name: movements_2026_03_source_type_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_03_source_type_source_id_created_at_idx ON wms.movements_2026_03 USING btree (source_type, source_id, created_at);
+
+
+--
 -- Name: movements_2026_03_to_location_id_idx; Type: INDEX; Schema: wms; Owner: -
 --
 
@@ -2912,6 +3726,20 @@ CREATE INDEX movements_2026_04_product_id_created_at_idx ON wms.movements_2026_0
 --
 
 CREATE INDEX movements_2026_04_product_id_idx ON wms.movements_2026_04 USING btree (product_id);
+
+
+--
+-- Name: movements_2026_04_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_04_source_id_created_at_idx ON wms.movements_2026_04 USING btree (source_id, created_at) WHERE ((source_type)::text = 'kit_operation'::text);
+
+
+--
+-- Name: movements_2026_04_source_type_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_04_source_type_source_id_created_at_idx ON wms.movements_2026_04 USING btree (source_type, source_id, created_at);
 
 
 --
@@ -2964,6 +3792,20 @@ CREATE INDEX movements_2026_05_product_id_idx ON wms.movements_2026_05 USING btr
 
 
 --
+-- Name: movements_2026_05_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_05_source_id_created_at_idx ON wms.movements_2026_05 USING btree (source_id, created_at) WHERE ((source_type)::text = 'kit_operation'::text);
+
+
+--
+-- Name: movements_2026_05_source_type_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_05_source_type_source_id_created_at_idx ON wms.movements_2026_05 USING btree (source_type, source_id, created_at);
+
+
+--
 -- Name: movements_2026_05_to_location_id_idx; Type: INDEX; Schema: wms; Owner: -
 --
 
@@ -3010,6 +3852,20 @@ CREATE INDEX movements_2026_06_product_id_created_at_idx ON wms.movements_2026_0
 --
 
 CREATE INDEX movements_2026_06_product_id_idx ON wms.movements_2026_06 USING btree (product_id);
+
+
+--
+-- Name: movements_2026_06_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_06_source_id_created_at_idx ON wms.movements_2026_06 USING btree (source_id, created_at) WHERE ((source_type)::text = 'kit_operation'::text);
+
+
+--
+-- Name: movements_2026_06_source_type_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_06_source_type_source_id_created_at_idx ON wms.movements_2026_06 USING btree (source_type, source_id, created_at);
 
 
 --
@@ -3062,6 +3918,20 @@ CREATE INDEX movements_2026_07_product_id_idx ON wms.movements_2026_07 USING btr
 
 
 --
+-- Name: movements_2026_07_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_07_source_id_created_at_idx ON wms.movements_2026_07 USING btree (source_id, created_at) WHERE ((source_type)::text = 'kit_operation'::text);
+
+
+--
+-- Name: movements_2026_07_source_type_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_07_source_type_source_id_created_at_idx ON wms.movements_2026_07 USING btree (source_type, source_id, created_at);
+
+
+--
 -- Name: movements_2026_07_to_location_id_idx; Type: INDEX; Schema: wms; Owner: -
 --
 
@@ -3108,6 +3978,20 @@ CREATE INDEX movements_2026_08_product_id_created_at_idx ON wms.movements_2026_0
 --
 
 CREATE INDEX movements_2026_08_product_id_idx ON wms.movements_2026_08 USING btree (product_id);
+
+
+--
+-- Name: movements_2026_08_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_08_source_id_created_at_idx ON wms.movements_2026_08 USING btree (source_id, created_at) WHERE ((source_type)::text = 'kit_operation'::text);
+
+
+--
+-- Name: movements_2026_08_source_type_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_08_source_type_source_id_created_at_idx ON wms.movements_2026_08 USING btree (source_type, source_id, created_at);
 
 
 --
@@ -3160,6 +4044,20 @@ CREATE INDEX movements_2026_09_product_id_idx ON wms.movements_2026_09 USING btr
 
 
 --
+-- Name: movements_2026_09_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_09_source_id_created_at_idx ON wms.movements_2026_09 USING btree (source_id, created_at) WHERE ((source_type)::text = 'kit_operation'::text);
+
+
+--
+-- Name: movements_2026_09_source_type_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_09_source_type_source_id_created_at_idx ON wms.movements_2026_09 USING btree (source_type, source_id, created_at);
+
+
+--
 -- Name: movements_2026_09_to_location_id_idx; Type: INDEX; Schema: wms; Owner: -
 --
 
@@ -3206,6 +4104,20 @@ CREATE INDEX movements_2026_10_product_id_created_at_idx ON wms.movements_2026_1
 --
 
 CREATE INDEX movements_2026_10_product_id_idx ON wms.movements_2026_10 USING btree (product_id);
+
+
+--
+-- Name: movements_2026_10_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_10_source_id_created_at_idx ON wms.movements_2026_10 USING btree (source_id, created_at) WHERE ((source_type)::text = 'kit_operation'::text);
+
+
+--
+-- Name: movements_2026_10_source_type_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_10_source_type_source_id_created_at_idx ON wms.movements_2026_10 USING btree (source_type, source_id, created_at);
 
 
 --
@@ -3258,6 +4170,20 @@ CREATE INDEX movements_2026_11_product_id_idx ON wms.movements_2026_11 USING btr
 
 
 --
+-- Name: movements_2026_11_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_11_source_id_created_at_idx ON wms.movements_2026_11 USING btree (source_id, created_at) WHERE ((source_type)::text = 'kit_operation'::text);
+
+
+--
+-- Name: movements_2026_11_source_type_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_11_source_type_source_id_created_at_idx ON wms.movements_2026_11 USING btree (source_type, source_id, created_at);
+
+
+--
 -- Name: movements_2026_11_to_location_id_idx; Type: INDEX; Schema: wms; Owner: -
 --
 
@@ -3307,10 +4233,38 @@ CREATE INDEX movements_2026_12_product_id_idx ON wms.movements_2026_12 USING btr
 
 
 --
+-- Name: movements_2026_12_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_12_source_id_created_at_idx ON wms.movements_2026_12 USING btree (source_id, created_at) WHERE ((source_type)::text = 'kit_operation'::text);
+
+
+--
+-- Name: movements_2026_12_source_type_source_id_created_at_idx; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE INDEX movements_2026_12_source_type_source_id_created_at_idx ON wms.movements_2026_12 USING btree (source_type, source_id, created_at);
+
+
+--
 -- Name: movements_2026_12_to_location_id_idx; Type: INDEX; Schema: wms; Owner: -
 --
 
 CREATE INDEX movements_2026_12_to_location_id_idx ON wms.movements_2026_12 USING btree (to_location_id);
+
+
+--
+-- Name: uq_operation_locations_active_operation_location; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_operation_locations_active_operation_location ON wms.operation_locations USING btree (operation_code, location_id) WHERE (is_active = true);
+
+
+--
+-- Name: uq_operation_locations_operation_location_scope; Type: INDEX; Schema: wms; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_operation_locations_operation_location_scope ON wms.operation_locations USING btree (operation_code, location_id, scope);
 
 
 --
@@ -3353,6 +4307,20 @@ ALTER INDEX wms.idx_movements_product_created ATTACH PARTITION wms.movements_202
 --
 
 ALTER INDEX wms.idx_movements_product ATTACH PARTITION wms.movements_2026_01_product_id_idx;
+
+
+--
+-- Name: movements_2026_01_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_kit_operation ATTACH PARTITION wms.movements_2026_01_source_id_created_at_idx;
+
+
+--
+-- Name: movements_2026_01_source_type_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_source ATTACH PARTITION wms.movements_2026_01_source_type_source_id_created_at_idx;
 
 
 --
@@ -3405,6 +4373,20 @@ ALTER INDEX wms.idx_movements_product ATTACH PARTITION wms.movements_2026_02_pro
 
 
 --
+-- Name: movements_2026_02_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_kit_operation ATTACH PARTITION wms.movements_2026_02_source_id_created_at_idx;
+
+
+--
+-- Name: movements_2026_02_source_type_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_source ATTACH PARTITION wms.movements_2026_02_source_type_source_id_created_at_idx;
+
+
+--
 -- Name: movements_2026_02_to_location_id_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
 --
 
@@ -3451,6 +4433,20 @@ ALTER INDEX wms.idx_movements_product_created ATTACH PARTITION wms.movements_202
 --
 
 ALTER INDEX wms.idx_movements_product ATTACH PARTITION wms.movements_2026_03_product_id_idx;
+
+
+--
+-- Name: movements_2026_03_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_kit_operation ATTACH PARTITION wms.movements_2026_03_source_id_created_at_idx;
+
+
+--
+-- Name: movements_2026_03_source_type_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_source ATTACH PARTITION wms.movements_2026_03_source_type_source_id_created_at_idx;
 
 
 --
@@ -3503,6 +4499,20 @@ ALTER INDEX wms.idx_movements_product ATTACH PARTITION wms.movements_2026_04_pro
 
 
 --
+-- Name: movements_2026_04_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_kit_operation ATTACH PARTITION wms.movements_2026_04_source_id_created_at_idx;
+
+
+--
+-- Name: movements_2026_04_source_type_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_source ATTACH PARTITION wms.movements_2026_04_source_type_source_id_created_at_idx;
+
+
+--
 -- Name: movements_2026_04_to_location_id_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
 --
 
@@ -3549,6 +4559,20 @@ ALTER INDEX wms.idx_movements_product_created ATTACH PARTITION wms.movements_202
 --
 
 ALTER INDEX wms.idx_movements_product ATTACH PARTITION wms.movements_2026_05_product_id_idx;
+
+
+--
+-- Name: movements_2026_05_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_kit_operation ATTACH PARTITION wms.movements_2026_05_source_id_created_at_idx;
+
+
+--
+-- Name: movements_2026_05_source_type_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_source ATTACH PARTITION wms.movements_2026_05_source_type_source_id_created_at_idx;
 
 
 --
@@ -3601,6 +4625,20 @@ ALTER INDEX wms.idx_movements_product ATTACH PARTITION wms.movements_2026_06_pro
 
 
 --
+-- Name: movements_2026_06_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_kit_operation ATTACH PARTITION wms.movements_2026_06_source_id_created_at_idx;
+
+
+--
+-- Name: movements_2026_06_source_type_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_source ATTACH PARTITION wms.movements_2026_06_source_type_source_id_created_at_idx;
+
+
+--
 -- Name: movements_2026_06_to_location_id_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
 --
 
@@ -3647,6 +4685,20 @@ ALTER INDEX wms.idx_movements_product_created ATTACH PARTITION wms.movements_202
 --
 
 ALTER INDEX wms.idx_movements_product ATTACH PARTITION wms.movements_2026_07_product_id_idx;
+
+
+--
+-- Name: movements_2026_07_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_kit_operation ATTACH PARTITION wms.movements_2026_07_source_id_created_at_idx;
+
+
+--
+-- Name: movements_2026_07_source_type_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_source ATTACH PARTITION wms.movements_2026_07_source_type_source_id_created_at_idx;
 
 
 --
@@ -3699,6 +4751,20 @@ ALTER INDEX wms.idx_movements_product ATTACH PARTITION wms.movements_2026_08_pro
 
 
 --
+-- Name: movements_2026_08_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_kit_operation ATTACH PARTITION wms.movements_2026_08_source_id_created_at_idx;
+
+
+--
+-- Name: movements_2026_08_source_type_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_source ATTACH PARTITION wms.movements_2026_08_source_type_source_id_created_at_idx;
+
+
+--
 -- Name: movements_2026_08_to_location_id_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
 --
 
@@ -3745,6 +4811,20 @@ ALTER INDEX wms.idx_movements_product_created ATTACH PARTITION wms.movements_202
 --
 
 ALTER INDEX wms.idx_movements_product ATTACH PARTITION wms.movements_2026_09_product_id_idx;
+
+
+--
+-- Name: movements_2026_09_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_kit_operation ATTACH PARTITION wms.movements_2026_09_source_id_created_at_idx;
+
+
+--
+-- Name: movements_2026_09_source_type_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_source ATTACH PARTITION wms.movements_2026_09_source_type_source_id_created_at_idx;
 
 
 --
@@ -3797,6 +4877,20 @@ ALTER INDEX wms.idx_movements_product ATTACH PARTITION wms.movements_2026_10_pro
 
 
 --
+-- Name: movements_2026_10_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_kit_operation ATTACH PARTITION wms.movements_2026_10_source_id_created_at_idx;
+
+
+--
+-- Name: movements_2026_10_source_type_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_source ATTACH PARTITION wms.movements_2026_10_source_type_source_id_created_at_idx;
+
+
+--
 -- Name: movements_2026_10_to_location_id_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
 --
 
@@ -3846,6 +4940,20 @@ ALTER INDEX wms.idx_movements_product ATTACH PARTITION wms.movements_2026_11_pro
 
 
 --
+-- Name: movements_2026_11_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_kit_operation ATTACH PARTITION wms.movements_2026_11_source_id_created_at_idx;
+
+
+--
+-- Name: movements_2026_11_source_type_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_source ATTACH PARTITION wms.movements_2026_11_source_type_source_id_created_at_idx;
+
+
+--
 -- Name: movements_2026_11_to_location_id_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
 --
 
@@ -3892,6 +5000,20 @@ ALTER INDEX wms.idx_movements_product_created ATTACH PARTITION wms.movements_202
 --
 
 ALTER INDEX wms.idx_movements_product ATTACH PARTITION wms.movements_2026_12_product_id_idx;
+
+
+--
+-- Name: movements_2026_12_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_kit_operation ATTACH PARTITION wms.movements_2026_12_source_id_created_at_idx;
+
+
+--
+-- Name: movements_2026_12_source_type_source_id_created_at_idx; Type: INDEX ATTACH; Schema: wms; Owner: -
+--
+
+ALTER INDEX wms.idx_movements_source ATTACH PARTITION wms.movements_2026_12_source_type_source_id_created_at_idx;
 
 
 --
@@ -3951,10 +5073,24 @@ CREATE TRIGGER trg_move_container_inventory AFTER UPDATE OF location_id ON wms.c
 
 
 --
+-- Name: operation_locations trg_operation_locations_updated_at; Type: TRIGGER; Schema: wms; Owner: -
+--
+
+CREATE TRIGGER trg_operation_locations_updated_at BEFORE UPDATE ON wms.operation_locations FOR EACH ROW EXECUTE FUNCTION wms.update_updated_at_column();
+
+
+--
 -- Name: receipt_items trg_receipt_items_updated_at; Type: TRIGGER; Schema: wms; Owner: -
 --
 
 CREATE TRIGGER trg_receipt_items_updated_at BEFORE UPDATE ON wms.receipt_items FOR EACH ROW EXECUTE FUNCTION wms.update_inventory_timestamp();
+
+
+--
+-- Name: stock_reservation_orders trg_stock_reservation_orders_updated_at; Type: TRIGGER; Schema: wms; Owner: -
+--
+
+CREATE TRIGGER trg_stock_reservation_orders_updated_at BEFORE UPDATE ON wms.stock_reservation_orders FOR EACH ROW EXECUTE FUNCTION wms.update_updated_at_column();
 
 
 --
@@ -4027,6 +5163,46 @@ ALTER TABLE ONLY wms.inventory
 
 
 --
+-- Name: kit_operation_items fk_kit_operation_item_operation; Type: FK CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.kit_operation_items
+    ADD CONSTRAINT fk_kit_operation_item_operation FOREIGN KEY (operation_id) REFERENCES wms.kit_operations(operation_id) ON DELETE CASCADE;
+
+
+--
+-- Name: kit_operation_items fk_kit_operation_item_product; Type: FK CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.kit_operation_items
+    ADD CONSTRAINT fk_kit_operation_item_product FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: kit_operations fk_kit_operation_location; Type: FK CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.kit_operations
+    ADD CONSTRAINT fk_kit_operation_location FOREIGN KEY (location_id) REFERENCES wms.locations(location_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: kit_operations fk_kit_operation_product; Type: FK CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.kit_operations
+    ADD CONSTRAINT fk_kit_operation_product FOREIGN KEY (kit_product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: kit_operations fk_kit_operations_operation_location; Type: FK CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.kit_operations
+    ADD CONSTRAINT fk_kit_operations_operation_location FOREIGN KEY (operation_location_id) REFERENCES wms.operation_locations(operation_location_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: movements fk_movement_from_location; Type: FK CONSTRAINT; Schema: wms; Owner: -
 --
 
@@ -4051,6 +5227,14 @@ ALTER TABLE wms.movements
 
 
 --
+-- Name: operation_locations fk_operation_locations_location; Type: FK CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.operation_locations
+    ADD CONSTRAINT fk_operation_locations_location FOREIGN KEY (location_id) REFERENCES wms.locations(location_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: containers fk_parent_container; Type: FK CONSTRAINT; Schema: wms; Owner: -
 --
 
@@ -4072,6 +5256,14 @@ ALTER TABLE ONLY wms.locations
 
 ALTER TABLE ONLY wms.receipt_items
     ADD CONSTRAINT fk_receipt_product FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: stock_reservation_orders fk_stock_reservation_product; Type: FK CONSTRAINT; Schema: wms; Owner: -
+--
+
+ALTER TABLE ONLY wms.stock_reservation_orders
+    ADD CONSTRAINT fk_stock_reservation_product FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
 
 
 --
@@ -4157,4 +5349,6 @@ ALTER TABLE ONLY wms.tasks
 --
 -- PostgreSQL database dump complete
 --
+
+\unrestrict g11SeWnLY19L5j56w2dL60Ju6WZ5br47Y9BMO5Nu3NnKaQ7Uuaod2F9MB4jLF0b
 

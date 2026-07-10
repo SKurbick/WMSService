@@ -77,8 +77,9 @@
 
 - `operation_locations.operation_code='kit_operations'` и `scope='direct'` определяют разрешённые локации комплектации.
 - `operation_locations.scope` должен быть `direct` для текущего MVP.
-- `operation_locations` не должно иметь дублей по `(operation_code, location_id, scope)`.
+- `operation_locations` не должно иметь дублей по `(operation_code, location_id, scope)`; это должен обеспечивать unique index `uq_operation_locations_operation_location_scope`.
 - `POST /api/kit-operations` должен проверять активную строку `operation_locations` перед проверкой остатков и созданием movements.
+- Для kit operations нельзя требовать `locations.level=5`; допустима любая активная WMS location, явно разрешённая в `operation_locations`.
 - Direct scope означает, что расходные остатки ищутся только по `inventory.location_id = operation_locations.location_id`; дочерние адреса не учитываются.
 - `kit_operations.operation_location_id` должен ссылаться на использованную разрешённую локацию.
 - `kit_operations.operation_type` должен быть `assembly` или `disassembly`.
@@ -88,3 +89,5 @@
 - `kit_operation_items.quantity_per_kit > 0` и `total_quantity > 0`.
 - `kit_operation_items.movement_id` должен указывать на созданный movement, но FK не enforced, потому что parent `wms.movements` не имеет PK/unique constraint.
 - Для write flow kit operations приложение обязано использовать transaction, advisory lock по `kit_product_id + location_id` и row lock расходных inventory rows.
+- Kit operations должны менять остатки только через insert в `wms.movements`; прямой update/insert/delete `wms.inventory` в этом flow запрещен.
+- Kit operations MVP расходует только loose stock: `status='available'`, `batch_number IS NULL`, `container_code IS NULL`.
