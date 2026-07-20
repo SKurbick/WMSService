@@ -133,3 +133,38 @@ WHERE
             OR m.to_location_id IS NULL
         )
     );
+-- Re-sorting: completed operations must have exactly two items and both roles.
+SELECT o.operation_id, count(i.item_id) AS item_count
+FROM wms.re_sorting_operations o LEFT JOIN wms.re_sorting_operation_items i USING(operation_id)
+WHERE o.status='completed' GROUP BY o.operation_id HAVING count(i.item_id) <> 2;
+
+SELECT o.operation_id
+FROM wms.re_sorting_operations o LEFT JOIN wms.re_sorting_operation_items i USING(operation_id)
+WHERE o.status='completed' GROUP BY o.operation_id
+HAVING count(*) FILTER (WHERE i.role='source_outgoing') <> 1
+    OR count(*) FILTER (WHERE i.role='target_incoming') <> 1;
+
+-- Items without a movement identity or whose partitioned movement is absent.
+SELECT * FROM wms.re_sorting_operation_items WHERE movement_id IS NULL OR movement_created_at IS NULL;
+SELECT i.* FROM wms.re_sorting_operation_items i
+LEFT JOIN wms.movements m ON m.movement_id=i.movement_id AND m.created_at=i.movement_created_at
+WHERE i.movement_id IS NOT NULL AND m.movement_id IS NULL;
+
+-- Movement source linkage must match operation/item.
+SELECT i.item_id,m.movement_id FROM wms.re_sorting_operation_items i
+JOIN wms.movements m ON m.movement_id=i.movement_id AND m.created_at=i.movement_created_at
+WHERE m.source_type <> 're_sorting_operation' OR m.source_id <> i.operation_id
+   OR m.source_item_id <> i.item_id OR m.movement_type <> 're_sorting';
+
+-- The two directed deltas must net to zero and quantities must agree.
+SELECT i.operation_id, sum(CASE WHEN i.role='source_outgoing' THEN -m.quantity ELSE m.quantity END) AS net_delta
+FROM wms.re_sorting_operation_items i JOIN wms.movements m
+ ON m.movement_id=i.movement_id AND m.created_at=i.movement_created_at
+GROUP BY i.operation_id HAVING sum(CASE WHEN i.role='source_outgoing' THEN -m.quantity ELSE m.quantity END) <> 0;
+SELECT operation_id,min(quantity),max(quantity) FROM wms.re_sorting_operation_items
+GROUP BY operation_id HAVING min(quantity) <> max(quantity);
+
+-- Active re-sorting permissions may not reference inactive locations.
+SELECT ol.* FROM wms.operation_locations ol JOIN wms.locations l USING(location_id)
+WHERE ol.operation_code='re_sorting_operations' AND ol.scope='direct'
+  AND ol.is_active=TRUE AND l.is_active=FALSE;

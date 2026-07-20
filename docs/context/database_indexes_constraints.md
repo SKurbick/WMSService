@@ -78,3 +78,7 @@ Notifications: `(user_id, is_read)`, `created_at DESC`, `notification_type`. Sna
 - `wms.kit_operation_items`: PK `item_id`; FK на `wms.kit_operations(operation_id)` и `public.products(id)`; checks для `role`, `quantity_per_kit > 0`, `total_quantity > 0`.
 - Индексы: `idx_kit_operations_created_at`, `idx_kit_operations_filters`, `idx_kit_operations_operation_location`, `idx_kit_operation_items_operation`.
 - FK `kit_operation_items.movement_id -> wms.movements` не добавлен, потому что parent `wms.movements` не имеет PK/unique constraint.
+
+## Re-sorting migration
+
+`20260715_add_re_sorting_operations.sql` добавляет product/location/allow-list FK, checks различающихся SKU, положительного quantity, непустых reason/author, допустимых status/role, unique `(operation_id, role)`, audit/search indexes и updated_at trigger. FK items→movements не добавлен из-за partitioned parent без устойчивого PK/unique.

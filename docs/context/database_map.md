@@ -143,3 +143,10 @@ Snapshot поступлений из 1С: `receipt_item_id`, `guid`, `product_id
 ## FBS source (2026-06-14)
 
 `wms.fbs_shipments.source varchar(30) NOT NULL DEFAULT standard` различает standard и external-detected потоки. Constraint разрешает только `standard/external_detected`; добавлены индексы `(source, received_at DESC)` и `(source, status)`.
+
+## Re-sorting tables
+
+- `wms.re_sorting_operations`: header, source/target SKU, integer quantity, direct location snapshot, reason/author/status/metadata/timestamps.
+- `wms.re_sorting_operation_items`: две role-строки и movement identity.
+- `wms.operation_locations`: поддерживает `operation_code=re_sorting_operations`.
+- `wms.movements`: поддерживает `movement_type=re_sorting`, source type `re_sorting_operation`.

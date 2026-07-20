@@ -121,3 +121,7 @@ Write path `POST /api/kit-operations` выполняется в одной DB tr
 `scope='direct'` намеренно не использует subtree: запросы остатков работают по точному `inventory.location_id = operation_locations.location_id`. Container stock и batch stock в MVP не расходуются; расход поддержан только для `status='available'`, `batch_number IS NULL`, `container_code IS NULL`.
 
 Идемпотентный ключ и retry orchestration для kit operations отсутствуют. Повторный HTTP-запрос является новой операцией.
+
+## Re-sorting operations
+
+Модуль следует endpoint/schema/service/repository/query архитектуре kit operations. Write flow использует одну asyncpg connection и transaction. Allow-list блокируется `FOR SHARE`, каноническая пара SKU — transaction advisory lock, source loose inventory — `FOR UPDATE`. Inventory изменяется только movement trigger.

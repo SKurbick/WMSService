@@ -26,6 +26,7 @@ class MovementType(str, Enum):
     UNPACK = "unpack"
     KIT_ASSEMBLY = "kit_assembly"  # Комплектация комплекта
     KIT_DISASSEMBLY = "kit_disassembly"  # Разукомплектация комплекта
+    RE_SORTING = "re_sorting"  # Пересортица
 
 
 class KitOperationType(str, Enum):
@@ -50,6 +51,17 @@ class KitOperationItemRole(str, Enum):
     KIT_RESULT = "kit_result"
     KIT_CONSUMPTION = "kit_consumption"
     COMPONENT_RESULT = "component_result"
+
+
+class ReSortingOperationStatus(str, Enum):
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ReSortingOperationItemRole(str, Enum):
+    SOURCE_OUTGOING = "source_outgoing"
+    TARGET_INCOMING = "target_incoming"
 
 
 class FbsShipmentSource(str, Enum):

@@ -91,3 +91,7 @@
 - Для write flow kit operations приложение обязано использовать transaction, advisory lock по `kit_product_id + location_id` и row lock расходных inventory rows.
 - Kit operations должны менять остатки только через insert в `wms.movements`; прямой update/insert/delete `wms.inventory` в этом flow запрещен.
 - Kit operations MVP расходует только loose stock: `status='available'`, `batch_number IS NULL`, `container_code IS NULL`.
+
+## Re-sorting invariants
+
+Completed операция имеет две разные роли и одинаковое положительное целое quantity. Оба movements имеют `movement_type=re_sorting`, `source_type=re_sorting_operation`, положительное quantity и в сумме направленный net delta 0. Конкурентность защищают canonical-pair advisory lock и source inventory row lock.

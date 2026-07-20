@@ -123,3 +123,7 @@
 - Добавить endpoints управления разрешёнными локациями под `/api/kit-operations/locations`.
 - Зафиксировать unique index `uq_operation_locations_operation_location_scope` на `(operation_code, location_id, scope)`, чтобы одна и та же локация не дублировалась в рамках операции и scope.
 - Не реализовывать subtree mode в MVP: direct scope читает только остатки выбранной `location_id`.
+
+## 2026-07-15 - MVP пересортицы товара
+
+Решено переидентифицировать одинаковое целое количество physical loose stock двумя movements типа `re_sorting` в одной direct-локации. Комплекты считаются обычными SKU, состав не читается. Мягкие резервы, 1С и RabbitMQ не участвуют. Встречные A→B/B→A сериализуются lock key по location и отсортированной паре SKU. Idempotency не вводится.

@@ -108,3 +108,7 @@ MVP работает только с россыпью на выбранной di
 Роли строк `wms.kit_operation_items`: `component_consumption` - списание компонента при `assembly`; `kit_result` - приход готового комплекта при `assembly`; `kit_consumption` - списание комплекта при `disassembly`; `component_result` - приход компонентов при `disassembly`.
 
 Retry/idempotency key для `POST /api/kit-operations` не реализован: повторный одинаковый запрос создаст новую операцию, если пройдет валидацию и остатков достаточно.
+
+## Re-sorting operations MVP (2026-07-15)
+
+Добавлен синхронный HTTP flow пересортицы loose physical stock между двумя разными SKU в одной разрешённой direct-локации. Операция создаёт два movements (`source_outgoing` и `target_incoming`) одинакового целого количества и не вызывает 1С/RabbitMQ.

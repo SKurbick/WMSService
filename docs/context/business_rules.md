@@ -110,3 +110,12 @@
 - Все movements kit operations имеют `source_type='kit_operation'`, `source_id=operation_id`, `source_item_id=item_id` и metadata с ролью строки.
 - Роли строк: `component_consumption` - списание компонента при `assembly`; `kit_result` - приход готового комплекта при `assembly`; `kit_consumption` - списание комплекта при `disassembly`; `component_result` - приход компонентов при `disassembly`.
 - Retry/idempotency key для kit operations не реализован; повторный одинаковый запрос не дедуплицируется на уровне API/БД.
+
+## Пересортица
+
+- From/to существуют, активны и различаются; kit обрабатывается как обычный SKU.
+- Quantity — строго положительное целое; outgoing и incoming равны, направленный net delta равен нулю.
+- Только точная active direct-location из allow-list `re_sorting_operations`; subtree не читается.
+- Расходуется только available loose stock без batch/container; физические мягкие резервы игнорируются.
+- Операция атомарна, создаёт две item-строки и два movements; inventory напрямую не изменяется.
+- Нет вызовов 1С/RabbitMQ и нет idempotency key.

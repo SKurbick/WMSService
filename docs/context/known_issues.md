@@ -103,3 +103,7 @@
 - Retry/idempotency key для kit operations не реализован: повторный одинаковый HTTP-запрос не дедуплицируется.
 - Внешняя синхронизация с 1С для kit operations не выполняется.
 - Recommended next action: перед расширением MVP отдельно спроектировать subtree semantics, расход из контейнеров/партий, idempotency key и внешнюю интеграцию, чтобы не ломать event log `wms.movements`.
+
+## Re-sorting verification limits
+
+Unit/SQL-contract тесты не заменяют integration verification на PostgreSQL с фактическими movement triggers и partitions. Перед production rollout требуется применить миграцию на stage и прогнать atomicity/concurrency scenarios на реальной БД.

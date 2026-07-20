@@ -1,6 +1,8 @@
 """Глобальная обработка исключений"""
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from app.core.exceptions import (
     DomainException,
@@ -21,6 +23,9 @@ from app.core.exceptions import (
     KitOperationNotFoundError,
     KitOperationValidationError,
     KitOperationConflictError,
+    ReSortingOperationNotFoundError,
+    ReSortingOperationValidationError,
+    ReSortingOperationConflictError,
 )
 import logging
 
@@ -35,7 +40,7 @@ def add_exception_handlers(app: FastAPI):
         logger.warning(f"Локация не найдена: {exc}")
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
-            content={"detail": str(exc), "error_code": "LOCATION_NOT_FOUND"},
+            content={"detail": str(exc), "message": str(exc), "error_code": "LOCATION_NOT_FOUND"},
         )
 
     @app.exception_handler(ContainerNotFoundError)
@@ -136,19 +141,16 @@ def add_exception_handlers(app: FastAPI):
             content={"detail": str(exc), "error_code": "NOTIFICATION_NOT_FOUND"},
         )
 
-
     @app.exception_handler(ProductNotFoundError)
     async def product_not_found_handler(request: Request, exc: ProductNotFoundError):
         logger.warning(f"Товар не найден: {exc}")
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
-            content={"detail": str(exc), "error_code": "PRODUCT_NOT_FOUND"},
+            content={"detail": str(exc), "message": str(exc), "error_code": "PRODUCT_NOT_FOUND"},
         )
 
     @app.exception_handler(KitOperationNotFoundError)
-    async def kit_operation_not_found_handler(
-        request: Request, exc: KitOperationNotFoundError
-    ):
+    async def kit_operation_not_found_handler(request: Request, exc: KitOperationNotFoundError):
         logger.warning(f"Операция комплекта не найдена: {exc}")
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -156,9 +158,7 @@ def add_exception_handlers(app: FastAPI):
         )
 
     @app.exception_handler(KitOperationValidationError)
-    async def kit_operation_validation_handler(
-        request: Request, exc: KitOperationValidationError
-    ):
+    async def kit_operation_validation_handler(request: Request, exc: KitOperationValidationError):
         logger.warning(f"Некорректная операция комплекта: {exc}")
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -166,13 +166,63 @@ def add_exception_handlers(app: FastAPI):
         )
 
     @app.exception_handler(KitOperationConflictError)
-    async def kit_operation_conflict_handler(
-        request: Request, exc: KitOperationConflictError
-    ):
+    async def kit_operation_conflict_handler(request: Request, exc: KitOperationConflictError):
         logger.warning(f"Конфликт операции комплекта: {exc}")
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content={"detail": str(exc), "error_code": "KIT_OPERATION_CONFLICT"},
+        )
+
+    @app.exception_handler(ReSortingOperationNotFoundError)
+    async def re_sorting_not_found_handler(request: Request, exc: ReSortingOperationNotFoundError):
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "detail": str(exc),
+                "message": str(exc),
+                "error_code": "RE_SORTING_OPERATION_NOT_FOUND",
+            },
+        )
+
+    @app.exception_handler(ReSortingOperationValidationError)
+    async def re_sorting_validation_handler(
+        request: Request, exc: ReSortingOperationValidationError
+    ):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "detail": str(exc),
+                "message": str(exc),
+                "error_code": "RE_SORTING_OPERATION_VALIDATION_ERROR",
+            },
+        )
+
+    @app.exception_handler(ReSortingOperationConflictError)
+    async def re_sorting_conflict_handler(request: Request, exc: ReSortingOperationConflictError):
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "detail": str(exc),
+                "message": str(exc),
+                "error_code": "RE_SORTING_OPERATION_CONFLICT",
+            },
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_handler(request: Request, exc: RequestValidationError):
+        details = jsonable_encoder(exc.errors())
+        if request.url.path.startswith("/api/re-sorting-operations"):
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                content={
+                    "detail": details,
+                    "message": "Проверьте обязательные поля и формат данных запроса",
+                    "error_code": "RE_SORTING_REQUEST_VALIDATION_ERROR",
+                },
+            )
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": details},
         )
 
     @app.exception_handler(DomainException)
@@ -180,7 +230,7 @@ def add_exception_handlers(app: FastAPI):
         logger.error(f"Доменная ошибка: {exc}")
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"detail": str(exc), "error_code": "DOMAIN_ERROR"},
+            content={"detail": str(exc), "message": str(exc), "error_code": "DOMAIN_ERROR"},
         )
 
     @app.exception_handler(Exception)
@@ -188,5 +238,9 @@ def add_exception_handlers(app: FastAPI):
         logger.exception(f"Необработанная ошибка: {exc}")
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"detail": "Внутренняя ошибка сервера", "error_code": "INTERNAL_ERROR"},
+            content={
+                "detail": "Внутренняя ошибка сервера",
+                "message": "Внутренняя ошибка сервера",
+                "error_code": "INTERNAL_ERROR",
+            },
         )

@@ -138,3 +138,12 @@
 - `GET /api/fbs-shipments/stats?source=standard|external_detected` - статистика по источнику.
 - `GET /api/fbs-shipments/{shipment_id}` - возвращает `source`.
 - `POST /api/fbs-shipments/items/{item_id}/retry` - ручной retry `failed/pending_retry/retry_exhausted` позиции.
+
+## Re-sorting operations
+
+- `GET /api/re-sorting-operations/locations` — allow-list пересортицы.
+- `POST /api/re-sorting-operations/locations` — добавить/реактивировать direct-location.
+- `PATCH /api/re-sorting-operations/locations/{operation_location_id}/deactivate` — деактивировать только re-sorting permission.
+- `POST /api/re-sorting-operations` — атомарно выполнить пересортицу.
+- `GET /api/re-sorting-operations` — журнал с фильтрами и pagination.
+- `GET /api/re-sorting-operations/{operation_id}` — header и две item-строки.

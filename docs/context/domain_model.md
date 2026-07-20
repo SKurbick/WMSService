@@ -235,3 +235,7 @@ Audit всех входящих событий резервов хранится
 `kit_operation_items`: `item_id`, `operation_id`, `role`, `product_id`, `quantity_per_kit`, `total_quantity`, `movement_id`, `movement_created_at`, `created_at`.
 
 Источник состава комплекта - `public.products.kit_components`. Для assembly компоненты списываются, комплект приходуется; для disassembly комплект списывается, компоненты приходуются. Остатки меняются только через `wms.movements` с `movement_type = kit_assembly/kit_disassembly` и `source_type = kit_operation`.
+
+## Re-sorting operation
+
+`wms.re_sorting_operations` — audit header пересортицы; `wms.re_sorting_operation_items` — ровно две строки ролей `source_outgoing`/`target_incoming`. Каждая строка связана с movement посредством `(movement_id, movement_created_at)`. Allow-list хранится в общей `wms.operation_locations` с отдельным operation_code.

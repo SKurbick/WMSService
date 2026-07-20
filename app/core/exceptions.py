@@ -130,6 +130,21 @@ class KitOperationConflictError(DomainException):
     pass
 
 
+# === Re-sorting Operations ===
+
+
+class ReSortingOperationNotFoundError(DomainException):
+    pass
+
+
+class ReSortingOperationValidationError(DomainException):
+    pass
+
+
+class ReSortingOperationConflictError(DomainException):
+    pass
+
+
 # === Tasks ===
 
 
