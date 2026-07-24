@@ -70,6 +70,42 @@ class InventoryNotFoundError(DomainException):
     pass
 
 
+class InventoryHistoryValidationError(DomainException):
+    """Некорректные параметры запроса истории остатков."""
+
+    pass
+
+
+class OperationsHistoryValidationError(DomainException):
+    """Некорректные параметры единого списка операций."""
+
+    pass
+
+
+class OperationsHistoryEventIdError(DomainException):
+    """Некорректный event ID истории операций."""
+
+    pass
+
+
+class OperationsHistoryNotFoundError(DomainException):
+    """Операция по event ID не найдена."""
+
+    pass
+
+
+class ReceiptHistoryValidationError(DomainException):
+    """Некорректный запрос истории поступления."""
+
+    pass
+
+
+class ReceiptHistoryNotFoundError(DomainException):
+    """Документ поступления не найден."""
+
+    pass
+
+
 # === Movements ===
 
 

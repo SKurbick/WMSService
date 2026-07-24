@@ -13,6 +13,9 @@ from app.api.v1.endpoints import (
     fbs_shipments,
     kit_operations,
     re_sorting_operations,
+    inventory_history,
+    operations_history,
+    receipt_history,
 )
 
 api_router = APIRouter()
@@ -29,3 +32,6 @@ api_router.include_router(notifications.router)
 api_router.include_router(fbs_shipments.router, prefix="/fbs-shipments")
 api_router.include_router(kit_operations.router)
 api_router.include_router(re_sorting_operations.router)
+api_router.include_router(inventory_history.router)
+api_router.include_router(operations_history.router)
+api_router.include_router(receipt_history.router)

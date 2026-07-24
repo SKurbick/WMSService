@@ -147,3 +147,55 @@
 - `POST /api/re-sorting-operations` — атомарно выполнить пересортицу.
 - `GET /api/re-sorting-operations` — журнал с фильтрами и pagination.
 - `GET /api/re-sorting-operations/{operation_id}` — header и две item-строки.
+# Дневная история остатков
+
+`GET /api/inventory-history/daily-balances` — read-only восстановление дневного
+`available`-остатка исключительно по `wms.movements`.
+
+Обязательные query parameters: `date_from`, `date_to` (включительно, календарные даты
+`Europe/Moscow`). Необязательные: `product_id`, `location_id`, `include_subtree=false`,
+`limit=100` (1..500), `offset=0`. Максимальный период — 366 дней. Subtree допустим
+только вместе с location; отсутствующая location возвращает 404.
+
+Response содержит метаданные фильтра и пагинации, `total_products`, а также товары с
+`product_id`, nullable `product_name` и полным календарным массивом `days`. День содержит
+`opening_quantity`, `incoming_quantity`, `outgoing_quantity`, `closing_quantity`.
+Пагинация и сортировка применяются к товарам (`product_id ASC`), внутри товара дни идут
+по возрастанию. Пустая выборка возвращает 200 и `items=[]`.
+# Единый список бизнес-операций
+
+`GET /api/operations-history` — read-only список, нормализованный через `UNION ALL`
+четырёх источников: `wms.kit_operations`, `wms.re_sorting_operations`,
+`wms.fbs_shipments` и самостоятельных `wms.movements`.
+
+Обязательные параметры: `date_from`, `date_to` — включительные календарные даты
+`Europe/Moscow`, максимум 366 дней. Необязательные фильтры: `source_type`,
+`operation_type`, `product_id`, точный `location_id`, точный `author`, `status`,
+`limit=100` (1..200), `offset=0`. Сортировка стабильна: `created_at DESC, event_id DESC`;
+пагинация выполняется после UNION.
+
+Source discriminators: `kit_operation`, `re_sorting_operation`, `fbs_shipment`,
+`movement`. Event IDs: `kit_operation:<id>`, `re_sorting:<id>`,
+`fbs_shipment:<id>`, `movement:<movement_id>:<created_at_epoch_us>`.
+
+Kit/re-sorting movements исключаются из самостоятельной ветки по структурному
+`source_type`. FBS movement исключается только при ровно одном совпадении его
+`movement_id` во всей partitioned `wms.movements`. Reason, время, author, document number,
+container code и regex для группировки не используются. Failed/validation_failed FBS
+headers и headers без items остаются в выдаче.
+
+Receipt, task и container business headers в MVP не включены; их не поглощённые
+физические effects видны как самостоятельные movements.
+
+`GET /api/operations-history/{event_id}` открывает typed detail для тех же четырёх
+источников. Форматы: `kit_operation:<id>`, `re_sorting:<id>`, `fbs_shipment:<id>` и
+`movement:<movement_id>:<created_at_epoch_us>`. Некорректный ID возвращает 400,
+отсутствующий объект — 404. Business detail сохраняет header/items даже при потерянной
+или неоднозначной movement-ссылке и сообщает проблему в `warnings`.
+
+# История документа поступления
+
+`GET /api/receipts/{guid}/history?limit=50&offset=0` — read-only история документа.
+Legacy revisions читаются из `public.supply_to_sellers_warehouse`, current snapshot —
+из `wms.receipt_items`. Пагинация применяется к revisions. GUID сравнивается как строка,
+без UUID parsing. Документ, отсутствующий в обоих источниках, возвращает 404.

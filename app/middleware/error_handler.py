@@ -26,6 +26,12 @@ from app.core.exceptions import (
     ReSortingOperationNotFoundError,
     ReSortingOperationValidationError,
     ReSortingOperationConflictError,
+    InventoryHistoryValidationError,
+    OperationsHistoryEventIdError,
+    OperationsHistoryNotFoundError,
+    OperationsHistoryValidationError,
+    ReceiptHistoryNotFoundError,
+    ReceiptHistoryValidationError,
 )
 import logging
 
@@ -57,6 +63,66 @@ def add_exception_handlers(app: FastAPI):
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={"detail": str(exc), "error_code": "INVENTORY_NOT_FOUND"},
+        )
+
+    @app.exception_handler(InventoryHistoryValidationError)
+    async def inventory_history_validation_handler(
+        request: Request, exc: InventoryHistoryValidationError
+    ):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "detail": str(exc),
+                "message": str(exc),
+                "error_code": "INVENTORY_HISTORY_VALIDATION_ERROR",
+            },
+        )
+
+    @app.exception_handler(OperationsHistoryValidationError)
+    async def operations_history_validation_handler(
+        request: Request, exc: OperationsHistoryValidationError
+    ):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "detail": str(exc),
+                "message": str(exc),
+                "error_code": "OPERATIONS_HISTORY_VALIDATION_ERROR",
+            },
+        )
+
+    @app.exception_handler(OperationsHistoryEventIdError)
+    async def operations_history_event_id_handler(
+        request: Request, exc: OperationsHistoryEventIdError
+    ):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc), "error_code": "INVALID_OPERATION_EVENT_ID"},
+        )
+
+    @app.exception_handler(OperationsHistoryNotFoundError)
+    async def operations_history_not_found_handler(
+        request: Request, exc: OperationsHistoryNotFoundError
+    ):
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": str(exc), "error_code": "OPERATION_HISTORY_NOT_FOUND"},
+        )
+
+    @app.exception_handler(ReceiptHistoryValidationError)
+    async def receipt_history_validation_handler(
+        request: Request, exc: ReceiptHistoryValidationError
+    ):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc), "error_code": "RECEIPT_HISTORY_VALIDATION_ERROR"},
+        )
+
+    @app.exception_handler(ReceiptHistoryNotFoundError)
+    async def receipt_history_not_found_handler(request: Request, exc: ReceiptHistoryNotFoundError):
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": str(exc), "error_code": "RECEIPT_HISTORY_NOT_FOUND"},
         )
 
     @app.exception_handler(ParentLocationInactiveError)

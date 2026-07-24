@@ -112,3 +112,48 @@ Retry/idempotency key для `POST /api/kit-operations` не реализова�
 ## Re-sorting operations MVP (2026-07-15)
 
 Добавлен синхронный HTTP flow пересортицы loose physical stock между двумя разными SKU в одной разрешённой direct-локации. Операция создаёт два movements (`source_outgoing` и `target_incoming`) одинакового целого количества и не вызывает 1С/RabbitMQ.
+# Дневная история остатков (2026-07-22)
+
+Добавлен read-only endpoint `GET /api/inventory-history/daily-balances`. Источник расчёта —
+только `wms.movements`; `wms.inventory` и `wms.inventory_snapshots` не читаются. Каждая
+сторона movement становится ledger-строкой (`to_location_id` — плюс/incoming,
+`from_location_id` — минус/outgoing), без allow-list по `movement_type`.
+
+Дневные границы и группировка используют `Europe/Moscow`, период полуоткрытый на уровне
+timestamp и включительный на уровне query dates. Партии, контейнеры, source и movement
+types агрегируются до `product_id + day`. Календарь создаётся `generate_series`, поэтому
+дни без операций присутствуют. Пагинация выполняется по товарам, а не по строкам дней.
+Location scope поддерживает exact и LTREE subtree (`child.path <@ root.path`). Count и
+данные читаются в одной read-only repeatable-read транзакции.
+
+Новых таблиц, snapshots, индексов и миграций не добавлено. Write-сценарии, movements,
+inventory, функции и триггеры не изменялись.
+# Единый список операций (2026-07-22)
+
+Реализован read-only `GET /api/operations-history`. Endpoint объединяет kit operation,
+re-sorting operation, FBS shipment и standalone movement adapters. Все branches приводят
+данные к общему контракту до `UNION ALL`, фильтры pushdown-ятся, итоговая пагинация идёт
+после объединения. Count и page читаются одним DB snapshot в read-only
+`REPEATABLE READ` transaction.
+
+Movement response type остаётся строкой и не зависит от расходящегося write enum.
+Известные DB types отображаются русскими именами, неизвестное историческое значение
+возвращается без ошибки с `operation_name=operation_type`. Количества остаются
+PostgreSQL numeric/Python Decimal до JSON serialization.
+
+Дедупликация только структурная: kit/re-sort по source fields, FBS по однозначному
+movement_id match. Legacy receipt/task/container эвристики отсутствуют. Receipt/task/
+container headers и receipt history не реализованы. Detail adapters kit/re-sorting/FBS/
+movement доступны через `GET /api/operations-history/{event_id}`. Связи kit/re-sorting
+разрешаются по точной паре `(movement_id, movement_created_at)`, FBS — по movement_id с
+обязательным подсчётом кандидатов. Missing/ambiguous links дают typed warning, а не 500.
+DB schema, migrations, triggers, movements/inventory и write flows не изменялись.
+
+# История поступления (2026-07-23)
+
+Добавлен `GET /api/receipts/{guid}/history`. Revision key — точный `COALESCE(
+update_document_datetime, document_created_at, supply_date)`; legacy timestamp считается
+московским local time. Строки без всех дат образуют отдельные `legacy:<id>` revisions.
+Current определяется через `is_valid IS TRUE`, не максимальной датой. Current snapshot
+читается отдельно из `wms.receipt_items`; movements не используются и эвристически не
+связываются. Count, page и items читаются в read-only `REPEATABLE READ` transaction.

@@ -21,6 +21,15 @@ from app.infrastructure.database.repositories.kit_operation_repository import Ki
 from app.infrastructure.database.repositories.re_sorting_operation_repository import (
     ReSortingOperationRepository,
 )
+from app.infrastructure.database.repositories.inventory_history_repository import (
+    InventoryHistoryRepository,
+)
+from app.infrastructure.database.repositories.operations_history_repository import (
+    OperationsHistoryRepository,
+)
+from app.infrastructure.database.repositories.receipt_history_repository import (
+    ReceiptHistoryRepository,
+)
 
 # Services
 from app.core.services.location_service import LocationService
@@ -34,6 +43,9 @@ from app.core.services.notification_service import NotificationService
 from app.core.services.stock_reservation_service import StockReservationService
 from app.core.services.kit_operation_service import KitOperationService
 from app.core.services.re_sorting_operation_service import ReSortingOperationService
+from app.core.services.inventory_history_service import InventoryHistoryService
+from app.core.services.operations_history_service import OperationsHistoryService
+from app.core.services.receipt_history_service import ReceiptHistoryService
 
 
 # === Repositories ===
@@ -57,6 +69,22 @@ def get_inventory_repository(pool: Pool = Depends(get_db_pool)) -> InventoryRepo
 def get_movement_repository(pool: Pool = Depends(get_db_pool)) -> MovementRepository:
     """DI для MovementRepository"""
     return MovementRepository(pool)
+
+
+def get_inventory_history_repository(
+    pool: Pool = Depends(get_db_pool),
+) -> InventoryHistoryRepository:
+    return InventoryHistoryRepository(pool)
+
+
+def get_operations_history_repository(
+    pool: Pool = Depends(get_db_pool),
+) -> OperationsHistoryRepository:
+    return OperationsHistoryRepository(pool)
+
+
+def get_receipt_history_repository(pool: Pool = Depends(get_db_pool)) -> ReceiptHistoryRepository:
+    return ReceiptHistoryRepository(pool)
 
 
 def get_report_repository(pool: Pool = Depends(get_db_pool)) -> ReportRepository:
@@ -102,6 +130,24 @@ def get_movement_service(
 ) -> MovementService:
     """DI для MovementService"""
     return MovementService(movement_repository, location_repository)
+
+
+def get_inventory_history_service(
+    repository: InventoryHistoryRepository = Depends(get_inventory_history_repository),
+) -> InventoryHistoryService:
+    return InventoryHistoryService(repository)
+
+
+def get_operations_history_service(
+    repository: OperationsHistoryRepository = Depends(get_operations_history_repository),
+) -> OperationsHistoryService:
+    return OperationsHistoryService(repository)
+
+
+def get_receipt_history_service(
+    repository: ReceiptHistoryRepository = Depends(get_receipt_history_repository),
+) -> ReceiptHistoryService:
+    return ReceiptHistoryService(repository)
 
 
 def get_report_service(

@@ -127,3 +127,52 @@
 ## 2026-07-15 - MVP пересортицы товара
 
 Решено переидентифицировать одинаковое целое количество physical loose stock двумя movements типа `re_sorting` в одной direct-локации. Комплекты считаются обычными SKU, состав не читается. Мягкие резервы, 1С и RabbitMQ не участвуют. Встречные A→B/B→A сериализуются lock key по location и отсортированной паре SKU. Idempotency не вводится.
+# 2026-07-22 — MVP дневной истории остатков
+
+Дневная история физического available-остатка восстанавливается исключительно из
+`wms.movements` по универсальной ledger-семантике сторон. Решение намеренно не ветвится
+по `movement_type`, поэтому новые типы автоматически учитываются при корректно заданных
+`from_location_id`/`to_location_id`.
+
+Зафиксированы: timezone `Europe/Moscow`; агрегация партий, контейнеров и loose stock до
+товара; отсутствие status-разреза damaged/quarantine; opening из всей ledger-истории до
+начала периода; заполнение пустых дней календарём; пагинация по товарам. Snapshots и
+текущая проекция `wms.inventory` не используются. Согласованность count и страницы при
+конкурентных inserts обеспечивается read-only `REPEATABLE READ` транзакцией.
+
+Новые DB-объекты и индексы не вводятся до фактического EXPLAIN на рабочем объёме.
+# 2026-07-22 — MVP единого списка бизнес-операций
+
+Для `GET /api/operations-history` выбран гибридный read model из четырёх adapters:
+kit operations, re-sorting operations, FBS shipments и standalone movements. Business
+headers receipt/tasks/container operations намеренно не включены из-за отсутствия
+структурной связи с movements; их эффекты не скрываются по эвристикам.
+
+Идентичность standalone movement задаётся парой movement id и UTC epoch microseconds
+created_at, поскольку partitioned parent не имеет global PK/unique по movement_id.
+FBS header является одной list operation независимо от числа items/product groups и
+присутствует также при failed/validation_failed/no-items. Связанный FBS movement
+поглощается только если один movement_id разрешается ровно в одну строку всей таблицы.
+
+Общий synthetic status для movements не вводится. FBS location остаётся null и FBS branch
+не участвует в location filter, поскольку relational location в FBS tables отсутствует.
+Transfer movement с двумя сторонами возвращает null primary location, но location filter
+проверяет обе стороны. Неизвестный строковый movement type не ломает read response.
+
+# 2026-07-22 — Детальная карточка операции
+
+List и detail используют общий read-only codec event ID и mapping названий. Movement
+identity включает `movement_id` и точные UTC epoch microseconds без binary float.
+Prefix выбирает только статический adapter и никогда не становится SQL identifier.
+Kit/re-sorting links проверяются по ID и timestamp, FBS links получают статус
+`not_linked/resolved/missing/ambiguous`. Повреждённая ссылка не скрывает business header:
+ответ остаётся 200 с warnings. Receipt detail, новые FK/индексы и write-изменения отложены.
+
+# 2026-07-23 — Read-only история документа поступления
+
+Legacy `supply_to_sellers_warehouse` является источником immutable source rows истории,
+а `wms.receipt_items` — только current WMS snapshot. Ревизии группируются исключительно
+по точному source timestamp; округление и temporal proximity запрещены. Naive legacy
+timestamps интерпретируются в `Europe/Moscow`. Current revision определяется legacy
+`is_valid`, fallback rows без дат не склеиваются. Receipt-to-movement linking отсутствует.
+Пагинация выполняется по revision headers, items страницы загружаются set-based.
