@@ -29,3 +29,12 @@ class ReceiptHistoryRepository:
                     else []
                 )
                 return snapshot, total, headers, items
+
+    async def get_history_list(self, filters: tuple, limit: int, offset: int):
+        async with self.pool.acquire() as connection:
+            async with connection.transaction(isolation="repeatable_read", readonly=True):
+                counts = await connection.fetchrow(queries.COUNT_RECEIPT_HISTORY_LIST, *filters)
+                rows = await connection.fetch(
+                    queries.GET_RECEIPT_HISTORY_LIST, *filters, limit, offset
+                )
+                return counts, rows

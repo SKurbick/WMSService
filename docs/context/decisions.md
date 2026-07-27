@@ -176,3 +176,12 @@ Legacy `supply_to_sellers_warehouse` является источником immut
 timestamps интерпретируются в `Europe/Moscow`. Current revision определяется legacy
 `is_valid`, fallback rows без дат не склеиваются. Receipt-to-movement linking отсутствует.
 Пагинация выполняется по revision headers, items страницы загружаются set-based.
+
+# 2026-07-27 — List read model поступлений
+
+Список строится UNION ALL двух нормализованных веток: одна строка на точную legacy
+revision и одна строка на WMS-only GUID. WMS snapshot не дублирует legacy document.
+Product filter определяет включение целой revision, а totals всегда считаются по всем
+source rows. Глобальный row_id содержит unpadded base64url GUID; открывать detail по нему
+нельзя — frontend использует исходный guid. Сортировка хронологическая, undated в конце.
+Эвристическое связывание с movements и поля physical effect не вводятся.

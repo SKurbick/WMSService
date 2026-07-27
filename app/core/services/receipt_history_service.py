@@ -1,9 +1,17 @@
 """Сборка typed истории документа поступления."""
 
 from app.core.exceptions import ReceiptHistoryNotFoundError, ReceiptHistoryValidationError
-from app.core.operations_history import datetime_to_epoch_us
+from datetime import date
+
+from app.core.receipt_history_ids import (
+    build_receipt_history_row_id,
+    build_receipt_revision_id,
+    build_receipt_snapshot_row_id,
+)
 from app.core.schemas.receipt_history import (
     ReceiptHistoryResponse,
+    ReceiptHistoryListItem,
+    ReceiptHistoryListResponse,
     ReceiptRevision,
     ReceiptRevisionItem,
     ReceiptSnapshot,
@@ -15,6 +23,8 @@ from app.infrastructure.database.repositories.receipt_history_repository import 
 
 
 class ReceiptHistoryService:
+    SOURCE_TYPES = frozenset({"legacy_revision", "wms_snapshot_only"})
+
     def __init__(self, repository: ReceiptHistoryRepository):
         self.repository = repository
 
@@ -38,11 +48,7 @@ class ReceiptHistoryService:
         for record in header_rows:
             row = dict(record)
             revision_at = row["revision_at"]
-            revision_id = (
-                f"receipt_revision:{datetime_to_epoch_us(revision_at)}"
-                if revision_at is not None
-                else f"receipt_revision:legacy:{row['fallback_id']}"
-            )
+            revision_id = build_receipt_revision_id(revision_at, row["fallback_id"])
             payload = {
                 key: row[key]
                 for key in (
@@ -87,6 +93,73 @@ class ReceiptHistoryService:
             offset=offset,
             current_snapshot=snapshot,
             revisions=revisions,
+        )
+
+    async def list_history(
+        self,
+        date_from: date,
+        date_to: date,
+        source_type: str | None = None,
+        guid: str | None = None,
+        document_number: str | None = None,
+        supplier_name: str | None = None,
+        supplier_code: str | None = None,
+        event_status: str | None = None,
+        author: str | None = None,
+        order_guid: str | None = None,
+        product_id: str | None = None,
+        is_current: bool | None = None,
+        include_undated: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> ReceiptHistoryListResponse:
+        if date_from > date_to:
+            raise ReceiptHistoryValidationError("date_from не может быть позже date_to")
+        if (date_to - date_from).days + 1 > 366:
+            raise ReceiptHistoryValidationError("Период не может превышать 366 календарных дней")
+        if source_type is not None and source_type not in self.SOURCE_TYPES:
+            raise ReceiptHistoryValidationError(f"Неизвестный source_type: {source_type}")
+        if not 1 <= limit <= 100 or offset < 0:
+            raise ReceiptHistoryValidationError("Некорректные limit/offset")
+        filters = (
+            date_from,
+            date_to,
+            source_type,
+            guid,
+            document_number,
+            supplier_name,
+            supplier_code,
+            event_status,
+            author,
+            order_guid,
+            product_id,
+            is_current,
+            include_undated,
+        )
+        counts, rows = await self.repository.get_history_list(filters, limit, offset)
+        items = []
+        for record in rows:
+            row = dict(record)
+            if row["source_type"] == "legacy_revision":
+                row["revision_id"] = build_receipt_revision_id(
+                    row["revision_at"], row["fallback_id"]
+                )
+                row["row_id"] = build_receipt_history_row_id(
+                    row["guid"], row["revision_at"], row["fallback_id"]
+                )
+            else:
+                row["revision_id"] = None
+                row["row_id"] = build_receipt_snapshot_row_id(row["guid"])
+            items.append(ReceiptHistoryListItem.model_validate(row))
+        return ReceiptHistoryListResponse(
+            date_from=date_from,
+            date_to=date_to,
+            timezone="Europe/Moscow",
+            total=counts["total"],
+            total_documents=counts["total_documents"],
+            limit=limit,
+            offset=offset,
+            items=items,
         )
 
     @staticmethod

@@ -157,3 +157,13 @@ update_document_datetime, document_created_at, supply_date)`; legacy timestamp �
 Current определяется через `is_valid IS TRUE`, не максимальной датой. Current snapshot
 читается отдельно из `wms.receipt_items`; movements не используются и эвристически не
 связываются. Count, page и items читаются в read-only `REPEATABLE READ` transaction.
+
+# Список ревизий поступлений (2026-07-27)
+
+Добавлен GET /api/receipts/history для вкладки документов. Legacy branch группируется
+по тому же точному revision key, что detail; WMS-only branch включает только GUID,
+полностью отсутствующие в legacy. Snapshot существующего legacy GUID отражается через
+has_current_snapshot и snapshot_updated_at, но отдельной строкой не становится.
+Undated rows по умолчанию исключены. Переход list → detail выполняется только по GUID.
+Changed/physical/movement fields намеренно отсутствуют: структурной receipt→movement
+связи нет. Count и page читаются одним read-only repeatable-read snapshot.

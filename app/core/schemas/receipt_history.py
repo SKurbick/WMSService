@@ -1,7 +1,8 @@
 """Typed read models истории документа поступления."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_serializer
 
@@ -124,3 +125,51 @@ class ReceiptHistoryResponse(BaseModel):
     revisions: list[ReceiptRevision] = Field(
         description="Страница legacy revisions в порядке current/date/id."
     )
+
+
+class ReceiptHistoryListItem(DecimalJsonModel):
+    row_id: str = Field(description="Глобально стабильный base64url-ключ строки списка.")
+    source_type: Literal["legacy_revision", "wms_snapshot_only"]
+    guid: str = Field(description="GUID для перехода в GET /api/receipts/{guid}/history.")
+    revision_id: str | None = Field(
+        default=None, description="ID legacy revision; null для WMS-only snapshot."
+    )
+    revision_at: datetime | None = Field(
+        default=None, description="Время revision/snapshot; null только у undated legacy."
+    )
+    is_current: bool = Field(description="Legacy bool_or(is_valid); у WMS-only всегда true.")
+    has_current_snapshot: bool
+    snapshot_updated_at: datetime | None = None
+    document_number: str | None = None
+    document_created_at: datetime | None = None
+    supply_date: datetime | None = None
+    update_document_datetime: datetime | None = None
+    event_status: str | None = None
+    supplier_name: str | None = None
+    supplier_code: str | None = None
+    author_of_the_change: str | None = None
+    our_organizations_name: str | None = None
+    order_guid: str | None = None
+    currency: str | None = None
+    invoice_number: str | None = None
+    transport_number: str | None = None
+    item_count: int = Field(description="Количество всех source rows revision/snapshot.")
+    product_count: int = Field(description="Количество уникальных непустых SKU.")
+    total_quantity: Decimal = Field(
+        description="Сумма quantity всех строк, не только filter match."
+    )
+
+    @field_serializer("total_quantity", when_used="json")
+    def serialize_total_quantity(self, value: Decimal) -> int | float:
+        return int(value) if value == value.to_integral_value() else float(value)
+
+
+class ReceiptHistoryListResponse(BaseModel):
+    date_from: date
+    date_to: date
+    timezone: str = Field(default="Europe/Moscow")
+    total: int = Field(description="Строк после фильтров до пагинации.")
+    total_documents: int = Field(description="Уникальных GUID после фильтров.")
+    limit: int
+    offset: int
+    items: list[ReceiptHistoryListItem]

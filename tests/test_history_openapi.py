@@ -6,6 +6,7 @@ from app.api.v1.openapi_history import (
     DETAIL_EXAMPLES,
     OPERATIONS_EXAMPLES,
     RECEIPT_EXAMPLES,
+    RECEIPT_LIST_EXAMPLES,
 )
 from app.core.schemas.inventory_history import DailyBalancesResponse
 from app.core.schemas.operations_history import OperationsHistoryResponse
@@ -19,6 +20,7 @@ PATHS = {
     "/api/operations-history": "list_operations_history",
     "/api/operations-history/{event_id}": "get_operation_history_detail",
     "/api/receipts/{guid}/history": "get_receipt_history",
+    "/api/receipts/history": "list_receipt_history",
 }
 
 
@@ -33,7 +35,10 @@ def test_openapi_http_and_history_routes_are_fully_documented():
         assert operation["summary"]
         assert operation["description"]
         assert operation["tags"] == ["История WMS"]
-        assert {"200", "400", "404", "422", "500"} <= operation["responses"].keys()
+        expected_responses = {"200", "400", "422", "500"}
+        if path != "/api/receipts/history":
+            expected_responses.add("404")
+        assert expected_responses <= operation["responses"].keys()
         assert operation["responses"]["200"]["content"]["application/json"]["schema"]
         assert all(parameter.get("description") for parameter in operation["parameters"])
         operation_ids.append(operation["operationId"])
@@ -78,6 +83,10 @@ def test_all_success_examples_validate_with_runtime_response_models():
         adapter.validate_python(example["value"])
     for example in RECEIPT_EXAMPLES.values():
         ReceiptHistoryResponse.model_validate(example["value"])
+    from app.core.schemas.receipt_history import ReceiptHistoryListResponse
+
+    for example in RECEIPT_LIST_EXAMPLES.values():
+        ReceiptHistoryListResponse.model_validate(example["value"])
 
 
 def test_docs_ui_is_available_without_starting_lifespan():

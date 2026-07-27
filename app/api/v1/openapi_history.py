@@ -352,3 +352,96 @@ RECEIPT_EXAMPLES = {
         },
     },
 }
+
+RECEIPT_LIST_LEGACY_ITEM = {
+    "row_id": "receipt_revision:ZG9jdW1lbnQtZ3VpZA:1784712600000000",
+    "source_type": "legacy_revision",
+    "guid": "document-guid",
+    "revision_id": "receipt_revision:1784712600000000",
+    "revision_at": "2026-07-22T09:30:00+00:00",
+    "is_current": True,
+    "has_current_snapshot": True,
+    "snapshot_updated_at": "2026-07-22T09:30:01+00:00",
+    "document_number": "ПТУ-123",
+    "document_created_at": "2026-07-20T07:00:00+00:00",
+    "supply_date": "2026-07-21T07:00:00+00:00",
+    "update_document_datetime": "2026-07-22T09:30:00+00:00",
+    "event_status": "Проведён",
+    "supplier_name": "Поставщик",
+    "supplier_code": "SUP-1",
+    "author_of_the_change": "Иванов",
+    "our_organizations_name": "Организация",
+    "order_guid": "order-guid",
+    "currency": "RUB",
+    "invoice_number": "INV-123",
+    "transport_number": "TR-55",
+    "item_count": 2,
+    "product_count": 2,
+    "total_quantity": 16,
+}
+RECEIPT_LIST_WMS_ITEM = {
+    **RECEIPT_LIST_LEGACY_ITEM,
+    "row_id": "receipt_snapshot:d21zLW9ubHk",
+    "source_type": "wms_snapshot_only",
+    "guid": "wms-only",
+    "revision_id": None,
+    "invoice_number": None,
+    "transport_number": None,
+    "item_count": 1,
+    "product_count": 1,
+    "total_quantity": 5,
+}
+
+
+def receipt_list_response(items):
+    return {
+        "date_from": "2026-07-01",
+        "date_to": "2026-07-31",
+        "timezone": "Europe/Moscow",
+        "total": len(items),
+        "total_documents": len({item["guid"] for item in items}),
+        "limit": 50,
+        "offset": 0,
+        "items": items,
+    }
+
+
+RECEIPT_LIST_EXAMPLES = {
+    "two_revisions": {
+        "summary": "Две ревизии одного документа",
+        "value": receipt_list_response(
+            [
+                {**RECEIPT_LIST_LEGACY_ITEM, "is_current": True},
+                {
+                    **RECEIPT_LIST_LEGACY_ITEM,
+                    "row_id": "receipt_revision:ZG9jdW1lbnQtZ3VpZA:1784626200000000",
+                    "revision_id": "receipt_revision:1784626200000000",
+                    "revision_at": "2026-07-21T09:30:00+00:00",
+                    "is_current": False,
+                },
+            ]
+        ),
+    },
+    "documents": {
+        "summary": "Несколько документов",
+        "value": receipt_list_response(
+            [
+                RECEIPT_LIST_LEGACY_ITEM,
+                {
+                    **RECEIPT_LIST_LEGACY_ITEM,
+                    "guid": "document-2",
+                    "row_id": "receipt_revision:ZG9jdW1lbnQtMg:1784712600000000",
+                },
+            ]
+        ),
+    },
+    "wms_only": {
+        "summary": "WMS-only snapshot",
+        "value": receipt_list_response([RECEIPT_LIST_WMS_ITEM]),
+    },
+    "empty": {"summary": "Пустой результат", "value": receipt_list_response([])},
+    "current": {
+        "summary": "Фильтр is_current=true",
+        "value": receipt_list_response([RECEIPT_LIST_LEGACY_ITEM]),
+    },
+}

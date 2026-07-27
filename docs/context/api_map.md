@@ -195,6 +195,13 @@ Receipt, task и container business headers в MVP не включены; их �
 
 # История документа поступления
 
+GET /api/receipts/history — периодический список для frontend-таблицы. Одна строка
+представляет legacy_revision либо wms_snapshot_only; один GUID может повторяться.
+Период относится к revision/snapshot time в Europe/Moscow, undated legacy доступны
+через include_undated=true. Фильтры и пагинация применяются после группировки.
+Для открытия detail frontend передаёт item.guid в /api/receipts/{guid}/history;
+row_id служит только глобальным ключом строки.
+
 `GET /api/receipts/{guid}/history?limit=50&offset=0` — read-only история документа.
 Legacy revisions читаются из `public.supply_to_sellers_warehouse`, current snapshot —
 из `wms.receipt_items`. Пагинация применяется к revisions. GUID сравнивается как строка,
