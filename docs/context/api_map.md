@@ -126,6 +126,7 @@
 
 Префикс: `/api/fbs-shipments`.
 
+- `POST /api/fbs-shipments` - принять непустой массив FBS-позиций по HTTP, сохранить с `source=http_api` и синхронно передать в общий pipeline списания.
 - `GET /api/fbs-shipments/stats` - статистика по статусам.
 - `GET /api/fbs-shipments` - список записей журнала.
 - `GET /api/fbs-shipments/{shipment_id}` - детали записи с raw message и items.
@@ -134,8 +135,8 @@
 
 ## FBS source и item retry (2026-06-14)
 
-- `GET /api/fbs-shipments?source=standard|external_detected` - фильтр истории по источнику.
-- `GET /api/fbs-shipments/stats?source=standard|external_detected` - статистика по источнику.
+- `GET /api/fbs-shipments?source=standard|external_detected|http_api` - фильтр истории по источнику.
+- `GET /api/fbs-shipments/stats?source=standard|external_detected|http_api` - статистика по источнику.
 - `GET /api/fbs-shipments/{shipment_id}` - возвращает `source`.
 - `POST /api/fbs-shipments/items/{item_id}/retry` - ручной retry `failed/pending_retry/retry_exhausted` позиции.
 

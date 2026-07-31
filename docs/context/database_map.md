@@ -142,7 +142,7 @@ Snapshot поступлений из 1С: `receipt_item_id`, `guid`, `product_id
 
 ## FBS source (2026-06-14)
 
-`wms.fbs_shipments.source varchar(30) NOT NULL DEFAULT standard` различает standard и external-detected потоки. Constraint разрешает только `standard/external_detected`; добавлены индексы `(source, received_at DESC)` и `(source, status)`.
+`wms.fbs_shipments.source varchar(30) NOT NULL DEFAULT standard` различает standard, external-detected и HTTP API потоки. Constraint разрешает только `standard/external_detected/http_api`; добавлены индексы `(source, received_at DESC)` и `(source, status)`.
 
 ## Re-sorting tables
 

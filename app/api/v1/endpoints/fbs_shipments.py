@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from asyncpg import Pool
 import asyncpg.exceptions
 from pydantic import ValidationError
@@ -39,6 +39,191 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ФБС-отгрузки"])
 
 _VALID_STATUSES = {"processing", "completed", "partially_completed", "failed", "validation_failed"}
+
+_HTTP_FBS_REQUEST_SCHEMA = {
+    "type": "array",
+    "minItems": 1,
+    "items": WriteOffAccordingToFBS.model_json_schema(),
+}
+
+_HTTP_FBS_REQUEST_EXAMPLE = [
+    {
+        "author": "http-client",
+        "supply_id": "SUP-100",
+        "product_id": "testwild",
+        "warehouse_id": 1,
+        "delivery_type": "fbs",
+        "wb_warehouse": "Коледино",
+        "account": "marketplace-account",
+        "quantity": 2,
+        "assembly_tasks": ["10001", "10002"],
+    }
+]
+
+_HTTP_FBS_RESPONSE_EXAMPLES = {
+    "completed": {
+        "summary": "Все позиции успешно списаны",
+        "value": {
+            "shipment_id": 123,
+            "received_at": "2026-07-31T12:00:00+03:00",
+            "raw_message": _HTTP_FBS_REQUEST_EXAMPLE,
+            "total_items": 1,
+            "status": "completed",
+            "source": "http_api",
+            "error_message": None,
+            "completed_at": "2026-07-31T12:00:01+03:00",
+            "items": [
+                {
+                    "item_id": 456,
+                    "product_id": "testwild",
+                    "quantity": 2,
+                    "author": "http-client",
+                    "supply_id": "SUP-100",
+                    "account": "marketplace-account",
+                    "assembly_tasks": ["10001", "10002"],
+                    "status": "success",
+                    "error_message": None,
+                    "retry_count": 0,
+                    "movement_id": 789,
+                    "created_at": "2026-07-31T12:00:00+03:00",
+                    "updated_at": "2026-07-31T12:00:01+03:00",
+                }
+            ],
+        },
+    },
+    "pending_retry": {
+        "summary": "Запрос принят, позиция ожидает retry из-за недостатка остатка",
+        "value": {
+            "shipment_id": 124,
+            "received_at": "2026-07-31T12:05:00+03:00",
+            "raw_message": _HTTP_FBS_REQUEST_EXAMPLE,
+            "total_items": 1,
+            "status": "processing",
+            "source": "http_api",
+            "error_message": None,
+            "completed_at": None,
+            "items": [
+                {
+                    "item_id": 457,
+                    "product_id": "testwild",
+                    "quantity": 2,
+                    "author": "http-client",
+                    "supply_id": "SUP-100",
+                    "account": "marketplace-account",
+                    "assembly_tasks": ["10001", "10002"],
+                    "status": "pending_retry",
+                    "error_message": "Недостаточно остатка для списания",
+                    "retry_count": 0,
+                    "movement_id": None,
+                    "created_at": "2026-07-31T12:05:00+03:00",
+                    "updated_at": "2026-07-31T12:05:01+03:00",
+                }
+            ],
+        },
+    },
+    "partially_completed": {
+        "summary": "Часть товарных групп списана, часть завершилась ошибкой",
+        "value": {
+            "shipment_id": 125,
+            "received_at": "2026-07-31T12:10:00+03:00",
+            "raw_message": _HTTP_FBS_REQUEST_EXAMPLE,
+            "total_items": 2,
+            "status": "partially_completed",
+            "source": "http_api",
+            "error_message": None,
+            "completed_at": "2026-07-31T12:10:02+03:00",
+            "items": [
+                {
+                    "item_id": 458,
+                    "product_id": "testwild",
+                    "quantity": 2,
+                    "author": "http-client",
+                    "supply_id": "SUP-100",
+                    "account": "marketplace-account",
+                    "assembly_tasks": ["10001", "10002"],
+                    "status": "success",
+                    "error_message": None,
+                    "retry_count": 0,
+                    "movement_id": 790,
+                    "created_at": "2026-07-31T12:10:00+03:00",
+                    "updated_at": "2026-07-31T12:10:01+03:00",
+                },
+                {
+                    "item_id": 459,
+                    "product_id": "testwild-2",
+                    "quantity": 1,
+                    "author": "http-client",
+                    "supply_id": "SUP-100",
+                    "account": "marketplace-account",
+                    "assembly_tasks": ["10003"],
+                    "status": "failed",
+                    "error_message": "Задания не найдены: [10003]",
+                    "retry_count": 0,
+                    "movement_id": None,
+                    "created_at": "2026-07-31T12:10:00+03:00",
+                    "updated_at": "2026-07-31T12:10:02+03:00",
+                },
+            ],
+        },
+    },
+    "failed": {
+        "summary": "Все позиции приняты, но завершились бизнес-ошибкой",
+        "value": {
+            "shipment_id": 126,
+            "received_at": "2026-07-31T12:15:00+03:00",
+            "raw_message": _HTTP_FBS_REQUEST_EXAMPLE,
+            "total_items": 1,
+            "status": "failed",
+            "source": "http_api",
+            "error_message": None,
+            "completed_at": "2026-07-31T12:15:01+03:00",
+            "items": [
+                {
+                    "item_id": 460,
+                    "product_id": "testwild",
+                    "quantity": 2,
+                    "author": "http-client",
+                    "supply_id": "SUP-100",
+                    "account": "marketplace-account",
+                    "assembly_tasks": ["10001", "10002"],
+                    "status": "failed",
+                    "error_message": "Задания уже отгружены: [10001, 10002]",
+                    "retry_count": 0,
+                    "movement_id": None,
+                    "created_at": "2026-07-31T12:15:00+03:00",
+                    "updated_at": "2026-07-31T12:15:01+03:00",
+                }
+            ],
+        },
+    },
+}
+
+_HTTP_FBS_VALIDATION_EXAMPLES = {
+    "domain_validation_failed": {
+        "summary": "Payload сохранён в журнале как validation_failed",
+        "value": {
+            "detail": {
+                "shipment_id": 127,
+                "error": (
+                    "quantity (2) должно быть равно количеству "
+                    "assembly_tasks (1)"
+                ),
+            }
+        },
+    },
+    "invalid_json": {
+        "summary": "JSON невозможно разобрать, shipment не создаётся",
+        "value": {
+            "detail": [
+                {
+                    "type": "json_invalid",
+                    "loc": ["body", 10],
+                    "msg": "JSON decode error",
+                }
+            ]
+        },
+    },
+}
 
 
 def _parse_retry_raw_message(raw_message: Any) -> List[dict]:
@@ -192,6 +377,106 @@ async def list_shipments(
 
     items = [FbsShipmentListItem(**dict(r)) for r in rows]
     return FbsShipmentListResponse(total=total, limit=limit, offset=offset, items=items)
+
+
+# ─────────────────────────────────────────────
+#  POST /fbs-shipments
+# ─────────────────────────────────────────────
+
+
+@router.post(
+    "",
+    response_model=FbsShipmentDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Принять FBS-отгрузку по HTTP",
+    description=(
+        "Принимает тот же JSON-массив FBS-позиций, что RabbitMQ consumer, "
+        "сохраняет исходное сообщение с source=http_api и передаёт его "
+        "в общий pipeline списания. Синтаксически корректный JSON сохраняется "
+        "до доменной валидации."
+    ),
+    responses={
+        201: {
+            "description": (
+                "Shipment создан. Итог обработки определяется полями "
+                "shipment.status и items[].status."
+            ),
+            "content": {
+                "application/json": {"examples": _HTTP_FBS_RESPONSE_EXAMPLES},
+            },
+        },
+        422: {
+            "description": (
+                "Ошибка JSON или доменной схемы. Синтаксически корректный JSON "
+                "сохраняется как validation_failed и возвращает shipment_id."
+            ),
+            "content": {
+                "application/json": {"examples": _HTTP_FBS_VALIDATION_EXAMPLES},
+            },
+        },
+        500: {
+            "description": (
+                "Техническая ошибка БД или сервиса. Shipment мог быть создан "
+                "до возникновения ошибки."
+            ),
+        },
+    },
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": _HTTP_FBS_REQUEST_SCHEMA,
+                    "example": _HTTP_FBS_REQUEST_EXAMPLE,
+                },
+            },
+        },
+    },
+)
+async def create_shipment_via_http(
+    raw: Any = Body(...),
+    pool: Pool = Depends(get_db_pool),
+):
+    repo = FbsShipmentRepository()
+    total_items = len(raw) if isinstance(raw, list) else 0
+
+    async with pool.acquire() as conn:
+        shipment_id = await repo.create_shipment(
+            conn,
+            raw_message=raw,
+            total_items=total_items,
+            source=FbsShipmentSource.HTTP_API.value,
+        )
+
+    try:
+        if isinstance(raw, list) and not raw:
+            raise ValueError("raw_message должен быть непустым JSON array")
+        parsed_raw, items = _parse_retry_items(raw)
+    except (ValidationError, ValueError, TypeError) as exc:
+        error_str = str(exc)
+        async with pool.acquire() as conn:
+            await repo.mark_validation_failed(conn, shipment_id, error_str)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"shipment_id": shipment_id, "error": error_str},
+        ) from exc
+
+    await handle_write_off_fbs(
+        items,
+        pool,
+        raw_message=parsed_raw,
+        shipment_id=shipment_id,
+        source=FbsShipmentSource.HTTP_API,
+    )
+
+    async with pool.acquire() as conn:
+        shipment = await repo.get_shipment_by_id(conn, shipment_id)
+        item_rows = await repo.get_items_by_shipment_id(conn, shipment_id)
+
+    return FbsShipmentDetailResponse(
+        **dict(shipment),
+        items=[FbsShipmentItemResponse(**dict(row)) for row in item_rows],
+    )
 
 
 # ─────────────────────────────────────────────

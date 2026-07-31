@@ -79,7 +79,7 @@ RabbitMQ обработка разделена по очередям:
 
 - Добавлен независимый consumer очереди `EXTERNAL_FBS_QUEUE` (`wms.fbs.external_write_off` по умолчанию), управляемый `EXTERNAL_FBS_CONSUMER_ENABLED`.
 - Standard и external-detected сообщения используют общий `consume_fbs_queue` и `handle_write_off_fbs`.
-- Источник хранится в `wms.fbs_shipments.source`: `standard` или `external_detected`.
+- Источник хранится в `wms.fbs_shipments.source`: `standard`, `external_detected` или `http_api`.
 - Добавлен ручной retry позиции: `POST /api/fbs-shipments/items/{item_id}/retry`.
 
 ## Kit operations MVP (2026-07-07)
@@ -167,3 +167,13 @@ has_current_snapshot и snapshot_updated_at, но отдельной строк�
 Undated rows по умолчанию исключены. Переход list → detail выполняется только по GUID.
 Changed/physical/movement fields намеренно отсутствуют: структурной receipt→movement
 связи нет. Count и page читаются одним read-only repeatable-read snapshot.
+
+## HTTP FBS ingestion (2026-07-31)
+
+- `POST /api/fbs-shipments` принимает непустой JSON-массив существующей схемы
+  `WriteOffAccordingToFBS`.
+- Синтаксически корректный payload сохраняется до доменной валидации с
+  `source=http_api`; ошибка схемы сохраняется как `validation_failed`.
+- Валидный payload синхронно использует общий `handle_write_off_fbs`, включая
+  группировку, транзакционную обработку product group, movements и retry.
+- DB constraint для `http_api` применяется владельцем БД вручную.

@@ -64,7 +64,7 @@ Notifications: `(user_id, is_read)`, `created_at DESC`, `notification_type`. Sna
 
 ## FBS source (2026-06-14)
 
-- `chk_fbs_shipments_source`: `source IN (standard, external_detected)`.
+- `chk_fbs_shipments_source`: `source IN (standard, external_detected, http_api)`.
 - `idx_fbs_shipments_source_received_at(source, received_at DESC)`.
 - `idx_fbs_shipments_source_status(source, status)`.
 

@@ -69,6 +69,7 @@ class FbsShipmentSource(str, Enum):
 
     STANDARD = "standard"
     EXTERNAL_DETECTED = "external_detected"
+    HTTP_API = "http_api"
 
 
 class ContainerStatus(str, Enum):

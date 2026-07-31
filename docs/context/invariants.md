@@ -68,7 +68,7 @@
 
 ## External FBS invariants
 
-- `fbs_shipments.source` принимает только `standard` и `external_detected`.
+- `fbs_shipments.source` принимает только `standard`, `external_detected` и `http_api`.
 - Успешно обработанный FBS item обязан иметь `movement_id`.
 - Все items одной успешно обработанной product group получают один `movement_id`.
 - `assembly_task.is_shipped` и movement атомарны; повторное списание assembly task запрещено.

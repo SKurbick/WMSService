@@ -56,6 +56,7 @@
 - Уведомление approvers и логика `public.user_permissions`.
 - FIFO/FEFO рекомендации.
 - FBS consumer, RabbitMQ ACK/NACK, Pydantic validation, группировка по `product_id`, retry worker/backoff.
+- HTTP FBS adapter сохраняет синтаксически корректный JSON до доменной валидации с `source=http_api`; невалидная схема фиксируется как `validation_failed`.
 - Атомарность отметки `public.assembly_task.is_shipped` и создания movement.
 
 ## Мягкие резервы товаров

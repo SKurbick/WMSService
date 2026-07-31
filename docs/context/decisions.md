@@ -185,3 +185,15 @@ Product filter определяет включение целой revision, а t
 source rows. Глобальный row_id содержит unpadded base64url GUID; открывать detail по нему
 нельзя — frontend использует исходный guid. Сортировка хронологическая, undated в конце.
 Эвристическое связывание с movements и поля physical effect не вводятся.
+
+## 2026-07-31 - HTTP FBS использует общий pipeline
+
+Решено принимать FBS-отгрузки через `POST /api/fbs-shipments` в том же контракте
+`WriteOffAccordingToFBS`, что RabbitMQ consumers. HTTP является тонким адаптером:
+shipment сохраняется до доменной валидации, получает отдельный `source='http_api'`, а
+валидный payload передаётся в существующий `handle_write_off_fbs`.
+
+Транзакционная граница product group, movement/inventory flow, статусы и retry не
+изменяются. Отдельный idempotency key не добавляется; защита повторного физического
+списания остаётся основанной на атомарном захвате assembly tasks. Ограничение
+`chk_fbs_shipments_source` владелец БД изменяет вручную до выкладки приложения.
