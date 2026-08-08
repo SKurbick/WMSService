@@ -11,7 +11,11 @@ from app.core.schemas.write_off_fbs import WriteOffAccordingToFBS
 from app.core.schemas.movement import MovementCreate
 from app.core.enums import FbsShipmentSource, MovementType
 from app.core.services.movement_service import MovementService
-from app.core.exceptions import AssemblyTasksAlreadyProcessedError, FbsShipmentItemsUpdateError
+from app.core.exceptions import (
+    AssemblyTasksAlreadyProcessedError,
+    FbsShipmentItemsUpdateError,
+    InconsistentFbsShipmentError,
+)
 from app.infrastructure.database.repositories.movement_repository import MovementRepository
 from app.infrastructure.database.repositories.location_repository import LocationRepository
 from app.infrastructure.database.repositories.fbs_shipment_repository import FbsShipmentRepository
@@ -27,6 +31,7 @@ VALIDATE_ASSEMBLY_TASKS = """
 SELECT task_id, is_shipped
 FROM public.assembly_task
 WHERE task_id = ANY($1::bigint[])
+FOR UPDATE
 """
 
 MARK_ASSEMBLY_TASKS_SHIPPED = """
@@ -118,8 +123,34 @@ async def _process_shipment_group(
         asyncpg.exceptions.CheckViolationError: нехватка остатка.
         AssemblyTaskValidationError: задания не найдены или уже отгружены.
     """
+    locked_items = await shipment_repo.lock_items_for_processing(conn, item_ids=item_ids)
+    locked_item_ids = {row["item_id"] for row in locked_items}
+    if locked_item_ids != set(item_ids):
+        raise FbsShipmentItemsUpdateError(
+            f"Не удалось заблокировать все FBS items: expected={sorted(item_ids)}, "
+            f"locked={sorted(locked_item_ids)}"
+        )
+    shipment_ids = {row["shipment_id"] for row in locked_items}
+    if len(shipment_ids) != 1:
+        raise FbsShipmentItemsUpdateError(
+            f"FBS items product group принадлежат разным shipments: {sorted(shipment_ids)}"
+        )
+
     if settings.FBS_VALIDATE_ASSEMBLY_TASKS:
-        await validate_assembly_tasks(all_assembly_tasks, conn)
+        try:
+            await validate_assembly_tasks(all_assembly_tasks, conn)
+        except AssemblyTasksAlreadyProcessedError as exc:
+            linked_tasks = await shipment_repo.get_success_linked_assembly_tasks(
+                conn, assembly_tasks=all_assembly_tasks
+            )
+            expected_tasks = {str(task_id) for task_id in all_assembly_tasks}
+            if not expected_tasks.issubset(linked_tasks):
+                missing_links = sorted(expected_tasks - linked_tasks)
+                raise InconsistentFbsShipmentError(
+                    "Обнаружено неконсистентное FBS-списание: сборочные задания "
+                    f"уже отгружены, но отсутствует success item с movement_id: {missing_links}"
+                ) from exc
+            raise
     else:
         logger.warning(
             "Проверка assembly_tasks отключена настройкой "
@@ -145,6 +176,7 @@ async def _process_shipment_group(
         raise FbsShipmentItemsUpdateError(
             f"Не удалось обновить все FBS items: expected={sorted(item_ids)}, updated={sorted(updated_item_ids)}"
         )
+    await shipment_repo.update_shipment_status(conn, shipment_ids.pop())
     return movement_id
 
 

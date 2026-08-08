@@ -7,7 +7,11 @@ from app.api.v1.endpoints import fbs_shipments as endpoint
 from app import consumer
 from app.consumer import consume_fbs_queue, start_consumer, start_external_fbs_consumer
 from app.core.enums import FbsShipmentSource
-from app.core.exceptions import AssemblyTasksAlreadyProcessedError, FbsShipmentItemsUpdateError
+from app.core.exceptions import (
+    AssemblyTasksAlreadyProcessedError,
+    FbsShipmentItemsUpdateError,
+    InconsistentFbsShipmentError,
+)
 from app.shared.config import settings
 from app.handlers.write_off_fbs_handler import (
     MARK_ASSEMBLY_TASKS_SHIPPED,
@@ -15,6 +19,11 @@ from app.handlers.write_off_fbs_handler import (
     validate_assembly_tasks,
 )
 from app.infrastructure.database.repositories import fbs_shipment_repository as repository
+
+
+@pytest.fixture(autouse=True)
+def enable_assembly_task_validation(monkeypatch):
+    monkeypatch.setattr(settings, "FBS_VALIDATE_ASSEMBLY_TASKS", True)
 
 
 class AssemblyTaskConnection:
@@ -39,11 +48,25 @@ class FakeMovementService:
 
 
 class FakeShipmentRepository:
-    def __init__(self, updated_item_ids):
+    def __init__(self, updated_item_ids, linked_tasks=None):
         self.updated_item_ids = updated_item_ids
+        self.linked_tasks = set(linked_tasks or [])
+        self.shipment_status_updates = []
+
+    async def lock_items_for_processing(self, conn, *, item_ids):
+        return [
+            {"item_id": item_id, "shipment_id": 77, "status": "new", "movement_id": None}
+            for item_id in item_ids
+        ]
+
+    async def get_success_linked_assembly_tasks(self, conn, *, assembly_tasks):
+        return self.linked_tasks
 
     async def mark_items_success_in_transaction(self, conn, **kwargs):
         return self.updated_item_ids
+
+    async def update_shipment_status(self, conn, shipment_id):
+        self.shipment_status_updates.append(shipment_id)
 
 
 @pytest.mark.asyncio
@@ -60,7 +83,7 @@ async def test_partial_assembly_task_claim_blocks_movement():
 @pytest.mark.asyncio
 async def test_partial_claim_does_not_create_movement():
     movement_service = FakeMovementService()
-    with pytest.raises(AssemblyTasksAlreadyProcessedError):
+    with pytest.raises(InconsistentFbsShipmentError):
         await _process_shipment_group(
             conn=AssemblyTaskConnection([10]),
             product_id="SKU-1",
@@ -68,7 +91,7 @@ async def test_partial_claim_does_not_create_movement():
             all_assembly_tasks=["10", "11"],
             author="test",
             movement_service=movement_service,
-            shipment_repo=FakeShipmentRepository([100]),
+            shipment_repo=FakeShipmentRepository([100], linked_tasks=["10"]),
             item_ids=[100],
         )
     assert movement_service.calls == 0
@@ -77,6 +100,7 @@ async def test_partial_claim_does_not_create_movement():
 @pytest.mark.asyncio
 async def test_successful_group_marks_all_items_with_created_movement():
     movement_service = FakeMovementService()
+    shipment_repo = FakeShipmentRepository([100, 101])
     movement_id = await _process_shipment_group(
         conn=AssemblyTaskConnection([10, 11]),
         product_id="SKU-1",
@@ -84,11 +108,12 @@ async def test_successful_group_marks_all_items_with_created_movement():
         all_assembly_tasks=["10", "11"],
         author="test",
         movement_service=movement_service,
-        shipment_repo=FakeShipmentRepository([100, 101]),
+        shipment_repo=shipment_repo,
         item_ids=[100, 101],
     )
     assert movement_id == 501
     assert movement_service.calls == 1
+    assert shipment_repo.shipment_status_updates == [77]
 
 
 @pytest.mark.asyncio
@@ -134,6 +159,47 @@ async def test_missing_item_update_raises_and_forces_group_transaction_rollback(
         )
 
 
+class AlreadyShippedConnection(AssemblyTaskConnection):
+    async def fetch(self, query, task_ids):
+        if query == MARK_ASSEMBLY_TASKS_SHIPPED:
+            return []
+        return [{"task_id": int(task_id), "is_shipped": True} for task_id in task_ids]
+
+
+@pytest.mark.asyncio
+async def test_already_shipped_with_linked_success_is_a_duplicate_not_an_orphan():
+    movement_service = FakeMovementService()
+    with pytest.raises(AssemblyTasksAlreadyProcessedError):
+        await _process_shipment_group(
+            conn=AlreadyShippedConnection([]),
+            product_id="SKU-1",
+            total_quantity=1,
+            all_assembly_tasks=["10"],
+            author="test",
+            movement_service=movement_service,
+            shipment_repo=FakeShipmentRepository([], linked_tasks=["10"]),
+            item_ids=[100],
+        )
+    assert movement_service.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_already_shipped_without_linked_success_reports_inconsistent_state():
+    movement_service = FakeMovementService()
+    with pytest.raises(InconsistentFbsShipmentError, match="неконсистентное FBS-списание"):
+        await _process_shipment_group(
+            conn=AlreadyShippedConnection([]),
+            product_id="SKU-1",
+            total_quantity=1,
+            all_assembly_tasks=["10"],
+            author="test",
+            movement_service=movement_service,
+            shipment_repo=FakeShipmentRepository([]),
+            item_ids=[100],
+        )
+    assert movement_service.calls == 0
+
+
 def test_source_sql_and_atomic_item_update_contract():
     assert "source" in repository.CREATE_SHIPMENT
     assert "source = $4" in repository.GET_SHIPMENTS
@@ -142,6 +208,9 @@ def test_source_sql_and_atomic_item_update_contract():
     assert "RETURNING item_id" in repository.MARK_ITEMS_SUCCESS
     assert "error_message = NULL" in repository.MARK_ITEMS_SUCCESS
     assert "next_retry_at = NULL" in repository.MARK_ITEMS_SUCCESS
+    assert "FOR UPDATE" in repository.LOCK_ITEMS_FOR_PROCESSING
+    assert "status = 'success'" in repository.GET_SUCCESS_LINKED_ASSEMBLY_TASKS
+    assert "movement_id IS NOT NULL" in repository.GET_SUCCESS_LINKED_ASSEMBLY_TASKS
 
 
 def test_fbs_consumers_are_thin_adapters_for_distinct_sources():

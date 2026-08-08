@@ -39,7 +39,24 @@ UPDATE wms.fbs_shipment_items
 SET status = 'success', movement_id = $1, error_message = NULL,
     next_retry_at = NULL, retry_count = COALESCE($3, retry_count), updated_at = now()
 WHERE item_id = ANY($2::bigint[])
+  AND status IN ('new', 'failed', 'pending_retry', 'retry_exhausted')
 RETURNING item_id
+"""
+
+LOCK_ITEMS_FOR_PROCESSING = """
+SELECT item_id, shipment_id, status, movement_id
+FROM wms.fbs_shipment_items
+WHERE item_id = ANY($1::bigint[])
+FOR UPDATE
+"""
+
+GET_SUCCESS_LINKED_ASSEMBLY_TASKS = """
+SELECT DISTINCT task.task_id
+FROM wms.fbs_shipment_items AS item
+CROSS JOIN LATERAL jsonb_array_elements_text(item.assembly_tasks) AS task(task_id)
+WHERE task.task_id = ANY($1::text[])
+  AND item.status = 'success'
+  AND item.movement_id IS NOT NULL
 """
 
 GET_ITEM_BY_ID = """
@@ -232,6 +249,18 @@ class FbsShipmentRepository:
     ) -> List[int]:
         rows = await conn.fetch(MARK_ITEMS_SUCCESS, movement_id, list(item_ids), retry_count)
         return [row["item_id"] for row in rows]
+
+    async def lock_items_for_processing(
+        self, conn: Connection, *, item_ids: Sequence[int]
+    ) -> list:
+        """Блокирует FBS items до конца внешней product-group транзакции."""
+        return await conn.fetch(LOCK_ITEMS_FOR_PROCESSING, list(item_ids))
+
+    async def get_success_linked_assembly_tasks(
+        self, conn: Connection, *, assembly_tasks: Sequence[str]
+    ) -> set[str]:
+        rows = await conn.fetch(GET_SUCCESS_LINKED_ASSEMBLY_TASKS, list(assembly_tasks))
+        return {str(row["task_id"]) for row in rows}
 
     async def get_item_by_id(self, conn: Connection, item_id: int):
         return await conn.fetchrow(GET_ITEM_BY_ID, item_id)

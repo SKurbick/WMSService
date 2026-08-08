@@ -52,6 +52,12 @@ class LocationRepository:
             result = await conn.fetchrow(queries.GET_LOCATION_BY_CODE, location_code)
             return result
 
+    async def get_by_code_in_transaction(
+        self, conn, location_code: str
+    ) -> Optional[Record]:
+        """Получить локацию через соединение внешней транзакции."""
+        return await conn.fetchrow(queries.GET_LOCATION_BY_CODE, location_code)
+
     async def get_children(self, location_id: int, recursive: bool = True) -> List[Record]:
         """
         Получить дочерние локации

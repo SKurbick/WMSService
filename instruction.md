@@ -617,17 +617,17 @@ GET /api/inventory/reservation-events
 После реализации обновить контекстные документы проекта:
 
 ```text
-docs/context/api_map.md
-docs/context/business_rules.md
-docs/context/domain_model.md
-docs/context/current_state.md
+docs/current/api_map.md
+docs/current/business_rules.md
+docs/current/domain_model.md
+docs/current/current_state.md
 ```
 
 Если добавляются новые таблицы/view, обновить также:
 
 ```text
-docs/context/database_map.md
-docs/context/invariants.md
+docs/database/map.md
+docs/current/invariants.md
 ```
 
 ---
@@ -723,11 +723,11 @@ free_qty может быть отрицательным. Это бизнес-и�
 - movements для резервов
 - вмешательство в существующий FBS write-off flow
 
-После реализации обновить docs/context:
+После реализации обновить документы в docs/current и соответствующих разделах docs/:
 - api_map.md
 - business_rules.md
 - domain_model.md
 - current_state.md
-- database_map.md
-- invariants.md
+- docs/database/map.md
+- docs/current/invariants.md
 ```

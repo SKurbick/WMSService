@@ -82,7 +82,9 @@ class MovementService:
                 all_location_codes.add(movement.to_location_code)
 
         for location_code in all_location_codes:
-            location = await self.location_repo.get_by_code(location_code)
+            location = await self.location_repo.get_by_code_in_transaction(
+                conn, location_code
+            )
             if not location:
                 raise LocationNotFoundError(f"Локация '{location_code}' не найдена")
 

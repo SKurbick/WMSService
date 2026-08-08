@@ -136,6 +136,12 @@ class FbsShipmentItemsUpdateError(DomainException):
     pass
 
 
+class InconsistentFbsShipmentError(DomainException):
+    """СЗ отгружены, но не подтверждены success FBS item с movement_id."""
+
+    pass
+
+
 # === Products ===
 
 
