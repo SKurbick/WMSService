@@ -11,3 +11,9 @@ dev_insert_stock_reservation_test_data.py
 FBS_WRITE_OFF_AUDIT.md
 docs/proposals/saga_fbo_wms_analysis.md
 docs/archive/audits/kit_operations_orchestration_audit.md
+FBS_AVAILABLE_LOAD_REQUEST.json
+FBS_AVAILABLE_RESET_REQUEST.json
+FBS_INVENTORY_RESET_PLAN.md
+movement_matches_202608310937.csv
+sql_results.txt
+chat.txt
