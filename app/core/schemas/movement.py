@@ -109,12 +109,12 @@ class MovementCreateResponse(BaseModel):
     """Ответ при создании движения"""
 
     movement_id: int = Field(..., description="ID созданного движения")
-    movement_type: MovementType
-    product_id: str
-    from_location_id: Optional[int] = None
-    to_location_id: Optional[int] = None
-    quantity: int
-    created_at: datetime
+    movement_type: MovementType = Field(description='Тип движения; направление изменения остатка задаётся исходной и целевой локациями.')
+    product_id: str = Field(description='Идентификатор товара (SKU).')
+    from_location_id: Optional[int] = Field(None, description='Идентификатор исходной локации; null при чистом приходе.')
+    to_location_id: Optional[int] = Field(None, description='Идентификатор целевой локации; null при чистом расходе.')
+    quantity: int = Field(description='Положительное количество единиц товара.')
+    created_at: datetime = Field(description='Дата и время регистрации движения с часовым поясом.')
 
     class Config:
         from_attributes = True
@@ -139,18 +139,18 @@ class MovementBulkCreateResponse(BaseModel):
 class MovementResponse(BaseModel):
     """Движение товара в ответе API"""
 
-    movement_id: int
-    movement_type: MovementType
-    product_id: str
-    product_name: Optional[str] = None
-    from_location: Optional[str] = None
-    to_location: Optional[str] = None
-    quantity: int
-    batch_number: Optional[str] = None
-    container_code: Optional[str] = None
-    user_name: Optional[str] = None
-    reason: Optional[str] = None
-    created_at: datetime
+    movement_id: int = Field(description='Идентификатор движения в журнале.')
+    movement_type: MovementType = Field(description='Тип движения; направление изменения остатка задаётся исходной и целевой локациями.')
+    product_id: str = Field(description='Идентификатор товара (SKU).')
+    product_name: Optional[str] = Field(None, description='Название товара.')
+    from_location: Optional[str] = Field(None, description='Исходная локация движения.')
+    to_location: Optional[str] = Field(None, description='Целевая локация движения.')
+    quantity: int = Field(description='Положительное количество единиц товара.')
+    batch_number: Optional[str] = Field(None, description='Номер партии; null — без партии.')
+    container_code: Optional[str] = Field(None, description='Код контейнера; null — россыпь.')
+    user_name: Optional[str] = Field(None, description='Автор движения.')
+    reason: Optional[str] = Field(None, description='Причина движения.')
+    created_at: datetime = Field(description='Дата и время регистрации движения с часовым поясом.')
 
     class Config:
         from_attributes = True

@@ -180,3 +180,14 @@ Changed/physical/movement fields намеренно отсутствуют: ст
 - Валидный payload синхронно использует общий `handle_write_off_fbs`, включая
   группировку, транзакционную обработку product group, movements и retry.
 - DB constraint для `http_api` применяется владельцем БД вручную.
+
+## KIZ v1
+
+Реализован KIZ v1 в коде; перед deployment владелец БД вручную применяет
+[миграцию](../../scripts/migrations/20260906_add_kiz_v1.sql).
+Scope: точная location, available, batch/container NULL. Assignment идентифицирует
+существующую единицу без physical delta и movement; registry/audit, terminal lifecycle,
+stock-summary и отдельная KIZ integrity проверка доступны через API.
+Inventory guard защищает от расхода identified части всеми writers. Assignment делает
+согласованный MVCC touch; recalculate использует UPSERT и удаление obsolete scopes.
+[Контракт, примеры и ограничения](../flows/kiz_v1.md).

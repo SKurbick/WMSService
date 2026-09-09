@@ -94,3 +94,27 @@
 - Операции с `container_code`, которые создают ссылки на несуществующий `containers.qr_code`.
 - Параллельные retry/complete/unpack/ship сценарии без row lock или advisory lock.
 - Прямые изменения `wms.inventory` из API/service layer, кроме системного пересчета.
+
+## Согласованное исключение KIZ v1
+
+Разрешён узкий служебный UPDATE уже заблокированной wms.inventory строки во время
+assignment KIZ, исключительно для создания MVCC-версии. Запрос обновляет updated_at,
+не меняет quantity/product/location/status/batch/container и не создаёт movement.
+Порядок: SELECT inventory FOR UPDATE → touch → COUNT(active) → KIZ INSERT → assigned event.
+Все шаги на одной connection в одной transaction; любой отказ откатывает touch и audit.
+Это исключение явно согласовано пользователем после проверки REPEATABLE READ гонки.
+
+KIZ terminal: сначала scope lookup без conflicting lock, затем inventory → KIZ FOR UPDATE
+→ lifecycle update → event. Другие direct inventory writes из service по-прежнему
+запрещены, кроме maintenance recalculate.
+
+Recalculate работает в READ COMMITTED transaction: LOCK movements SHARE, затем
+inventory EXCLUSIVE (включая блокирование assignment SELECT FOR UPDATE); проверка
+calculated quantities против active KIZ; UPSERT positive rows; DELETE obsolete;
+финальная KIZ integrity validation и commit. Смысл ledger SUM и порог 0.0001 сохранены.
+Locks распространяются на весь ledger/projection даже при product_id filter; это
+maintenance operation. Встречный legacy lock order может дать deadlock: полный rollback,
+HTTP 409, повтор всей операции. Guards никогда не отключаются.
+
+Raw KIZ SQL writes не являются альтернативой сервису. Перенос операции в другой writer
+требует того же inventory lock/touch/count/atomic audit протокола.

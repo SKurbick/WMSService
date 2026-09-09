@@ -11,6 +11,7 @@ from app.core.schemas.system import IntegrityCheckResult, RecalculateInventoryRe
 from app.core.services.system_service import SystemService
 from app.infrastructure.database.queries import system as system_queries
 from app.infrastructure.database.queries.system import VALIDATE_INTEGRITY
+from app.infrastructure.database.queries.kiz import INTEGRITY as KIZ_INTEGRITY
 from app.infrastructure.database.repositories.system_repository import SystemRepository
 
 EPSILON = Decimal("0.0001")
@@ -58,7 +59,7 @@ def _expected_integrity_differences(movements, inventory):
         )
 
     differences = []
-    for key in sorted(set(movement_totals) | set(inventory_totals)):
+    for key in sorted(set(movement_totals) | set(inventory_totals), key=lambda row: tuple((v is not None, v) for v in row)):
         from_movements = movement_totals.get(key, Decimal("0"))
         from_inventory = inventory_totals.get(key, Decimal("0"))
         difference = from_movements - from_inventory
@@ -282,7 +283,7 @@ def test_recalculate_sql_uses_available_net_ledger_and_positive_insert_only():
 
 
 def test_recalculate_delete_and_stats_are_available_only():
-    assert "WHERE status = 'available'" in system_queries.DELETE_AVAILABLE_INVENTORY
+    assert "WHERE i.status = 'available'" in system_queries.DELETE_AVAILABLE_INVENTORY
     assert "WHERE status = 'available'" in system_queries.GET_INVENTORY_STATS
     assert "damaged" not in system_queries.DELETE_AVAILABLE_INVENTORY
     assert "quarantine" not in system_queries.DELETE_AVAILABLE_INVENTORY
@@ -416,7 +417,7 @@ class FakeConnection:
         self.calls = []
         self.negative_rows = negative_rows or []
 
-    def transaction(self):
+    def transaction(self, **kwargs):
         return FakeTransaction(self.calls)
 
     async def fetch(self, query, *args):
@@ -452,7 +453,7 @@ class FakePool:
 
 
 @pytest.mark.asyncio
-async def test_recalculate_repository_runs_check_delete_insert_stats_in_one_transaction():
+async def test_recalculate_repository_runs_locked_check_upsert_delete_validate_in_one_transaction():
     conn = FakeConnection()
     repo = SystemRepository(FakePool(conn))
 
@@ -461,9 +462,13 @@ async def test_recalculate_repository_runs_check_delete_insert_stats_in_one_tran
     assert result == {"inventory_records": 1, "total_units": 70, "products_count": 1}
     assert conn.calls == [
         ("transaction_enter",),
+        ("execute", "LOCK TABLE wms.movements IN SHARE MODE", ()),
+        ("execute", "LOCK TABLE wms.inventory IN EXCLUSIVE MODE", ()),
         ("fetch", system_queries.CHECK_NEGATIVE_CALCULATED_INVENTORY, ("sku",)),
-        ("execute", system_queries.DELETE_AVAILABLE_INVENTORY, ("sku",)),
+        ("fetch", system_queries.CHECK_CALCULATED_KIZ, ("sku",)),
         ("execute", system_queries.RECALCULATE_INVENTORY, ("sku",)),
+        ("execute", system_queries.DELETE_AVAILABLE_INVENTORY, ("sku",)),
+        ("fetch", KIZ_INTEGRITY, ("sku",)),
         ("fetchrow", system_queries.GET_INVENTORY_STATS, ("sku",)),
         ("transaction_exit", None),
     ]
@@ -493,6 +498,8 @@ async def test_recalculate_repository_stops_before_delete_when_negative_calculat
     assert "calculated_quantity=-30" in str(exc_info.value)
     assert [call[0] for call in conn.calls] == [
         "transaction_enter",
+        "execute",
+        "execute",
         "fetch",
         "transaction_exit",
     ]

@@ -42,3 +42,23 @@ Alembic и автоматический migration runner в проекте от�
 - применено ли ручное расширение `chk_fbs_shipments_source` для `http_api`;
 - механизм блокировки от одновременного применения одной миграции;
 - штатный rollback.
+
+## 5. KIZ v1 — 20260906_add_kiz_v1.sql
+
+Применяется вручную после проверки владельцем БД, до deployment кода KIZ.
+Создаёт kiz/kiz_events, constraints/indexes и три guard functions/triggers.
+Inventory/movement существующие функции не заменяет. Backfill отсутствует.
+Скрипт BEGIN/COMMIT, lock_timeout=10s; повторное применение не поддерживается.
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/migrations/20260906_add_kiz_v1.sql
+```
+
+Сначала проверить stage, актуальную partition movements и права runtime-role
+(включая SELECT новых таблиц для guard, identity sequence privileges и KIZ write privileges).
+В рабочей БД скрипт не применялся агентом. [Проверка runtime](../../docs/database/kiz_v1_runtime_check.md).
+
+Down runner в проекте отсутствует. Автоматического DROP KIZ/audit не предлагается.
+При откате приложения сохранять данные и guard: старый destructive recalculate с active
+KIZ несовместим. Для rollback deployment требуется отключить KIZ write endpoints и
+maintenance вызовы старого пересчёта, затем отдельно согласовать дальнейшую стратегию.

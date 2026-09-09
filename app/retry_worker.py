@@ -1,11 +1,16 @@
 """Фоновый воркер для повторной обработки pending_retry позиций"""
 
 import asyncio
+import json
 import logging
 from collections import defaultdict
 from typing import List
 
 import asyncpg.exceptions
+from app.core.kiz_errors import (
+    KizGuardError, write_conflict_code, write_conflict_message,
+)
+
 
 from app.infrastructure.database.connection import get_db_pool
 from app.infrastructure.database.repositories.fbs_shipment_repository import FbsShipmentRepository
@@ -63,7 +68,10 @@ async def process_pending_retries(pool) -> None:
             total_quantity: int = sum(r["quantity"] for r in group_rows)
             all_assembly_tasks: List[str] = []
             for r in group_rows:
-                all_assembly_tasks.extend(r["assembly_tasks"])
+                task_ids = r["assembly_tasks"]
+                if isinstance(task_ids, str):
+                    task_ids = json.loads(task_ids)
+                all_assembly_tasks.extend(task_ids)
 
             new_retry_count = retry_count + 1
 
@@ -88,6 +96,16 @@ async def process_pending_retries(pool) -> None:
                     f"Retry успех | shipment_id={shipment_id} | product_id={product_id} | "
                     f"movement_id={movement_id} | попытка={new_retry_count}"
                 )
+
+            except (KizGuardError, asyncpg.SerializationError, asyncpg.DeadlockDetectedError) as e:
+                async with pool.acquire() as conn:
+                    async with conn.transaction():
+                        await shipment_repo.record_write_conflict(
+                            conn, item_ids, write_conflict_code(e),
+                            write_conflict_message(e), new_retry_count,
+                            _calc_next_retry_at(new_retry_count),
+                        )
+                        await shipment_repo.update_shipment_status(conn, shipment_id)
 
             except asyncpg.exceptions.CheckViolationError as e:
                 if new_retry_count >= max_retries:

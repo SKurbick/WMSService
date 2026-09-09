@@ -131,11 +131,37 @@ ORDER BY product_id, location_id, batch_number NULLS FIRST, container_code NULLS
 LIMIT 20;
 """
 
-# Шаг 2: Очистка только available inventory
-DELETE_AVAILABLE_INVENTORY = """
-DELETE FROM wms.inventory
-WHERE status = 'available'
-  AND ($1::varchar IS NULL OR product_id = $1);
+# Remove only scopes absent from the calculated positive projection, after UPSERT.
+DELETE_AVAILABLE_INVENTORY = CALCULATED_AVAILABLE_INVENTORY_CTE + """
+DELETE FROM wms.inventory i
+WHERE i.status = 'available'
+  AND ($1::varchar IS NULL OR i.product_id = $1)
+  AND NOT EXISTS (
+    SELECT 1 FROM calculated_inventory c
+    WHERE c.product_id = i.product_id AND c.location_id = i.location_id
+      AND c.status = i.status
+      AND c.batch_number IS NOT DISTINCT FROM i.batch_number
+      AND c.container_code IS NOT DISTINCT FROM i.container_code
+      AND c.calculated_quantity > 0.0001
+  );
+"""
+
+CHECK_CALCULATED_KIZ = CALCULATED_AVAILABLE_INVENTORY_CTE + """
+, identified AS (
+    SELECT product_id, location_id, count(*) AS identified_quantity FROM wms.kiz
+    WHERE lifecycle_status = 'active' AND ($1::varchar IS NULL OR product_id = $1)
+    GROUP BY product_id, location_id
+)
+SELECT k.product_id, k.location_id, l.location_code,
+       COALESCE(c.calculated_quantity, 0) AS calculated_quantity,
+       k.identified_quantity
+FROM identified k JOIN wms.locations l USING (location_id)
+LEFT JOIN calculated_inventory c
+    ON c.product_id = k.product_id AND c.location_id = k.location_id
+    AND c.batch_number IS NULL AND c.container_code IS NULL
+    AND c.calculated_quantity > 0.0001
+WHERE COALESCE(c.calculated_quantity, 0) < k.identified_quantity
+ORDER BY k.product_id, k.location_id;
 """
 
 # Шаг 3: Пересчёт available остатков из movements

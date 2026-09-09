@@ -1,9 +1,9 @@
 # KIZ v1: технический design review минимального этапа
 
-> **Статус: PROPOSAL / DESIGN REVIEW.** Документ описывает рекомендуемую границу
-> первого этапа и практически готовый технический дизайн, но не является описанием
-> реализованного функционала. KIZ v1 отсутствует в коде и БД. В рамках подготовки
-> документа Python-код, DDL, миграции, API, тесты и конфигурация не изменялись.
+> **Статус: HISTORICAL DESIGN REVIEW.** Первая версия реализована с уточнениями ТЗ
+> и согласованным MVCC touch. Актуальный контракт: [KIZ v1](../flows/kiz_v1.md).
+> Ниже сохранён исходный design review, а не описание текущего API/DDL.
+> Migration подготовлена для ручного применения; факт deployment отдельно не утверждается.
 
 ## 0. Основания и подтверждённое текущее состояние
 
@@ -837,3 +837,9 @@ DDL двух таблиц, DB guard, recalculate adaptation, asyncpg transaction
 boundary, API schemas/errors и набор PostgreSQL concurrency scenarios. Не добавлять в
 этот этап movement registry, movement association, containers, receipt, FBS selection,
 tasks selection, kit или re-sorting lifecycle.
+
+## 2026-09-06: проверка MVCC и согласованное решение
+
+Inventory row lock без новой row version не защищает от расхода со старым
+REPEATABLE READ snapshot. [Воспроизведение и предлагаемая поправка](kiz_v1_lock_protocol_review.md).
+Поправка согласована пользователем и реализована: inventory lock → touch → count → KIZ/event.

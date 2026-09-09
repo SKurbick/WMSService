@@ -39,3 +39,18 @@
 - `trg_tasks_updated_at`: `BEFORE UPDATE ON tasks`, `update_updated_at_column`.
 - `trg_fbs_item_updated_at`: `BEFORE UPDATE ON fbs_shipment_items`, `update_fbs_item_updated_at`.
 - `trg_receipt_items_updated_at`: `BEFORE UPDATE ON receipt_items`, `update_inventory_timestamp`.
+
+## KIZ v1 migration
+
+| Trigger | Table / timing | Function |
+|---|---|---|
+| trg_kiz_inventory_guard | inventory BEFORE UPDATE OR DELETE, row | wms.guard_kiz_inventory |
+| trg_kiz_identity_guard | kiz BEFORE UPDATE OR DELETE, row | wms.guard_kiz_identity |
+| trg_kiz_events_immutable | kiz_events BEFORE UPDATE OR DELETE, row | wms.guard_kiz_event_immutable |
+
+Inventory guard проверяет OLD available/NULL/NULL scope: quantity reduction требует
+NEW.quantity >= active count; DELETE/key change требуют active count=0. Increase/touch
+без смены scope пропускаются без count. P7501 откатывает projection и породивший movement.
+Существующий trg_inventory_updated_at остаётся включён, в том числе при assignment touch.
+KIZ trigger запрещает hard delete/identity edits/повторный terminal; event trigger запрещает
+UPDATE/DELETE. Trigger не защищает от отключения владельцем или TRUNCATE.

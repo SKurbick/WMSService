@@ -5,6 +5,10 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Sequence
 
 import asyncpg.exceptions
+from app.core.kiz_errors import (
+    KizGuardError, write_conflict_code, write_conflict_message,
+)
+
 from asyncpg import Connection, Pool
 
 from app.core.schemas.write_off_fbs import WriteOffAccordingToFBS
@@ -290,6 +294,15 @@ async def handle_write_off_fbs(
                 f"Списание выполнено | product_id={group.product_id} | "
                 f"qty={group.quantity} | movement_id={movement_id}"
             )
+
+        except (KizGuardError, asyncpg.SerializationError, asyncpg.DeadlockDetectedError) as e:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await shipment_repo.record_write_conflict(
+                        conn, related_item_ids, write_conflict_code(e),
+                        write_conflict_message(e), 0, _calc_next_retry_at(0),
+                    )
+                    await shipment_repo.update_shipment_status(conn, shipment_id)
 
         except asyncpg.exceptions.CheckViolationError as e:
             retry_count = 0  # первая попытка

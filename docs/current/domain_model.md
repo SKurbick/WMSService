@@ -241,3 +241,12 @@ Audit всех входящих событий резервов хранится
 ## Re-sorting operation
 
 `wms.re_sorting_operations` — audit header пересортицы; `wms.re_sorting_operation_items` — ровно две строки ролей `source_outgoing`/`target_incoming`. Каждая строка связана с movement посредством `(movement_id, movement_created_at)`. Allow-list хранится в общей `wms.operation_locations` с отдельным operation_code.
+
+## KIZ v1
+
+wms.kiz — identity одной физической единицы, а не отдельный количественный остаток.
+product_id может одновременно иметь идентифицированную и неидентифицированную часть.
+Активный KIZ привязан к точной location и занимает 1 available loose единицу без партии.
+Terminal error/deactivated сохраняет историческую location, но не занимает остаток.
+wms.kiz_events — неизменяемые identity events assigned/marked_as_error/deactivated,
+без association с movements. Подробности: [KIZ v1](../flows/kiz_v1.md).

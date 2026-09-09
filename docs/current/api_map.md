@@ -113,7 +113,7 @@
 
 - `GET /api/system/audit-summary` - read-only count-проверки известных рисков качества данных.
 - `POST /api/system/validate-integrity` - сверить `inventory` с расчетом из `movements`.
-- `POST /api/system/recalculate-inventory` - удалить и пересчитать остатки из `movements`.
+- `POST /api/system/recalculate-inventory` - пересчитать available через UPSERT/obsolete DELETE с KIZ validation.
 - `POST /api/system/create-snapshot` - создать снимок остатков.
 - `POST /api/system/refresh-materialized-views` - обновить `wms.mv_product_stock`.
 
@@ -209,3 +209,42 @@ row_id служит только глобальным ключом строки.
 Legacy revisions читаются из `public.supply_to_sellers_warehouse`, current snapshot —
 из `wms.receipt_items`. Пагинация применяется к revisions. GUID сравнивается как строка,
 без UUID parsing. Документ, отсутствующий в обоих источниках, возвращает 404.
+
+## KIZ v1
+
+- GET /api/kiz — список с product_id/location_code/lifecycle_status, limit/offset.
+- POST /api/kiz/assign — назначить новый КИЗ существующей loose available единице.
+- GET /api/kiz/stock-summary — exact product_id/location_code summary.
+- GET /api/kiz/{kiz_code} — current state.
+- GET /api/kiz/{kiz_code}/events — paginated immutable audit.
+- POST /api/kiz/{kiz_code}/mark-error — active → error, author/reason.
+- POST /api/kiz/{kiz_code}/deactivate — active → deactivated, author/reason.
+- GET /api/system/kiz-integrity — read-only нарушения identified <= physical.
+
+[Полные контракты и JSON-примеры](../flows/kiz_v1.md). KIZ guard и concurrency
+конфликты существующих write endpoints возвращают HTTP 409; FBS журнал сохраняется.
+
+
+## Стартовая страница
+
+`GET /` возвращает HTML со ссылками на Swagger, ReDoc и health для браузера
+(`Accept: text/html`). Для API-клиентов без этого Accept сохранён прежний JSON.
+`GET /health` не изменён. Миграция для стартовой страницы не требуется.
+
+
+## Описания Swagger (2026-09-07)
+
+В `/docs` добавлены русские заголовки всех операций, справка по форматам и ошибкам,
+описания разделов и поиск по операциям. Для KIZ описаны все поля и параметры,
+добавлены примеры назначения, закрытия, карточки, списка, аудита и сводки остатков.
+Движения и пересчёт содержат примеры успешных ответов и конфликтов KIZ/concurrency.
+Типы полей, ограничения валидации и бизнес-логика не изменены; новых маршрутов и
+миграций нет. Примеры проверяются тестами `tests/test_swagger_documentation.py`.
+
+Проверка: 190 тестов прошли, 63 PostgreSQL-теста пропущены без тестовой БД.
+Прежний локальный контейнер wms-kiz-v1-test на момент проверки отсутствовал.
+В рамках улучшения Swagger изменены app/main.py, app/api/v1/openapi_kiz.py,
+app/api/v1/endpoints/{kiz,movements,system,fbs_shipments}.py,
+app/core/schemas/{kiz,inventory,movement,system}.py, tests/test_swagger_documentation.py
+и этот документ. Стандартные кнопки Swagger (Try it out, Execute, Schema) остаются
+английскими; русифицированы описания API, заголовки операций и новые примеры.

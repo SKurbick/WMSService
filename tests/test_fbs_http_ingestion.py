@@ -103,7 +103,8 @@ def test_http_create_openapi_uses_existing_item_schema():
     assert request_example[0]["product_id"] == "testwild"
 
     documented_responses = route.responses
-    assert set(documented_responses) == {201, 422, 500}
+    assert set(documented_responses) == {201, 409, 422, 500}
+    assert documented_responses[409]["model"] is endpoint.FbsShipmentDetailResponse
     success_examples = documented_responses[201]["content"]["application/json"]["examples"]
     assert set(success_examples) == {
         "completed",

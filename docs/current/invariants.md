@@ -100,3 +100,24 @@
 ## Re-sorting invariants
 
 Completed операция имеет две разные роли и одинаковое положительное целое quantity. Оба movements имеют `movement_type=re_sorting`, `source_type=re_sorting_operation`, положительное quantity и в сумме направленный net delta 0. Конкурентность защищают canonical-pair advisory lock и source inventory row lock.
+
+## KIZ v1: quantity и MVCC
+
+Для exact available/NULL batch/NULL container scope:
+COUNT(active KIZ) <= inventory.quantity; отсутствующая inventory row означает 0.
+Counter-поля нет. Authoritative physical guard — BEFORE UPDATE/DELETE inventory.
+Увеличение/неизменное quantity при прежнем ключе пропускается без count; смена ключа
+или DELETE требуют нулевого active count. SQLSTATE нарушения — P7501.
+
+KIZ writes выполняются транзакционным KizService на одной asyncpg connection.
+Lock order: inventory FOR UPDATE → KIZ row → events. Assignment после inventory lock
+делает служебный UPDATE updated_at без изменения quantity/key, затем count/INSERT/event.
+Touch создаёт новую MVCC-версию и откатывается вместе с неуспешным assignment.
+Конкурентный writer со старым REPEATABLE READ snapshot получает 40001.
+Terminal сначала читает scope без lock, затем блокирует inventory и KIZ, проверяет
+актуальный lifecycle. READ COMMITTED задан для собственных KIZ write transactions;
+caller-owned RR assignment поддерживается через touch до count.
+
+Нормальные KIZ inserts идут только через этот протокол; произвольный SQL INSERT KIZ,
+отключение triggers/TRUNCATE или writes владельца вне протокола не являются
+поддерживаемым write API. Ограничения runtime-role: [проверка прав](../database/kiz_v1_runtime_check.md).

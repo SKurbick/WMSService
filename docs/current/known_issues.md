@@ -152,3 +152,20 @@
 - Verified: 2026-08-07 по migration и unit/contract test boundary
 
 Unit/SQL-contract тесты не заменяют integration verification на PostgreSQL с фактическими movement triggers и partitions. Перед production rollout требуется применить миграцию на stage и прогнать atomicity/concurrency scenarios на реальной БД.
+
+## KIZ v1: эксплуатация и границы
+
+- Runtime роль vector_admin является superuser/owner member и может отключать guards,
+  выполнять TRUNCATE и произвольные KIZ SQL writes. [Read-only проверка и ужесточение](../database/kiz_v1_runtime_check.md).
+- Recalculate берёт table locks на movements/inventory. Запускать как maintenance;
+  возможны ожидание writers и deadlock с существующим обратным lock order.
+  40001/40P01 дают 409; клиент повторяет операцию целиком.
+- Неатомарность task orchestration остаётся техдолгом: guard откатывает запрещённый
+  movement, но не превращает ранее раздельные task writes в единую transaction.
+- FBS product-group atomicity сохранена; существующий retry-claim техдолг не устраняется.
+  KIZ failures failed без retry; serialization failures имеют bounded retry.
+  Worker теперь декодирует JSON-строку assembly_tasks, иначе retry asyncpg rows был невозможен.
+- Raw KIZ INSERT вне сервисного lock/touch протокола не поддерживается; DB constraints
+  сами по себе не заменяют assignment transaction. Нет защиты от умышленного superuser.
+- Вторая версия: movement association/registry, selected KIZ shipment, containers,
+  batch, receipts, tasks/FBS selection, kit/re-sorting identity lifecycle — не реализованы.

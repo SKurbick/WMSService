@@ -12,6 +12,8 @@ class RecalculateInventoryRequest(BaseModel):
     product_id: Optional[str] = Field(None, description="ID товара (опционально, если None - все)")
     from_date: Optional[date] = Field(None, description="Временно запрещено: разрешен только полный пересчет available")
 
+    model_config = {"json_schema_extra": {"examples": [{"product_id": "wild1825", "from_date": None}, {}]}}
+
 
 class RecalculateInventoryResponse(BaseModel):
     """Результат пересчёта остатков"""

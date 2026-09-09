@@ -16,6 +16,7 @@ from app.api.v1.endpoints import (
     inventory_history,
     operations_history,
     receipt_history,
+    kiz,
 )
 
 api_router = APIRouter()
@@ -35,3 +36,5 @@ api_router.include_router(re_sorting_operations.router)
 api_router.include_router(inventory_history.router)
 api_router.include_router(operations_history.router)
 api_router.include_router(receipt_history.router)
+
+api_router.include_router(kiz.router)

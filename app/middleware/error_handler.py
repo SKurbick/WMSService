@@ -3,7 +3,7 @@
 from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from app.core.exceptions import (
     DomainException,
     LocationNotFoundError,
@@ -34,12 +34,40 @@ from app.core.exceptions import (
     ReceiptHistoryValidationError,
 )
 import logging
+import json
+import asyncpg
+from app.core.kiz_errors import (
+    KizConflictError, KizNotFoundError, write_conflict_code, write_conflict_message,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def add_exception_handlers(app: FastAPI):
     """Добавить обработчики исключений в приложение"""
+
+    @app.exception_handler(KizNotFoundError)
+    async def kiz_not_found_handler(request, exc):
+        return JSONResponse(status_code=404, content={
+            "detail": str(exc), "error_code": "KIZ_NOT_FOUND",
+        })
+
+    @app.exception_handler(KizConflictError)
+    @app.exception_handler(asyncpg.PostgresError)
+    async def write_conflict_handler(request, exc):
+        code = write_conflict_code(exc)
+        if code is None:
+            return await general_exception_handler(request, exc)
+        content = {"detail": write_conflict_message(exc), "error_code": code}
+        diagnostics = getattr(exc, "diagnostics", None)
+        if diagnostics is None and getattr(exc, "detail", None):
+            try:
+                diagnostics = json.loads(exc.detail)
+            except (ValueError, TypeError):
+                pass
+        if diagnostics is not None:
+            content["diagnostics"] = diagnostics
+        return JSONResponse(status_code=409, content=jsonable_encoder(content))
 
     @app.exception_handler(LocationNotFoundError)
     async def location_not_found_handler(request: Request, exc: LocationNotFoundError):
@@ -277,6 +305,13 @@ def add_exception_handlers(app: FastAPI):
     @app.exception_handler(RequestValidationError)
     async def request_validation_handler(request: Request, exc: RequestValidationError):
         details = jsonable_encoder(exc.errors())
+        if "КИЗ" in getattr(request.scope.get("route"), "tags", []):
+            # Invalid Unicode may also occur in the echoed validation input.
+            return Response(
+                content=json.dumps({"detail": details}, ensure_ascii=True),
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                media_type="application/json",
+            )
         if request.url.path.startswith("/api/re-sorting-operations"):
             return JSONResponse(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

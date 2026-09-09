@@ -152,3 +152,15 @@ Snapshot поступлений из 1С: `receipt_item_id`, `guid`, `product_id
 - `wms.re_sorting_operation_items`: две role-строки и movement identity.
 - `wms.operation_locations`: поддерживает `operation_code=re_sorting_operations`.
 - `wms.movements`: поддерживает `movement_type=re_sorting`, source type `re_sorting_operation`.
+
+## wms.kiz / wms.kiz_events (KIZ v1 migration)
+
+wms.kiz: identity bigint kiz_id, глобальный unique kiz_code, product/location FK RESTRICT,
+lifecycle active/error/deactivated, origin warehouse_assignment/reference,
+assigned/closed/created/updated timestamptz, created_by, object metadata jsonb.
+Scope активных записей — available loose без batch/container. Не добавляется в ключ inventory.
+
+wms.kiz_events: identity bigint kiz_event_id, KIZ/product/location FK RESTRICT,
+event_type/from_status/to_status, author/reason, object metadata, occurred_at.
+Событие assigned одно на assignment; terminal reason обязателен. Это identity audit,
+не physical ledger. [DDL](../../scripts/migrations/20260906_add_kiz_v1.sql).

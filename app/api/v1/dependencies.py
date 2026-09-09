@@ -2,6 +2,8 @@
 
 from fastapi import Depends
 from asyncpg import Pool
+from app.infrastructure.database.repositories.kiz_repository import KizRepository
+from app.core.services.kiz_service import KizService
 
 from app.infrastructure.database.connection import get_db_pool
 
@@ -228,3 +230,9 @@ def get_task_service(
 ) -> TaskService:
     """DI для TaskService"""
     return TaskService(task_repo, notification_repo, movement_service, notification_service)
+
+
+
+
+def get_kiz_service(pool: Pool = Depends(get_db_pool)) -> KizService:
+    return KizService(KizRepository(pool))

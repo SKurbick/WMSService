@@ -11,6 +11,7 @@ from app.core.schemas.movement import (
 )
 from app.core.services.movement_service import MovementService
 from app.api.v1.dependencies import get_movement_service
+from app.api.v1.openapi_kiz import CONFLICT_RESPONSE, success
 
 router = APIRouter(prefix="/movements", tags=["Движения"])
 
@@ -153,7 +154,16 @@ MOVEMENT_REQUEST_EXAMPLES = {
     response_model=MovementBulkCreateResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Создать движения товаров / ручная корректировка остатков",
-    description=CREATE_MOVEMENTS_DESCRIPTION,
+    description=CREATE_MOVEMENTS_DESCRIPTION + (
+        "\n\n**Активные КИЗ:** обычный расход может списать только неидентифицированную часть. "
+        "Например, при physical=10 и identified=4 можно списать 6, но не 7. "
+        "При KIZ_CONFLICT весь массив откатывается с HTTP 409. При CONCURRENT_WRITE_CONFLICT "
+        "повторите весь запрос. Сам по себе повтор успешного запроса создаёт новые движения."
+    ),
+    responses={201: success({"created": [{"movement_id": 1001, "movement_type": "receive",
+        "product_id": "wild1825", "from_location_id": None, "to_location_id": 10,
+        "quantity": 20, "created_at": "2026-09-07T10:00:00+03:00"}], "total": 1}),
+        409: CONFLICT_RESPONSE},
 )
 async def create_movement(
     data: List[MovementCreate] = Body(

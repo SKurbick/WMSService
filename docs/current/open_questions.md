@@ -36,3 +36,11 @@ issue tracker не назначены.
 | FBS-05 | accepted-risk | FBS сейчас списывает агрегированный available остаток без batch/container dimensions. | Product + WMS owner | Текущий pipeline; расширение требует отдельного решения |
 | TEST-01 | answered | Production `vector_db` нельзя использовать; нужен отдельный development/stage клон и выделенные fixtures. | QA + DB owner | Подтверждение владельца 2026-08-08; `runtime_concurrency_plan.md` |
 | TEST-02 | open | Добавить ли regression-тест полной/частичной распаковки после выбора модели CNT-01? | QA + WMS owner | Блокируется решением CNT-01 |
+
+## KIZ-01 — протокол MVCC (answered, 2026-09-06)
+
+Разрешить ли служебный UPDATE inventory при assignment без изменения quantity для
+создания MVCC-версии? Альтернатива — DB-enforced READ COMMITTED write contract.
+Владелец: WMS + DB owner. [Подтверждённый конфликт и минимальная поправка](../proposals/kiz_v1_lock_protocol_review.md).
+Ответ пользователя: служебный UPDATE inventory после FOR UPDATE разрешён; quantity/scope неизменны.
+Реализовано и проверено реальными concurrency-тестами; вопрос закрыт.

@@ -8,6 +8,10 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from asyncpg import Pool
 import asyncpg.exceptions
+from app.core.kiz_errors import (
+    KizGuardError, write_conflict_code, write_conflict_message,
+)
+
 from pydantic import ValidationError
 
 from app.core.schemas.fbs_shipment import (
@@ -405,6 +409,10 @@ async def list_shipments(
                 "application/json": {"examples": _HTTP_FBS_RESPONSE_EXAMPLES},
             },
         },
+        409: {
+            "model": FbsShipmentDetailResponse,
+            "description": "KIZ или конкурентный конфликт. Журнал сохранён; успешные группы не отменяются.",
+        },
         422: {
             "description": (
                 "Ошибка JSON или доменной схемы. Синтаксически корректный JSON "
@@ -473,10 +481,16 @@ async def create_shipment_via_http(
         shipment = await repo.get_shipment_by_id(conn, shipment_id)
         item_rows = await repo.get_items_by_shipment_id(conn, shipment_id)
 
-    return FbsShipmentDetailResponse(
+    result = FbsShipmentDetailResponse(
         **dict(shipment),
         items=[FbsShipmentItemResponse(**dict(row)) for row in item_rows],
     )
+    if any((row["error_message"] or "").startswith(
+        ("KIZ_CONFLICT:", "CONCURRENT_WRITE_CONFLICT:")
+    ) for row in item_rows):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=409, content=result.model_dump(mode="json"))
+    return result
 
 
 # ─────────────────────────────────────────────
@@ -488,6 +502,12 @@ async def create_shipment_via_http(
     "/items/{item_id}/retry",
     response_model=FbsShipmentDetailResponse,
     summary="Повторная обработка одной FBS-позиции",
+    description=("Повторяет только указанную позицию в состоянии failed, pending_retry или retry_exhausted. "
+                 "При успехе возвращает карточку всей отгрузки; другие позиции этим запросом не списываются. "
+                 "KIZ_CONFLICT сохраняется как failed без автоматического повтора. Конкурентный конфликт "
+                 "сохраняется для ограниченного числа повторов. Ошибка возвращается с HTTP 409 и "
+                 "идентификаторами позиции и отгрузки в detail. Успешное списание позиции атомарно."),
+    responses={409: {"description": "Конфликт статуса, KIZ или конкурентной записи; detail содержит причину."}},
 )
 async def retry_shipment_item(item_id: int, pool: Pool = Depends(get_db_pool)):
     repo = FbsShipmentRepository()
@@ -517,6 +537,19 @@ async def retry_shipment_item(item_id: int, pool: Pool = Depends(get_db_pool)):
                 )
     except AssemblyTasksAlreadyProcessedError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
+    except (KizGuardError, asyncpg.SerializationError, asyncpg.DeadlockDetectedError) as e:
+        retry_count = item["retry_count"] + 1
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await repo.record_write_conflict(
+                    conn, [item_id], write_conflict_code(e), write_conflict_message(e),
+                    retry_count, _calc_next_retry_at(retry_count),
+                )
+                await repo.update_shipment_status(conn, item["shipment_id"])
+        raise HTTPException(status_code=409, detail={
+            "shipment_id": item["shipment_id"], "item_id": item_id,
+            "error_code": write_conflict_code(e), "message": write_conflict_message(e),
+        }) from e
     except asyncpg.exceptions.CheckViolationError as e:
         retry_count = item["retry_count"] + 1
         status = "retry_exhausted" if retry_count >= item["max_retries"] else "pending_retry"
@@ -572,6 +605,7 @@ async def retry_shipment_item(item_id: int, pool: Pool = Depends(get_db_pool)):
 """,
     response_description="Полная информация об отгрузке с позициями",
     responses={
+        409: {"model": RetryResultItem, "description": "KIZ или конкурентный конфликт; журнал сохранён."},
         404: {"description": "Отгрузка с указанным ID не найдена"},
     },
 )
@@ -621,6 +655,7 @@ async def get_shipment(
 ⚠️ При большом количестве записей (600+) запрос может выполняться долго.
 """,
     response_description="Результат переобработки: сколько успешно, сколько с ошибками",
+    responses={409: {"model": RetryResponse, "description": "KIZ или конкурентный конфликт в результатах обработки."}},
 )
 async def retry_shipments(
     body: RetryRequest = RetryRequest(),
@@ -666,8 +701,13 @@ async def retry_shipments(
             processed += 1
             async with pool.acquire() as conn:
                 record = await repo.get_shipment_by_id(conn, shipment_id)
+                item_rows = await repo.get_items_by_shipment_id(conn, shipment_id)
             final_status = record["status"] if record else "unknown"
-            results.append(RetryResultItem(shipment_id=shipment_id, status=final_status))
+            conflict = next((r["error_message"] for r in item_rows
+                if (r["error_message"] or "").startswith(
+                    ("KIZ_CONFLICT:", "CONCURRENT_WRITE_CONFLICT:"))), None)
+            results.append(RetryResultItem(
+                shipment_id=shipment_id, status=final_status, error=conflict))
         except Exception as e:
             error_str = str(e)
             logger.error(
@@ -683,12 +723,17 @@ async def retry_shipments(
 
     still_failed = sum(1 for r in results if r.status == "validation_failed")
 
-    return RetryResponse(
+    result = RetryResponse(
         total_requested=len(rows),
         processed=processed,
         still_failed=still_failed,
         results=results,
     )
+    if any((r.error or "").startswith(
+        ("KIZ_CONFLICT:", "CONCURRENT_WRITE_CONFLICT:")) for r in results):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=409, content=result.model_dump(mode="json"))
+    return result
 
 
 # ─────────────────────────────────────────────
@@ -712,6 +757,7 @@ async def retry_shipments(
 """,
     response_description="Результат переобработки одной записи",
     responses={
+        409: {"model": RetryResultItem, "description": "KIZ или конкурентный конфликт; журнал сохранён."},
         404: {"description": "Отгрузка с указанным ID не найдена"},
         400: {"description": "Отгрузка не может быть переобработана (статус не validation_failed)"},
     },
@@ -761,8 +807,16 @@ async def retry_shipment(
 
     async with pool.acquire() as conn:
         updated = await repo.get_shipment_by_id(conn, shipment_id)
-
-    return RetryResultItem(
+        item_rows = await repo.get_items_by_shipment_id(conn, shipment_id)
+    conflict = next((r["error_message"] for r in item_rows
+        if (r["error_message"] or "").startswith(
+            ("KIZ_CONFLICT:", "CONCURRENT_WRITE_CONFLICT:"))), None)
+    result = RetryResultItem(
         shipment_id=shipment_id,
         status=updated["status"] if updated else "unknown",
+        error=conflict,
     )
+    if conflict:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=409, content=result.model_dump(mode="json"))
+    return result

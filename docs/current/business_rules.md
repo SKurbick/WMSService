@@ -126,3 +126,28 @@
 - Расходуется только available loose stock без batch/container; физические мягкие резервы игнорируются.
 - Операция атомарна, создаёт две item-строки и два movements; inventory напрямую не изменяется.
 - Нет вызовов 1С/RabbitMQ и нет idempotency key.
+
+## KIZ v1
+
+- Assignment нового глобально уникального case-sensitive кода разрешён при
+  physical_quantity - COUNT(active KIZ) >= 1 в точной available/NULL/NULL строке.
+- Код не нормализуется; пустой код и окружающие пробелы запрещены. Duplicate всегда
+  conflict, в том числе после terminal. Inactive product/location сами по себе
+  не запрещают assignment существующего physical stock.
+- Physical 1.5 допускает один KIZ; terminal KIZ не участвует в active count.
+- Assignment создаёт только KIZ и одно assigned event; movement не создаётся.
+- Только active → error/deactivated, с author/reason и одним audit event.
+  Повторный terminal, hard delete, изменение кода и повторное использование запрещены.
+- Количественные расходы могут использовать только unidentified часть; автоматического
+  выбора KIZ нет. KIZ-конфликт — 409, FBS item failed без автоматического retry.
+- 40001/40P01 — конкурентный conflict 409. FBS использует ограниченный max_retries.
+- Пересчёт запрещён, если calculated physical меньше identified, в том числе при
+  обнулении scope; операция полностью откатывается с diagnostics.
+
+
+### KIZ v1: входная валидация D1/D2 (2026-09-08)
+
+Assignment отклоняет с 422 код `stock-summary`, коды с окончанием `/events` и
+сегменты пути `.`/`..` и перевод строки: они конфликтуют с маршрутизацией карточки или нормализацией URL.
+Metadata assignment и terminal проверяется рекурсивно, включая ключи объектов:
+NUL и некорректные Unicode surrogate-символы дают 422 до записи в БД.

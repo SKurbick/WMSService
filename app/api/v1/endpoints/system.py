@@ -2,6 +2,10 @@
 
 from fastapi import APIRouter, Depends, status
 from typing import List
+from app.api.v1.dependencies import get_kiz_service
+from app.core.schemas.kiz import KizIntegrityViolation
+from app.core.services.kiz_service import KizService
+from app.api.v1.openapi_kiz import CONFLICT_RESPONSE, INTEGRITY_EXAMPLE, success
 
 from app.core.schemas.system import (
     RecalculateInventoryRequest,
@@ -62,7 +66,17 @@ async def get_audit_summary(
     response_model=RecalculateInventoryResponse,
     status_code=status.HTTP_200_OK,
     summary="Пересчитать остатки из движений",
-    description="Сервисная операция: пересобирает available inventory из журнала wms.movements.",
+    description=(
+        "Восстанавливает available-остатки из полного журнала движений. product_id ограничивает "
+        "пересчёт одним товаром; null — все товары. from_date должен быть null: частичный период запрещён. "
+        "Обновляет рассчитанные строки и удаляет устаревшие в одной транзакции; остальные статусы не меняет. "
+        "Операция берёт блокировки таблиц и может задерживать запись даже при фильтре одного товара. "
+        "Если рассчитанного количества недостаточно для активных КИЗ — 409 и полный откат. "
+        "При CONCURRENT_WRITE_CONFLICT повторите операцию целиком. Для проверки без записи "
+        "используйте validate-integrity и kiz-integrity."
+    ),
+    responses={200: success({"inventory_records": 1, "total_units": "10.00", "products_count": 1}),
+               409: CONFLICT_RESPONSE},
 )
 async def recalculate_inventory(
     data: RecalculateInventoryRequest = RecalculateInventoryRequest(),
@@ -71,8 +85,8 @@ async def recalculate_inventory(
     """
     Пересчитать остатки
 
-    **ВНИМАНИЕ:** Эта операция удаляет текущие записи inventory
-    и пересчитывает их заново из событий movements.
+    **ВНИМАНИЕ:** Операция обновляет available inventory из movements через UPSERT,
+    затем удаляет obsolete строки. Проверяет KIZ-инвариант до и после записи.
 
     Используйте для:
     - Исправления расхождений после сбоев
@@ -134,3 +148,22 @@ async def refresh_materialized_views(
     - Статистику обновлённого представления
     """
     return await service.refresh_materialized_views()
+
+
+
+
+@router.get(
+    '/kiz-integrity', response_model=list[KizIntegrityViolation],
+    summary="Проверить соответствие КИЗ физическим остаткам",
+    description=("Только чтение. Возвращает адреса и товары, где активных КИЗ больше, чем "
+                 "available-остатка без партии и контейнера. difference = identified_quantity − physical_quantity. "
+                 "Пустой массив означает отсутствие этих нарушений. Данные не исправляет; "
+                 "сверка движений с остатками выполняется отдельно через validate-integrity."),
+    responses={200: {"description": "Нарушения учёта КИЗ или пустой массив.", "content": {"application/json": {
+        "examples": {"ok": {"summary": "Нарушений нет", "value": []},
+                     "shortage": {"summary": "Четыре КИЗ при трёх единицах", "value": [INTEGRITY_EXAMPLE]}}
+    }}}},
+)
+async def kiz_integrity(service: KizService = Depends(get_kiz_service)):
+    """Проверка КИЗ на точных адресах без изменения данных."""
+    return await service.integrity()

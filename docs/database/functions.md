@@ -69,3 +69,15 @@ Trigger function для `AFTER UPDATE OF location_id ON wms.containers`. Есл�
 `wms.get_approvers()` читает `public.users` и `public.user_permissions`, возвращает enabled users с `approve_discrepancies=TRUE`.
 
 `update_containers_timestamp`, `update_fbs_item_updated_at`, `update_inventory_timestamp`, `update_locations_timestamp`, `update_updated_at_column` только присваивают `NEW.updated_at = now()`.
+
+## KIZ v1 functions
+
+- wms.guard_kiz_inventory(): VOLATILE BEFORE row guard OLD loose available scope,
+  COUNT активных через partial index, exception P7501 с JSON DETAIL diagnostics.
+- wms.guard_kiz_identity(): только active → error/deactivated; immutable identity;
+  closed_at/updated_at выставляются в now(); DELETE запрещён.
+- wms.guard_kiz_event_immutable(): UPDATE/DELETE events всегда P7501.
+
+Все функции имеют фиксированный search_path pg_catalog,wms, без SECURITY DEFINER.
+Assignment lock/touch/count/audit и recalculate orchestration находятся в Python/SQL query
+слое; новых physical movement functions нет. [Миграция](../../scripts/migrations/20260906_add_kiz_v1.sql).

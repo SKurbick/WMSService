@@ -327,3 +327,47 @@ item retry используют `_process_shipment_group`. Внутри пере
 items и assembly tasks, создаётся movement, обновляются item links и parent shipment.
 Location validation также использует этот `conn`. Ошибка на любом шаге откатывает всю
 product group. Existing orphan movements автоматически не восстанавливаются.
+
+## 2026-09-06 — KIZ v1: остановка реализации на подтверждённом MVCC-конфликте
+
+- Статус решения: `partially-superseded` (остановка снята согласованием поправки ниже).
+- Связанные endpoints: новые KIZ endpoints ещё не реализованы.
+- Связанные миграции: отсутствуют.
+- Superseded: нет.
+
+В реальной PostgreSQL 16 подтверждён обход предлагаемого inventory guard обычной
+REPEATABLE READ транзакцией со старым snapshot. Сохранены исполняемый тест и
+[предложение минимальной поправки](../proposals/kiz_v1_lock_protocol_review.md).
+До уточнения протокола application code и DDL не меняются. SQL для рабочей БД
+передаётся пользователю на проверку и применяется им вручную.
+
+## 2026-09-06 — KIZ v1 и согласованный MVCC touch
+
+- Статус решения: `active`.
+- Связанные endpoints: KIZ API и отдельный system/kiz-integrity; existing write conflict mapping.
+- Связанные миграции: 20260906_add_kiz_v1.sql.
+- Superseded: первоначальная остановка реализации на MVCC-конфликте снята.
+
+Пользователь явно разрешил служебный UPDATE уже заблокированной inventory row без
+изменения physical quantity/key и без movement. KizService делает lock → touch → count;
+вся операция, включая assigned event, атомарна. Реальные RR расход/assignment со старым
+snapshot получают 40001. Event при assignment один, registered не вводится.
+
+Inventory guard P7501 защищает physical projection всех writers. 40001/40P01 возвращают
+409 и повторяются целиком; FBS использует bounded retry, KIZ shortage — failed без retry.
+Recalculate сохраняет ledger semantics, но работает через locked validation/UPSERT/
+obsolete DELETE/final integrity. Для стабильного ledger и concurrent assignment нужны
+table locks; их maintenance-стоимость и потенциальные deadlocks задокументированы.
+
+[Действующий контракт и ограничения](../flows/kiz_v1.md).
+Текущая DB role superuser: [read-only проверка](../database/kiz_v1_runtime_check.md).
+SQL только подготовлен на проверку; в рабочей БД пользователь применяет его вручную.
+
+
+## 2026-09-08 — точечное устранение KIZ D1/D2
+
+Для D1 выбран ранний запрет конфликтующих кодов при assignment (422), без изменения
+статических маршрутов или добавления endpoint. Для D2 входная metadata проверяется
+до транзакции; KIZ validation response экранирует Unicode, чтобы неподдерживаемый
+символ в возвращаемом input ошибки тоже не приводил к 500. Lock/touch протокол,
+SQL и миграция не меняются.

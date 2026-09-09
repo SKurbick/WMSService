@@ -86,3 +86,17 @@ Notifications: `(user_id, is_read)`, `created_at DESC`, `notification_type`. Sna
 ## Re-sorting migration
 
 `20260715_add_re_sorting_operations.sql` добавляет product/location/allow-list FK, checks различающихся SKU, положительного quantity, непустых reason/author, допустимых status/role, unique `(operation_id, role)`, audit/search indexes и updated_at trigger. FK items→movements не добавлен из-за partitioned parent без устойчивого PK/unique.
+
+## KIZ v1 migration
+
+- wms.kiz: PK kiz_id; uq_kiz_code UNIQUE(kiz_code); FK product/location RESTRICT.
+- idx_kiz_active_scope(product_id, location_id) WHERE lifecycle_status='active'.
+- idx_kiz_product_status_id(product_id,lifecycle_status,kiz_id).
+- idx_kiz_location_status_id(location_id,lifecycle_status,kiz_id).
+- wms.kiz_events: PK kiz_event_id; FK kiz/product/location RESTRICT.
+- idx_kiz_events_history(kiz_id,occurred_at,kiz_event_id).
+- CHECK code nonempty/no surrounding whitespace, author nonblank, metadata JSON object,
+  status/origin/event whitelists, active closed_at NULL / terminal non-NULL,
+  event transition consistency and mandatory nonblank terminal reason.
+- Identity/lifecycle immutability, no hard delete and immutable events дополнительно
+  обеспечены triggers. Counter и дополнительные stock-scope indexes не добавлены.
