@@ -26,6 +26,16 @@ SELECT
             'product_id', cc.product_id,
             'product_name', p.name,
             'quantity', cc.quantity,
+            'identified_quantity', CASE WHEN cc.batch_number IS NULL THEN (
+                SELECT count(*) FROM wms.kiz k
+                WHERE k.container_id=c.container_id AND k.product_id=cc.product_id
+                  AND k.lifecycle_status='active'
+            ) ELSE 0 END,
+            'unidentified_quantity', cc.quantity-CASE WHEN cc.batch_number IS NULL THEN (
+                SELECT count(*) FROM wms.kiz k
+                WHERE k.container_id=c.container_id AND k.product_id=cc.product_id
+                  AND k.lifecycle_status='active'
+            ) ELSE 0 END,
             'batch_number', cc.batch_number,
             'is_scanned', cc.is_scanned
         ) ORDER BY cc.product_id
@@ -58,26 +68,6 @@ FROM wms.containers c
 LEFT JOIN wms.locations l ON c.location_id = l.location_id
 LEFT JOIN wms.containers pc ON c.parent_container_id = pc.container_id
 WHERE c.container_id = $1;
-"""
-
-# === UPDATE LOCATION ===
-
-UPDATE_CONTAINER_LOCATION = """
-UPDATE wms.containers
-SET location_id = (
-    SELECT location_id
-    FROM wms.locations
-    WHERE location_code = $2
-),
-updated_at = NOW()
-WHERE container_id = $1
-RETURNING container_id, qr_code, location_id;
-"""
-
-# === UNPACK ===
-
-UNPACK_FROM_CONTAINER = """
-SELECT * FROM wms.unpack_from_container($1, $2, $3);
 """
 
 # === UPDATE STATUS ===

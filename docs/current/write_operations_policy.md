@@ -42,17 +42,17 @@
 
 ### `wms.containers`
 
-- Изменение `location_id` контейнера запускает trigger `trg_move_container_inventory`; endpoint должен учитывать, что это создаст transfer movements.
+- `location_id` контейнера меняет только controlled B3 move; legacy projection trigger удаляется B4 migration.
 - Операции с контейнером должны проверять статус контейнера до изменения.
 - Для контейнерных read-then-write сценариев нужно блокировать строку контейнера и, при необходимости, active rows `container_contents`.
 - Нельзя добавлять сценарии, которые меняют location/status контейнера и одновременно обходят movement/audit flow.
 
 ### `wms.container_contents`
 
-- Добавление active content запускает trigger `trg_sync_container_contents_to_inventory`; сервис не должен дублировать receive movement вручную для той же вставки.
+- Active content создаётся только controlled fill; compatibility trigger подавляет legacy receive для авторизованной fill line, а B4 movement guard блокирует произвольный container receive.
 - Изменение quantity/status active content должно быть согласовано с inventory через movement.
 - Перед распаковкой или изменением content нужно блокировать relevant content rows.
-- Нельзя добавлять новый сценарий полной распаковки, пока не решен конфликт `unpack_from_container` с constraints `quantity > 0` и допустимыми status.
+- Full unpack выполняется только controlled `unpack-all`; legacy DB function удаляется B4 migration.
 
 ### `wms.tasks`
 
@@ -85,7 +85,6 @@
 
 Запрещено добавлять или расширять следующие write-сценарии без предварительного решения соответствующих пунктов в `known_issues.md`:
 
-- Полная распаковка контейнера через `wms.unpack_from_container`, пока не решен конфликт `container_contents.quantity = 0/status = empty` с constraints.
 - Создание произвольных `wms.movements` без DB/service проверки `quantity > 0`.
 - Создание movements без `from_location_id` и `to_location_id`.
 - Write endpoint, который полагается на `find_available_location` как финальную гарантию свободного места.
@@ -118,3 +117,98 @@ HTTP 409, повтор всей операции. Guards никогда не о�
 
 Raw KIZ SQL writes не являются альтернативой сервису. Перенос операции в другой writer
 требует того же inventory lock/touch/count/atomic audit протокола.
+
+## Movement identity Phase 1
+
+Любой supported writer создаёт movement обычным `INSERT INTO wms.movements`; отдельный
+application вызов registry запрещён и не требуется. `AFTER INSERT` trigger добавляет
+immutable mapping в той же transaction, поэтому ошибка registry обязана откатить весь
+physical write. Legacy kit/re-sorting/FBS/task links сохраняют текущий контракт.
+Исторические mappings добавляет только resumable DB backfill; он не меняет ledger или
+inventory. Coverage подтверждается `wms.check_movement_registry_integrity()`.
+
+## KIZ association Phase 2
+
+Публичного или общего CRUD writer для `kiz_movement_links` нет. INSERT предназначен
+для будущих поддерживаемых physical operations внутри их transaction; UPDATE/DELETE
+запрещены DB trigger. Старый assignment не создаёт movement или link.
+
+Прямые location/lifecycle updates запрещены. Transfer и shipment используют отдельные
+узкие SECURITY DEFINER functions, transaction-local authorization и deferred
+completeness validation; общий bypass guard отсутствует.
+
+## KIZ operation idempotency Phase 3
+
+Internal flow вызывается только внутри уже открытой asyncpg transaction:
+`operation acquire → inventory locks → KIZ locks → future physical changes → result`.
+Repository не получает connection из pool и не выполняет commit.
+
+Acquire использует INSERT ON CONFLICT DO NOTHING под UNIQUE business key. Конкурентный
+loser ждёт winner, затем берёт operation row FOR UPDATE и возвращает replay либо
+fingerprint conflict. Для этого write path используется READ COMMITTED; 40001/40P01
+остаются отдельными concurrency conflicts. Advisory lock не используется.
+
+## KIZ operation transfer
+
+Порядок: operation identity, canonical locations/inventory scopes, canonical KIZ rows,
+physical writes, result. Все items выполняются в одной transaction. 40001/40P01 и любой
+domain failure откатывают operation, KIZ, movement, registry, links и inventory вместе.
+
+## KIZ operation shipment
+
+Порядок: idempotency operation, canonical locations, source inventory scopes, KIZ rows,
+revalidation, controlled shipped transition, outgoing movement, registry/ref, item
+attachment, links, shipped events, final integrity, result. Все items принадлежат одной
+transaction. Legacy movement/FBS writers не создают KIZ operations и не выбирают KIZ.
+
+## Container Stage 3B write boundary
+
+Application code не должен напрямую менять `containers.location_id` или
+`parent_container_id`, удалять container, переименовывать QR либо выполнять произвольный
+UPDATE/DELETE quantity в `container_contents`. Исключение — B2.2 extract через
+`wms.apply_container_extract_content(operation_item_id)` внутри caller-owned transaction
+после registry-backed movements. Новые bypass writers запрещены.
+
+Future runtime: отдельная non-owner role, без direct table DML; EXECUTE только конкретных
+controlled functions, PUBLIC EXECUTE отозван, SECURITY DEFINER имеет fixed search_path.
+Production superuser role в B1 не меняется и остаётся operational risk.
+
+## Container B2.1 controlled fill
+
+Новый application write выполняется только через `POST /api/container-operations/fill`
+и одну caller-owned DB transaction. Direct creation of `container_operation` provenance,
+ручная установка `wms.container_fill_item_id` и отдельные inventory/contents writes не
+являются supported protocol. Transaction-local authorization существует только для
+подавления legacy receive-trigger у подтверждённой незавершённой fill line.
+
+## Container B2.2 controlled extract
+
+`POST /api/container-operations/extract` использует одну caller-owned transaction:
+idempotency operation → container lock → product validation/items → all inventory scope
+locks в canonical order → all active content locks в том же scope order → validation →
+contained outgoing/loose incoming movements → movement refs → controlled contents
+mutation → whole-container status → final invariants → saved result.
+
+`wms.apply_container_extract_content` принимает только незавершённый extract item с
+двумя attached refs. До UPDATE/DELETE функция требует, чтобы разница old contents и уже
+спроецированного contained inventory была ровно item quantity; это делает mutation
+one-shot. Full extract удаляет current active row. B4 закрывает generic container movement bypass.
+
+## Container B3 controlled writes
+
+Move/unpack-all выполняются одной caller-owned transaction после idempotency resolution.
+Общий lock boundary — container row; далее contents/inventory scopes берутся в canonical
+order. B4 migration удаляет legacy location trigger; controlled move остаётся единственным
+поддерживаемым location writer и создаёт ровно один movement на contained scope.
+
+## Container B4 final write boundary
+
+- `POST /api/movements` поддерживает только loose inventory и обязан отклонять весь batch при
+  любом non-NULL `container_code`.
+- Единственные supported container quantity/location writers: fill, extract, move, unpack-all.
+- Register создаёт только empty container; legacy move/unpack запрещены.
+- Container-coded movement обязан иметь полный `container_operation` provenance; B4 DB trigger
+  является дополнительной защитой, а не заменой service transaction/completeness guards.
+- Maintenance recalculate сначала и после rewrite проверяет ledger/contents/inventory/location;
+  mismatch приводит к rollback без автоматического repair.
+- Runtime superuser migration описана в B4 runbook и остаётся отдельной infrastructure задачей.

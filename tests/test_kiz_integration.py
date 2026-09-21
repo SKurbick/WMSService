@@ -40,7 +40,12 @@ async def test_assignment_smoke(kiz_pool, stock, kiz_service):
     assert result["kiz"]["lifecycle_status"] == "active"
     async with kiz_pool.acquire() as conn:
         assert await conn.fetchval("SELECT count(*) FROM wms.movements") == 1
+        assert await conn.fetchval("SELECT count(*) FROM wms.movement_registry") == 1
+        assert await conn.fetchval("SELECT count(*) FROM wms.kiz_movement_links") == 0
         assert await conn.fetchval("SELECT count(*) FROM wms.kiz_events") == 1
+        assert await conn.fetchval(
+            "SELECT count(*) FROM wms.kiz_events WHERE movement_ref IS NOT NULL"
+        ) == 0
 
 import asyncio
 import asyncpg
@@ -247,6 +252,9 @@ async def test_movement_api_rollback(client, kiz_pool, stock, kiz_service, kind,
     async with kiz_pool.acquire() as c:
         assert await c.fetchval("SELECT quantity FROM wms.inventory") == (4 if quantity == 6 else 10)
         assert await c.fetchval("SELECT count(*) FROM wms.movements") == (2 if quantity == 6 else 1)
+        assert await c.fetchval("SELECT count(*) FROM wms.movement_registry") == (
+            2 if quantity == 6 else 1
+        )
         assert await c.fetchval("SELECT count(*) FROM wms.kiz") == 4
 
 
@@ -283,6 +291,9 @@ async def test_existing_operation_flows(client, kiz_pool, stock, kiz_service, ki
         table = "re_sorting_operations" if kind == "re_sorting" else "kit_operations"
         assert await c.fetchval(f"SELECT count(*) FROM wms.{table}") == (1 if quantity == 6 else 0)
         assert await c.fetchval("SELECT count(*) FROM wms.movements") == (3 if quantity == 6 else 1)
+        assert await c.fetchval("SELECT count(*) FROM wms.movement_registry") == (
+            3 if quantity == 6 else 1
+        )
 
 
 @pytest.mark.parametrize("quantity", [6, 8])
@@ -309,6 +320,9 @@ async def test_fbs_http_group_atomicity(client, kiz_pool, stock, kiz_service, mo
             quantity if quantity == 6 else 0
         )
         assert await c.fetchval("SELECT count(*) FROM wms.movements") == (2 if quantity == 6 else 1)
+        assert await c.fetchval("SELECT count(*) FROM wms.movement_registry") == (
+            2 if quantity == 6 else 1
+        )
 
 
 @pytest.mark.parametrize("calculated", [10, 3, 0])
@@ -317,11 +331,21 @@ async def test_recalculate_guard(client, kiz_pool, stock, kiz_service, calculate
     async with kiz_pool.acquire() as c:
         # Deliberately damage ledger only in this disposable DB to exercise maintenance.
         if calculated == 0:
+            await c.execute(
+                "ALTER TABLE wms.movement_registry DISABLE TRIGGER "
+                "trg_movement_registry_immutable"
+            )
+            await c.execute("DELETE FROM wms.movement_registry")
+            await c.execute(
+                "ALTER TABLE wms.movement_registry ENABLE TRIGGER "
+                "trg_movement_registry_immutable"
+            )
             await c.execute("DELETE FROM wms.movements")
         else:
             await c.execute("UPDATE wms.movements SET quantity=$1", Decimal(calculated))
         await c.execute("UPDATE wms.inventory SET quantity=12")
         before = dict(await c.fetchrow("SELECT * FROM wms.inventory"))
+        registry_before = await c.fetchval("SELECT count(*) FROM wms.movement_registry")
     response = await client.post("/api/system/recalculate-inventory", json={})
     assert response.status_code == (200 if calculated == 10 else 409), response.text
     async with kiz_pool.acquire() as c:
@@ -333,6 +357,7 @@ async def test_recalculate_guard(client, kiz_pool, stock, kiz_service, calculate
             assert diagnostic["identified_quantity"] == 4
             assert diagnostic["calculated_quantity"] == calculated
         assert await c.fetchval("SELECT count(*) FROM wms.kiz") == 4
+        assert await c.fetchval("SELECT count(*) FROM wms.movement_registry") == registry_before
 
 
 async def test_api_read_lifecycle_and_integrity(client, kiz_pool, stock):

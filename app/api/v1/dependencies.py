@@ -32,6 +32,13 @@ from app.infrastructure.database.repositories.operations_history_repository impo
 from app.infrastructure.database.repositories.receipt_history_repository import (
     ReceiptHistoryRepository,
 )
+from app.infrastructure.database.repositories.kiz_operation_repository import KizOperationRepository
+from app.infrastructure.database.repositories.kiz_transfer_repository import KizTransferRepository
+from app.infrastructure.database.repositories.kiz_ship_repository import KizShipRepository
+from app.infrastructure.database.repositories.kiz_history_repository import KizHistoryRepository
+from app.infrastructure.database.repositories.container_operation_repository import (
+    ContainerOperationRepository,
+)
 
 # Services
 from app.core.services.location_service import LocationService
@@ -48,6 +55,17 @@ from app.core.services.re_sorting_operation_service import ReSortingOperationSer
 from app.core.services.inventory_history_service import InventoryHistoryService
 from app.core.services.operations_history_service import OperationsHistoryService
 from app.core.services.receipt_history_service import ReceiptHistoryService
+from app.core.services.kiz_operation_idempotency_service import KizOperationIdempotencyService
+from app.core.services.kiz_transfer_service import KizTransferService
+from app.core.services.kiz_ship_service import KizShipService
+from app.core.services.kiz_history_service import KizHistoryService
+from app.core.services.container_operation_idempotency_service import (
+    ContainerOperationIdempotencyService,
+)
+from app.core.services.container_fill_service import ContainerFillService
+from app.core.services.container_extract_service import ContainerExtractService
+from app.core.services.container_move_service import ContainerMoveService
+from app.core.services.container_unpack_all_service import ContainerUnpackAllService
 
 
 # === Repositories ===
@@ -232,7 +250,51 @@ def get_task_service(
     return TaskService(task_repo, notification_repo, movement_service, notification_service)
 
 
-
-
 def get_kiz_service(pool: Pool = Depends(get_db_pool)) -> KizService:
     return KizService(KizRepository(pool))
+
+
+def get_kiz_history_service(pool: Pool = Depends(get_db_pool)) -> KizHistoryService:
+    return KizHistoryService(KizHistoryRepository(pool))
+
+
+def get_kiz_transfer_service(pool: Pool = Depends(get_db_pool)) -> KizTransferService:
+    return KizTransferService(
+        KizTransferRepository(pool),
+        KizOperationIdempotencyService(KizOperationRepository()),
+    )
+
+
+def get_kiz_ship_service(pool: Pool = Depends(get_db_pool)) -> KizShipService:
+    return KizShipService(
+        KizShipRepository(pool),
+        KizOperationIdempotencyService(KizOperationRepository()),
+    )
+
+
+def get_container_fill_service(
+    pool: Pool = Depends(get_db_pool),
+) -> ContainerFillService:
+    repository = ContainerOperationRepository(pool)
+    return ContainerFillService(repository, ContainerOperationIdempotencyService(repository))
+
+
+def get_container_extract_service(
+    pool: Pool = Depends(get_db_pool),
+) -> ContainerExtractService:
+    repository = ContainerOperationRepository(pool)
+    return ContainerExtractService(repository, ContainerOperationIdempotencyService(repository))
+
+
+def get_container_move_service(
+    pool: Pool = Depends(get_db_pool),
+) -> ContainerMoveService:
+    repository = ContainerOperationRepository(pool)
+    return ContainerMoveService(repository, ContainerOperationIdempotencyService(repository))
+
+
+def get_container_unpack_all_service(
+    pool: Pool = Depends(get_db_pool),
+) -> ContainerUnpackAllService:
+    repository = ContainerOperationRepository(pool)
+    return ContainerUnpackAllService(repository, ContainerOperationIdempotencyService(repository))

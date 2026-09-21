@@ -19,6 +19,10 @@ class KizRepository:
     async def lock_inventory(self, conn, product_id, location_id):
         return await conn.fetchrow(q.LOCK_INVENTORY, product_id, location_id)
 
+    async def lock_container_inventory(self, conn, product_id, container_id):
+        await conn.fetchrow(q.LOCK_CONTAINER_HOLDER, container_id)
+        return await conn.fetchrow(q.LOCK_CONTAINER_INVENTORY, product_id, container_id)
+
     async def touch_inventory(self, conn, inventory_id):
         await conn.execute(q.TOUCH_INVENTORY, inventory_id)
 
@@ -34,7 +38,7 @@ class KizRepository:
     async def event(self, conn, kiz, event_type, from_status, to_status, data):
         await conn.execute(
             q.INSERT_EVENT, kiz['kiz_id'], event_type, from_status, to_status,
-            kiz['product_id'], kiz['location_id'], data.author,
+            kiz['product_id'], kiz['location_id'], kiz.get('container_id'), data.author,
             getattr(data, 'reason', None), json.dumps(data.metadata),
         )
 
@@ -44,8 +48,15 @@ class KizRepository:
     async def summary(self, conn, product_id, location_id):
         return dict(await conn.fetchrow(q.SUMMARY, product_id, location_id))
 
-    async def list(self, conn, product_id, location_code, lifecycle_status, limit, offset):
-        filters = (product_id, location_code, lifecycle_status)
+    async def get_container(self, conn, container_id, container_qr_code):
+        return await conn.fetchrow(q.GET_CONTAINER, container_id, container_qr_code)
+
+    async def container_summary(self, conn, product_id, container_id):
+        return dict(await conn.fetchrow(q.CONTAINER_SUMMARY, product_id, container_id))
+
+    async def list(self, conn, product_id, location_code, lifecycle_status, container_id,
+                   container_qr_code, limit, offset):
+        filters = (product_id, location_code, lifecycle_status, container_id, container_qr_code)
         total = await conn.fetchval(q.COUNT_KIZ, *filters)
         rows = await conn.fetch(q.LIST_KIZ, *filters, limit, offset)
         return dict(items=[dict(row) for row in rows], total=total, limit=limit, offset=offset)

@@ -103,7 +103,7 @@ container / loose
 ```
 
 Точный состав и нормализация stock scope должны быть закреплены при проектировании
-KIZ v1. Для первого MVP scope намеренно сужается до available loose stock без партии.
+KIZ v1. Для первого MVP scope намеренно сужается до доступного россыпного остатка без партии.
 
 `inventory_id` нельзя использовать как постоянную identity физического остатка:
 нулевые inventory rows удаляются, а после пересчёта остатка строка может получить новый
@@ -398,7 +398,7 @@ containment/container operations, но её финальная модель по
 inventory.status = available
 batch_number IS NULL
 container_code IS NULL
-loose stock only
+только россыпной остаток
 ```
 
 Первый модуль может включать:

@@ -288,9 +288,10 @@ class LocationSuggestion(BaseModel):
 
 
 class ProductSuggestion(BaseModel):
-    """Подсказки для одного товара"""
+    """Подсказки для одного exact product/batch scope."""
 
     product_id: str
+    batch_number: Optional[str] = None
     quantity_needed: float
     available_total: float
     locations: List[LocationSuggestion]
@@ -345,11 +346,12 @@ class RecountResponse(BaseModel):
 
 
 class RecountItem(BaseModel):
-    """Позиция при выполнении пересчёта"""
+    """Позиция при выполнении пересчёта exact loose scope."""
 
     product_id: str
     quantity_counted: int = Field(..., ge=0)
     location_code: str
+    batch_number: Optional[str] = None
     notes: Optional[str] = None
 
 

@@ -121,8 +121,9 @@ Worker декодирует assembly_tasks JSON из asyncpg перед форм
 не защищают от её намеренного обхода. Raw KIZ SQL inserts вне протокола не поддерживаются.
 Неатомарность task orchestration и retry-claim остаются прежним техдолгом.
 
-Не реализованы movement registry, KIZ/movement association, containers/nested containers,
-batch/damaged/quarantine KIZ, receipts, accounts/рейсы, KIZ shipment, FBS/tasks selection,
+Movement registry и KIZ/movement association реализованы в Stage 2A Phase 1/2.
+Не реализованы containers/nested containers, batch/damaged/quarantine KIZ,
+receipts, accounts/рейсы, KIZ shipment/transfer, FBS/tasks selection,
 kit/re-sorting KIZ lifecycle, replacement, генерация/печать, UI.
 
 

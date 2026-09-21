@@ -8,13 +8,13 @@
 
 PK есть на `container_contents(content_id)`, `containers(container_id)`, `fbs_shipment_items(item_id)`, `fbs_shipments(shipment_id)`, `inventory(inventory_id)`, `inventory_snapshots(snapshot_id)`, `locations(location_id)`, `notifications(notification_id)`, `receipt_items(receipt_item_id)`, `task_items(item_id)`, `tasks(task_id)`.
 
-На parent table `wms.movements` PK в DDL не задан.
+На parent table `wms.movements` PK не задан. Phase 1 migration добавляет composite `UNIQUE (movement_id, created_at)`, включающий partition key.
 
 ## Unique constraints
 
 - `containers(qr_code)` - уникальный QR.
 - `locations(location_code)` - уникальный код адреса.
-- `container_contents(container_id, product_id, batch_number, status)` - уникальность состава с учетом обычной PostgreSQL NULL-семантики.
+- `container_contents(container_id, product_id, batch_number, status)` - уникальность состава с учетом `NULLS NOT DISTINCT`, включая NULL batch.
 - `inventory UNIQUE NULLS NOT DISTINCT (product_id, location_id, status, batch_number, container_code)` - ключ upsert для materialized stock.
 - `receipt_items(guid, product_id)` - уникальность поступления из 1С по документу и товару.
 
@@ -81,7 +81,7 @@ Notifications: `(user_id, is_read)`, `created_at DESC`, `notification_type`. Sna
 - `wms.kit_operations`: PK `operation_id`; FK на `wms.operation_locations(operation_location_id)`, `public.products(id)` и `wms.locations(location_id)`; checks для `operation_type`, `status`, `quantity > 0`.
 - `wms.kit_operation_items`: PK `item_id`; FK на `wms.kit_operations(operation_id)` и `public.products(id)`; checks для `role`, `quantity_per_kit > 0`, `total_quantity > 0`.
 - Индексы: `idx_kit_operations_created_at`, `idx_kit_operations_filters`, `idx_kit_operations_operation_location`, `idx_kit_operation_items_operation`.
-- FK `kit_operation_items.movement_id -> wms.movements` не добавлен, потому что parent `wms.movements` не имеет PK/unique constraint.
+- Legacy FK `kit_operation_items.movement_id -> wms.movements` не добавлен: одно поле всё ещё не является полной identity. Существующая пара ID/timestamp пока не мигрирует на `movement_ref`.
 
 ## Re-sorting migration
 
@@ -100,3 +100,61 @@ Notifications: `(user_id, is_read)`, `created_at DESC`, `notification_type`. Sna
   event transition consistency and mandatory nonblank terminal reason.
 - Identity/lifecycle immutability, no hard delete and immutable events дополнительно
   обеспечены triggers. Counter и дополнительные stock-scope indexes не добавлены.
+
+## Movement registry Phase 1
+
+`uq_movements_movement_id_created_at` действует на partitioned parent и создаёт
+соответствующие partition indexes. `movement_registry` имеет PK `movement_ref`, unique
+exact coordinate и composite FK к `movements(movement_id, created_at)` с RESTRICT.
+Registry mapping дополнительно immutable через trigger.
+
+## KIZ association Phase 2
+
+- `kiz_movement_links`: PK `(kiz_id,movement_ref)`, FK RESTRICT к KIZ и registry,
+  reverse index `(movement_ref,kiz_id)`.
+- `kiz_events(kiz_id,movement_ref)` имеет composite FK на links; nullable movement_ref
+  совместим со старыми events, shipped event требует non-NULL link.
+- KIZ lifecycle checks включают shipped. Active/error/deactivated требуют location;
+  shipped требует location NULL. Direct location mutation защищена trigger-ом.
+
+## KIZ operation idempotency Phase 3
+
+- `kiz_operations`: PK operation_id; UNIQUE
+  `(source_system,operation_type,external_operation_id)`; operation_type только
+  transfer/ship; SHA-256 hex, nonblank identities/author и object result checks.
+- `kiz_operation_items`: PK operation_item_id; FK operation/registry; UNIQUE
+  `(operation_id,external_line_id)`; UNIQUE movement_ref допускает несколько NULL и
+  запрещает ownership одного movement несколькими operation lines.
+
+### KIZ Phase 4
+
+`pk_kiz_location_update_authorizations(transaction_id,kiz_id)` запрещает повторный KIZ
+в transaction. FK связывают authorization с operation item и KIZ; CHECK запрещает
+одинаковые source/destination ids.
+
+### KIZ Phase 5
+
+`pk_kiz_shipment_authorizations(transaction_id,kiz_id)` запрещает повторный KIZ в
+transaction. FK связывают authorization с operation item и KIZ; CHECK требует
+положительную целую item quantity. Права PUBLIC отозваны.
+
+## Container Stage 3B B1
+
+Существующий unique `containers(qr_code)` достаточен и сохраняется; отдельный индекс не
+добавлен. Content unique пересоздан как `UNIQUE NULLS NOT DISTINCT`, поэтому NULL batch
+участвует в едином scope. Новые checks: flat parent, required direct location/status,
+канонические status/type и непустой QR без краевых пробелов.
+
+## Container B2.1 constraints
+
+- UNIQUE idempotency identity:
+  `(source_system, operation_type, external_operation_id)`.
+- UNIQUE line identity: `(operation_id, external_line_id)`.
+- Outgoing/incoming movement refs имеют отдельные UNIQUE и FK на movement registry.
+- Quantity — positive `numeric(10,2)`; operation type B2.1 ограничен значением `fill`.
+
+## Container B3 constraints
+
+Operation type allow-list расширен `move/unpack_all`; operation имеет required deferred
+FK `container_id`. Item refs допускают ровно одно из состояний: none до завершения, one
+move ref или paired outgoing/incoming refs. Каждый ref уникален и FK на registry.

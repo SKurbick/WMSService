@@ -190,7 +190,10 @@
 - Связанные миграции: `20260715_add_re_sorting_operations.sql`
 - Superseded: нет
 
-Решено переидентифицировать одинаковое целое количество physical loose stock двумя movements типа `re_sorting` в одной direct-локации. Комплекты считаются обычными SKU, состав не читается. Мягкие резервы, 1С и RabbitMQ не участвуют. Встречные A→B/B→A сериализуются lock key по location и отсортированной паре SKU. Idempotency не вводится.
+Решено переидентифицировать одинаковое целое количество физического россыпного остатка
+двумя movements типа `re_sorting` в одной direct-локации. Комплекты считаются обычными
+SKU, состав не читается. Мягкие резервы, 1С и RabbitMQ не участвуют. Встречные A→B/B→A
+сериализуются lock key по location и отсортированной паре SKU. Idempotency не вводится.
 ## 2026-07-22 — MVP дневной истории остатков
 
 - Статус решения: `active`
@@ -203,7 +206,7 @@
 по `movement_type`, поэтому новые типы автоматически учитываются при корректно заданных
 `from_location_id`/`to_location_id`.
 
-Зафиксированы: timezone `Europe/Moscow`; агрегация партий, контейнеров и loose stock до
+Зафиксированы: timezone `Europe/Moscow`; агрегация партий, контейнеров и россыпного остатка до
 товара; отсутствие status-разреза damaged/quarantine; opening из всей ledger-истории до
 начала периода; заполнение пустых дней календарём; пагинация по товарам. Snapshots и
 текущая проекция `wms.inventory` не используются. Согласованность count и страницы при
@@ -371,3 +374,162 @@ SQL только подготовлен на проверку; в рабочей
 до транзакции; KIZ validation response экранирует Unicode, чтобы неподдерживаемый
 символ в возвращаемом input ошибки тоже не приводил к 500. Lock/touch протокол,
 SQL и миграция не меняются.
+
+## 2026-09-10 — KIZ Stage 2A Phase 1: stable movement identity
+
+- Статус решения: `active` после ручного применения migration владельцем БД.
+- Связанные endpoints: публичные endpoints не изменены.
+- Связанные migrations: `20260910_add_movement_registry.sql`.
+
+Для partitioned ledger выбрана непартиционированная registry с identity bigint PK и
+composite coordinate `(movement_id, movement_created_at)`. Parent movements получает
+`UNIQUE (movement_id, created_at)`, registry — настоящий composite FK. Общая DB boundary
+реализована parent `AFTER INSERT` trigger, поэтому все существующие writers получают
+mapping атомарно без изменений их контрактов.
+
+Историческая coverage заполняется отдельными resumable batches с SKIP LOCKED; migration
+не держит одну транзакцию на весь backfill. Read-only integrity function проверяет 1:1.
+Phase 2, KIZ links, новые lifecycle и endpoints в решение не входят.
+
+## 2026-09-10 — KIZ Stage 2A Phase 2: immutable association
+
+- Статус решения: `active`; migration подготовлена для ручного применения.
+- Связанные endpoints: существующие KIZ read contracts расширены shipped/null location;
+  write endpoints не добавлены.
+- Связанные migrations: `20260910_add_kiz_movement_links.sql`.
+
+Association хранит только `kiz_id + movement_ref`, защищена PK/FK и immutable trigger.
+В event выбран composite FK на association: shipped event не может сослаться на чужой
+или непривязанный movement. Legacy events оставляют movement_ref NULL.
+
+Current state shipped имеет location NULL; event location остаётся source snapshot.
+Identity guard намеренно не получает общий bypass. Будущий controlled transfer/ship
+должен в отдельной фазе определить атомарную write operation и её узкую авторизацию.
+
+## 2026-09-10 — KIZ Stage 2A Phase 3: transaction-owned idempotency
+
+- Статус решения: `active`; migration подготовлена для ручного применения.
+- Связанные endpoints: отсутствуют.
+- Связанные migrations: `20260910_add_kiz_operations.sql`.
+
+Выбран специализированный business key
+`(source_system,operation_type,external_operation_id)`. INSERT ON CONFLICT и последующий
+row lock классифицируют new/replay/conflict и сериализуют concurrent replay до любых
+будущих stock/KIZ locks. Advisory locks и интеграция legacy flows не добавлены.
+
+Status не хранится. NULL result существует только внутри owner transaction; deferred
+constraint запрещает commit без result. Поэтому rollback physical flow удалит intent,
+items и result, а повтор останется доступен. Result и item movement_ref заполняются
+однократно. Один movement_ref принадлежит максимум одной operation item.
+
+Fingerprint строится SHA-256 от UTF-8 canonical JSON всех полей normalized physical
+intent. Object keys сортируются; Decimal записывается без лишних нулей; KIZ и items
+сортируются; duplicates и float запрещены. Unicode identifiers сохраняются точно.
+
+## 2026-09-10 — Controlled KIZ location update через transaction authorization
+
+Для Phase 4 выбран SECURITY DEFINER protocol с узкой authorization row и deferred
+проверкой полного operation→movement→link graph. Глобальный bypass не используется:
+обычный UPDATE location остаётся запрещён. Authorization удаляется до commit и не
+дублирует physical history. Provenance использует `source_type/source_id/source_item_id`.
+
+## 2026-09-11 — Controlled explicit KIZ shipment
+
+Phase 5 использует отдельную SECURITY DEFINER function и transaction-local authorization,
+сохраняя Phase 4 guard без общего bypass. KIZ сначала перестаёт быть active в source
+внутри transaction, затем outgoing movement уменьшает physical stock. Deferred trigger
+требует до commit полный operation/result → item → movement/registry → link → shipped
+state/event graph.
+
+Один item создаёт один movement полного Q. Пустой список KIZ расходует только
+неидентифицированный по КИЗ остаток. FBS и receipt не подключаются к этому endpoint.
+
+## 2026-09-15 — KIZ Stage 3A: unified history без нового ledger
+
+- Статус решения: `active`.
+- Связанный endpoint: `GET /api/kiz-history?kiz_code=<KIZ>`.
+- Связанные migrations: отсутствуют.
+
+Выбран отдельный query namespace, чтобы не пересекаться с catch-all KIZ code route.
+Read model собирается в одной read-only repeatable-read transaction: current KIZ row и
+единая timeline из lifecycle events и immutable movement graph. Поиск physical history
+по reason/metadata запрещён.
+
+Ship movement и shipped event объединяются только по точному `movement_ref`; stable IDs
+обоих источников сохраняются. Deterministic order использует timestamp, source rank и
+`kiz_event_id`/`movement_ref`; materialization и schema changes не добавляются.
+
+## 2026-09-15 — Container Stage 3B Phase B1 identity contract
+
+- Статус: `active`; по входным данным B2.1 migration применена владельцем БД.
+- Stable internal identity — `container_id`; external `qr_code` immutable и не reuse.
+- Flat model и required direct location выбраны до отдельной nesting phase.
+- Канонические statuses: `empty/open/sealed/blocked`; legacy `opened -> open`,
+  `in_transit` исключён как неиспользуемый. Types: `pallet/box/cage/trolley`; legacy
+  DB-only `unit` исключён после empty-production preflight.
+- Warehouse не дублируется в container: определяется root ancestor location; future move
+  обязан сравнивать source/destination roots.
+- Dual `container_contents + inventory.container_code` сохранён до controlled protocols.
+  Register остаётся receipt-like; B1 не меняет quantity и не создаёт movements.
+
+## 2026-09-15 — Container Stage 3B Phase B2.1 fill ledger
+
+- Статус: `active`; implementation/migration готовы, production apply не выполнялся.
+- Выбрана пара transfer movements на line, потому что одна legacy movement имеет один
+  `container_code` и не может одновременно выразить loose source и contained destination.
+- Existing empty register переиспользуется; новый create-empty endpoint не добавлен.
+- Container-specific idempotency отделена от `kiz_operations`; fingerprint включает
+  container, stable lines, product, exact batch и Decimal quantity.
+- Container lock и canonical inventory locks задают общий порядок с будущими B2.2/B3.
+  Legacy unpack изменён только добавлением lock; quantitative extract не переработан.
+
+## 2026-09-16 — Container Stage 3B Phase B2.2 controlled extract
+
+- Статус: `active`; implementation, read-only preflight и migration готовы. Production
+  apply и business extract агентом не выполнялись.
+- Endpoint additive: `POST /api/container-operations/extract`; legacy unpack не меняется.
+- Ledger зеркален fill: contained outgoing и loose incoming `transfer` movement на item.
+- Full extract удаляет active current content row; отдельный contents history ledger не
+  создаётся, история сохраняется operation graph и movements.
+- Duplicate exact product/batch scopes в request запрещены. NULL batch сравнивается через
+  `IS NOT DISTINCT FROM`; Decimal/float policy совпадает с fill.
+- Existing container-operation idempotency обобщена по `operation_type`; extract result
+  включает финальный `container_status`.
+- Controlled DB function применяет contents mutation только после пары movement refs и
+  проверяет one-shot delta. Container/inventory/content locks совместимы с fill order.
+- B3/B4/B5 и Stage 3C остаются за границей решения.
+
+## 2026-09-17 — Container Stage 3B Phase B3 move и unpack-all
+
+- Move использует один exact transfer на contained scope; empty/same-location не создают
+  fake items/movements. Warehouse выводится из root location ancestor.
+- Structural operation `container_id` выбран для replayable itemless move.
+- Legacy move trigger сохраняется; duplicate projection подавляется только проверенным
+  transaction-local GUC текущей unfinished move operation.
+- Unpack-all переиспользует B2.2 paired movement/content mutation protocol и формирует
+  items из locked server snapshot. B4/B5/Stage 3C не включены.
+
+## 2026-09-17 — Container Stage 3B B4 final writer closure
+
+- Статус: `active`; production migration применяется владельцем БД вручную.
+- Связанные endpoints: `POST /api/movements`, `/api/containers/register`,
+  `/api/container-operations/*`, `/api/system/recalculate-inventory`,
+  `GET /api/system/audit-summary`.
+- Связанные миграции: `20260917_container_b4_final_preflight.sql`,
+  `20260917_add_container_b4_final.sql`.
+- Generic movements сохранены как loose-only contract; container-code batch rejected атомарно.
+- Legacy container move/unpack удалены, register ограничен empty creation.
+- Простой DB guard разрешает container-coded movement только с complete container-operation provenance.
+- Recalculate не repair-ит contents и откатывается при container projection mismatch.
+- Runtime non-superuser role и будущие container shipment/kit/re-sorting/receipt/nesting rules
+  сознательно не входят в B4.
+
+## 2026-09-18 — Container Stage 3C C1 KIZ holder
+
+- Статус: `active`; production migration применяется вручную владельцем БД.
+- Active holder выбран как exact XOR `location_id/container_id`; QR не хранится в KIZ.
+- Physical quantity остаётся только в movement ledger; один item quantity связывается с N
+  KIZ identities без synthetic per-KIZ movements.
+- `kiz_codes=[]` означает расход unidentified units, а не автоматический выбор КИЗ.
+- Pair legs fill/extract/unpack группируются в один history item; move сохраняет holder.
+- Canonical lock order: container/projections до ordered KIZ locks.

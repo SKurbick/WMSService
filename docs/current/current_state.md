@@ -50,8 +50,7 @@
 - Остатки считаются производными от `wms.movements`; в коде есть системная сверка и пересчет `wms.inventory` из движений.
 - Создание batch movements в публичном endpoint выполняется в транзакции.
 - Часть операций атомарности делегирована PostgreSQL-функциям и триггерам:
-  - `wms.register_container`;
-  - `wms.unpack_from_container`;
+  - `wms.register_container` (после B4 только empty creation);
   - `wms.find_available_location`;
   - триггер обновления inventory при вставке в `wms.movements`;
   - триггер генерации `location_code` и `path` для `wms.locations`.
@@ -188,6 +187,131 @@ Changed/physical/movement fields намеренно отсутствуют: ст
 Scope: точная location, available, batch/container NULL. Assignment идентифицирует
 существующую единицу без physical delta и movement; registry/audit, terminal lifecycle,
 stock-summary и отдельная KIZ integrity проверка доступны через API.
-Inventory guard защищает от расхода identified части всеми writers. Assignment делает
+Inventory guard защищает КИЗ-идентифицированную часть от расхода всеми writers. Assignment делает
 согласованный MVCC touch; recalculate использует UPSERT и удаление obsolete scopes.
 [Контракт, примеры и ограничения](../flows/kiz_v1.md).
+
+## KIZ Stage 2A — Phase 1
+
+Подготовлена movement identity infrastructure: composite unique coordinate на
+partitioned `wms.movements`, непартиционированная `wms.movement_registry`, автоматическая
+регистрация каждого нового movement на DB boundary, resumable batch backfill и read-only
+integrity check. Публичные API и legacy movement links не изменены. Phase 1 применена
+владельцем БД; [порядок deployment и backfill](../flows/kiz_stage2a_phase1.md).
+
+## KIZ Stage 2A — Phase 2
+
+Добавлен immutable слой `wms.kiz_movement_links` между KIZ и `movement_ref`.
+Lifecycle/read schemas допускают `shipped` с `location_id=NULL`; card/list используют
+LEFT JOIN и не теряют такую запись. `kiz_events.movement_ref` nullable для старых
+событий и обязателен для будущего shipped event, причём composite FK требует link того
+же KIZ. Assignment/error/deactivate/stock/integrity contracts не изменены.
+
+Phase 1 — completed. Phase 2 — completed и применена владельцем БД.
+[Контракт и deployment](../flows/kiz_stage2a_phase2.md).
+
+## KIZ Stage 2A — Phase 3
+
+Добавлены изолированные `wms.kiz_operations` и `wms.kiz_operation_items` для будущих
+transfer/ship. UNIQUE business key и row lock дают new/replay/fingerprint conflict без
+advisory locks. Internal service работает только с caller-owned transaction; deferred
+constraint требует сохранить result до commit. Fingerprint — SHA-256 canonical JSON.
+
+Phase 1 — completed. Phase 2 — completed. Phase 3 — completed.
+
+## KIZ Stage 2A — Phase 4
+
+Добавлен `POST /api/kiz-operations/transfer`: один atomic idempotent request переносит
+доступный россыпной остаток точной локации, explicit active KIZ и создаёт один movement
+на item, registry reference, operation attachment и immutable links. Поддерживаются
+КИЗ-идентифицированные, смешанные и неидентифицированные по КИЗ transfers. Старые
+endpoints не изменены.
+
+Phase 4 — completed и применена владельцем БД.
+[Контракт и deployment](../flows/kiz_stage2a_phase4.md).
+
+## KIZ Stage 2A — Phase 5
+
+Добавлен POST /api/kiz-operations/ship: atomic idempotent shipment создаёт один
+outgoing movement на item, уменьшает physical quantity, переводит явно выбранные КИЗ
+из active/source в shipped/NULL, связывает их с movement_ref и создаёт shipped events.
+Mixed и unidentified-only semantics совпадают с transfer; автоматического выбора КИЗ
+нет. Direct lifecycle UPDATE остаётся запрещён DB guard.
+
+Phase 1 — completed. Phase 2 — completed. Phase 3 — completed.
+Phase 4 — completed. Phase 5 — completed. Stage 2A внутренне завершён.
+Stage 2B FBS KIZ и Stage 2C receipt KIZ не реализованы.
+[Контракт и deployment](../flows/kiz_stage2a_phase5.md).
+
+## KIZ Stage 3A — unified history
+
+Добавлен read-only `GET /api/kiz-history?kiz_code=<KIZ>`. Endpoint возвращает
+существующую KIZ card как current state и единую chronological timeline из
+`kiz_events` и linked physical movements. Shipment lifecycle event и ship movement с
+одним `movement_ref` объединяются; transfer берётся только из movement link, assignment
+не получает synthetic receive. История shipped KIZ читается при current location NULL.
+
+Используются два фиксированных запроса в одной read-only repeatable-read transaction.
+Новых таблиц, индексов, migration и write flows нет.
+[Контракт и merge semantics](../flows/kiz_stage3a_history.md).
+
+## Container Stage 3B Phase B1 — completed (2026-09-15)
+
+Подготовлены preflight и migration стабильной container identity. `container_id` —
+внутренняя identity, `qr_code` — неизменяемая внешняя identity без supported reuse.
+Контейнеры плоские, имеют direct `location_id`, а API/DB используют statuses
+`empty/open/sealed/blocked` и types `pallet/box/cage/trolley`.
+
+Legacy register остаётся receipt-like; существующие URLs не изменены. B1 migration
+применена владельцем БД. Агент production writes не выполнял.
+[Полный контракт и runbook](../flows/container_stage3b_phase_b1.md).
+
+## Container Stage 3B Phase B2.1 — completed (2026-09-15)
+
+Добавлен идемпотентный `POST /api/container-operations/fill`: existing available loose
+stock переносится в flat `empty/open` container на той же direct location без изменения
+physical total. На строку создаётся связанная пара transfer movements и два stable
+movement refs; contained inventory и active `container_contents` проверяются до commit.
+
+Existing register с `contents=[]` используется как zero-effect create-empty flow.
+B2.1 migration применена владельцем БД, ручной acceptance прошёл успешно.
+[Контракт и runbook](../flows/container_stage3b_phase_b21_fill.md).
+
+## Container Stage 3B Phase B2.2 — completed in code (2026-09-16)
+
+Добавлен `POST /api/container-operations/extract`: available contained stock переносится
+в loose scope direct location контейнера с сохранением physical total. Partial extract
+уменьшает active content; full extract удаляет current row без `quantity=0`. Статус
+становится `empty` только после удаления последнего active content.
+
+B2.2 preflight/migration подготовлены, но production apply и production extract агентом
+не выполнялись. Следующая реализованная фаза B3 описана ниже; актуальный статус B4/C1 приведён далее.
+[Контракт и runbook](../flows/container_stage3b_phase_b22_extract.md).
+
+## Container Stage 3B Phase B3 — completed in code (2026-09-17)
+
+Добавлены идемпотентные `POST /api/container-operations/move` и
+`POST /api/container-operations/unpack-all`. Move переносит empty/open/sealed flat
+container только внутри root warehouse; empty/same-location не создают fake movements.
+Unpack-all делает server-side locked snapshot всех active contents и зеркально B2.2
+переводит их в loose stock, после чего status становится `empty`.
+
+B3 preflight/migration подготовлены; production apply и production operations агентом не
+выполнялись. B4 closure и актуальный статус Stage 3C приведены следующими разделами.
+[Контракт и runbook](../flows/container_stage3b_phase_b3_move_unpack_all.md).
+
+## Container Stage 3B Phase B4 Final — completed in code (2026-09-17)
+
+Generic movements ограничены loose stock; legacy container move/unpack удалены из API,
+register стал empty-only. Task availability использует exact loose scope. Recalculate получил
+transactional container pre/post guard, а audit-summary — container mismatch/provenance counters.
+Подготовлены `20260917_container_b4_final_preflight.sql` и
+`20260917_add_container_b4_final.sql`; production apply выполняет владелец БД вручную.
+Runtime superuser остаётся отдельным infrastructure debt и не блокирует Stage 3C.
+
+## Container Stage 3C Phase C1 — completed in code (2026-09-18)
+
+Реализованы mixed identified/unidentified fill/extract, KIZ-aware whole-container move и
+unpack-all, container holder read models/history/integrity и terminal transitions.
+Подготовлены C1 preflight/migration/runbook; production migration и production writes
+агентом не выполнялись. Следующие Stage 3C phases не начаты.

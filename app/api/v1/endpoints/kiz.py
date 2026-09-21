@@ -48,15 +48,17 @@ async def stock_summary(
         description="Идентификатор существующего товара (SKU).",
         examples=["wild1825"],
     ),
-    location_code: str = Query(
-        ...,
+    location_code: str | None = Query(
+        None,
         min_length=1,
         description="Код точной локации, без дочерних адресов.",
         examples=["STORAGE-A-01"],
     ),
+    container_id: int | None = Query(None, gt=0, description="ID контейнера — прямого holder КИЗ."),
+    container_qr_code: str | None = Query(None, description="QR контейнера — прямого holder КИЗ."),
     service: KizService = Depends(get_kiz_service),
 ):
-    return await service.summary(product_id, location_code)
+    return await service.summary(product_id, location_code, container_id, container_qr_code)
 
 
 @router.get("", response_model=KizPage, **OPERATIONS["list"])
@@ -68,13 +70,18 @@ async def list_kiz(
     lifecycle_status: Lifecycle
     | None = Query(
         None,
-        description="active — действующие, error — ошибочные, deactivated — деактивированные; без фильтра — все.",
+        description="active — действующие, error — ошибочные, deactivated — деактивированные, shipped — покинувшие склад; без фильтра — все.",
     ),
+    container_id: int | None = Query(None, gt=0, description="Фильтр по контейнеру — прямому holder КИЗ."),
+    container_qr_code: str | None = Query(None, description="Фильтр по QR контейнера — прямого holder КИЗ."),
     limit: int = Query(50, ge=1, le=200, description="Размер страницы от 1 до 200 записей."),
     offset: int = Query(0, ge=0, description="Число пропускаемых записей; первая страница — 0."),
     service: KizService = Depends(get_kiz_service),
 ):
-    return await service.list(product_id, location_code, lifecycle_status, limit, offset)
+    return await service.list(
+        product_id, location_code, lifecycle_status, container_id, container_qr_code,
+        limit, offset,
+    )
 
 
 @router.get("/{kiz_code:path}/events", response_model=KizEventPage, **OPERATIONS["events"])

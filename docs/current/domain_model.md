@@ -143,7 +143,6 @@
 - `empty`;
 - `sealed`;
 - `open`;
-- `in_transit`;
 - `blocked`.
 
 Содержимое контейнера:
@@ -246,7 +245,93 @@ Audit всех входящих событий резервов хранится
 
 wms.kiz — identity одной физической единицы, а не отдельный количественный остаток.
 product_id может одновременно иметь идентифицированную и неидентифицированную часть.
-Активный KIZ привязан к точной location и занимает 1 available loose единицу без партии.
+Активный KIZ привязан к точной location и занимает одну единицу доступного россыпного
+остатка без партии и контейнера.
 Terminal error/deactivated сохраняет историческую location, но не занимает остаток.
 wms.kiz_events — неизменяемые identity events assigned/marked_as_error/deactivated,
 без association с movements. Подробности: [KIZ v1](../flows/kiz_v1.md).
+
+## Stable movement identity
+
+`wms.movement_registry` отделяет внутренний stable `movement_ref` от физической
+координаты partitioned ledger `(movement_id, movement_created_at)`. Registry не хранит
+quantity или стороны движения и не является вторым ledger. Новые mappings создаются
+DB trigger в transaction movement; legacy domain links пока используют прежние поля.
+
+## KIZ movement association и shipped current state
+
+`wms.kiz_movement_links` связывает одну identity KIZ с несколькими physical movements
+во времени, а один movement — с несколькими KIZ. Единственная пара
+`(kiz_id, movement_ref)` неизменяема; quantity/product/location берутся из movement.
+`shipped` означает, что единица покинула склад: current `location_id` равна NULL,
+а source location будущей отгрузки остаётся в linked outgoing movement и shipped event.
+`error/deactivated` сохраняют прежнюю location. Explicit transfer и ship реализованы
+как отдельные KIZ operations.
+
+## KIZ operation idempotency
+
+`wms.kiz_operations` хранит business key внешней команды, fingerprint physical intent
+и сохранённый response snapshot. `wms.kiz_operation_items` хранит stable external line
+и nullable `movement_ref`; physical data не дублируются. Один movement_ref принадлежит
+максимум одной строке KIZ operation. Таблицы предназначены только для будущих KIZ
+transfer/ship и не включены в legacy movement/FBS/task/kit/re-sorting flows.
+
+## KIZ explicit transfer
+
+`kiz_operations → kiz_operation_items → movement_ref → movement` фиксирует operation и
+physical effect. `kiz_movement_links` связывает selected KIZ с тем же movement_ref.
+`kiz.location_id` меняется на destination, lifecycle остаётся active. Transaction-local
+`kiz_location_update_authorizations` не является ledger и пуст после commit.
+
+## KIZ explicit shipment
+
+`kiz_operations → kiz_operation_items → movement_ref → ship movement` фиксирует
+operation и physical write-off. Selected KIZ получают immutable links и shipped events
+с тем же movement_ref. Current state меняется `active/source → shipped/NULL`,
+`closed_at` заполняется. Transaction-local `kiz_shipment_authorizations` существует
+только для controlled DB protocol и удаляется deferred validation перед commit.
+
+## KIZ unified history read model
+
+История конкретного КИЗ не является новым ledger. Current state читается из `wms.kiz`,
+identity/lifecycle — из `wms.kiz_events`, physical transfer/ship — по immutable graph
+`kiz_movement_links → movement_registry → movements`. Historical locations берутся из
+event/movement, не реконструируются из текущей `kiz.location_id`.
+
+Один link означает участие одной identified unit в movement; `movement.quantity`
+остаётся полным количеством движения. `shipped` event и linked ship movement одного
+`movement_ref` представлены одной user-facing записью `ship` с обеими stable identities.
+
+## Container identity Stage 3B B1
+
+`container_id` — стабильная внутренняя identity; будущие domain links используют её.
+`qr_code` — уникальная неизменяемая business identity. Supported hard delete и QR reuse
+запрещены. Модель flat: parent всегда NULL, текущая location всегда задана напрямую.
+
+Warehouse контейнера определяется корневым ancestor его location path; отдельное поле
+на container не дублируется. Будущий move должен оставаться в одном таком warehouse.
+`container_contents` и inventory/container_code пока являются dual representation.
+
+## Container operation identity B2.1/B2.2
+
+`container_operations.operation_id` — внутренняя identity команды, а business identity —
+`(source_system, operation_type, external_operation_id)`. Immutable item связывает
+`container_id`, external line, exact product/batch/quantity и два `movement_ref`.
+`container_id`, а не QR, используется как domain target; QR сохраняется в response и
+legacy inventory projection. `operation_type` разделяет business keys `fill` и `extract`.
+Для extract item outgoing ref означает contained outgoing movement, incoming ref — loose
+incoming movement. Result snapshot дополнительно фиксирует итоговый container status.
+
+## Container operation identity B3
+
+`container_operations.container_id` структурно хранит target даже для empty move без
+items. Move item использует один `movement_ref`; fill/extract/unpack-all сохраняют пару
+outgoing/incoming refs. Operation types: `fill/extract/move/unpack_all`. Move result
+фиксирует обе location identities, unpack-all items являются server snapshot.
+
+## KIZ container holder overlay (C1)
+
+`wms.kiz.container_id` — nullable FK RESTRICT на `wms.containers.container_id`.
+Direct holder active KIZ представлен location XOR container; QR и effective container
+location являются join/read fields. `kiz_movement_links` остаётся identity association без
+quantity. `kiz_container_holder_authorizations` — transaction-local protocol, не ledger.

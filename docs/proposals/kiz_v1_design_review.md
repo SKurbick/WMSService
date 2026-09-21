@@ -44,7 +44,7 @@ KIZ v1 работает только со следующим физически�
 inventory.status = 'available'
 inventory.batch_number IS NULL
 inventory.container_code IS NULL
-loose stock only
+только россыпной остаток
 ```
 
 Функциональность первого этапа:
@@ -52,13 +52,13 @@ loose stock only
 - глобальный реестр КИЗ;
 - один неизменяемый глобально уникальный `kiz_code` на одну идентифицированную
   физическую единицу;
-- assignment нового КИЗ существующей available loose единице без движения товара;
+- assignment нового КИЗ существующей единице доступного россыпного остатка без движения товара;
 - current state и минимальный lifecycle КИЗ;
 - отдельный малый audit событий идентичности;
 - чтение карточки КИЗ и списков по товару/локации;
 - расчёт physical/identified/unidentified quantity;
 - конкурентно безопасный assignment;
-- DB-level запрет уменьшить или удалить физический loose stock ниже количества
+- DB-level запрет уменьшить или удалить физический россыпной остаток ниже количества
   активных КИЗ;
 - read-only integrity check невозможных состояний.
 
@@ -88,7 +88,7 @@ loose stock only
 
 KIZ registry можно изолировать от movement association, но нельзя изолировать от
 защиты inventory. С момента появления первого active КИЗ все пути уменьшения того же
-loose stock scope обязаны соблюдать unidentified quantity.
+россыпного остатка обязаны соблюдать ограничение неидентифицированного по КИЗ остатка.
 
 Без DB-защиты запуск registry небезопасен даже при отсутствии KIZ transfer/ship API.
 
@@ -277,7 +277,7 @@ WHERE product_id = :product_id
   AND lifecycle_status = 'active';
 ```
 
-Поскольку v1 создаёт active KIZ только в available loose no-batch scope, дополнительных
+Поскольку v1 создаёт active KIZ только в доступном россыпном остатке без партии, дополнительных
 scope columns для подсчёта v1 не требуется.
 
 ### 3.4. Unidentified quantity
@@ -544,7 +544,7 @@ KIZ guard отдельная ветка `write_off` не нужна.
 |---|---|---|---|---|
 | `POST /api/movements` / `MovementService` | Batch movements в одной transaction; inventory через trigger | Любой loose from-side может списать active КИЗ как unidentified | Да, на уровне DB; Python желательно | Inventory guard обязателен; optional precheck/error mapping в service |
 | Ручной outgoing `adjust` | Тот же общий movement path; reason только рекомендация | Может уменьшить physical ниже identified | Да | Покрывается inventory guard; вернуть понятный conflict |
-| FBS initial/HTTP/retry | `ship`, no batch/container, fixed FBS location; product group atomic | Списывает aggregate loose stock без КИЗ | Да для DB-защиты; selection нет | Guard запрещает расход active части; распознать новый conflict как нехватку unidentified, не бесконечно retry |
+| FBS initial/HTTP/retry | `ship`, без партии/контейнера, fixed FBS location; product group atomic | Списывает агрегированный россыпной остаток без КИЗ | Да для DB-защиты; selection нет | Guard запрещает расход active части; распознать conflict как нехватку неидентифицированного по КИЗ остатка, не бесконечно retry |
 | Task complete | Создаёт batch loose transfer после отдельных updates task items | Movement может быть отклонён; task flow уже не полностью атомарен | DB guard — да; полный refactor — нет | Безопасность обеспечивает guard; отдельно корректно отобразить conflict, атомарность task оставить известным риском |
 | Discrepancy approval | Movements создаются по одному в отдельных transactions, затем statuses | Возможен частичный business result при позднем KIZ conflict | DB guard — да; orchestration refactor желательно позже | Guard для каждого расхода; задокументировать/обработать conflict, не расширять KIZ v1 крупным task refactor |
 | Kit assembly/disassembly | Одна transaction; loose no-batch расход, собственный advisory + inventory `FOR UPDATE` | Precheck учитывает physical, но не active KIZ | Да для guard; KIZ lifecycle нет | Existing row lock совместим; DB guard отклоняет расход identified части; map на 409 |
@@ -723,7 +723,7 @@ Integrity endpoint — диагностика, не замена write-time DB g
 
 Следующие пункты должны входить в первое ТЗ; без них v1 нельзя безопасно запускать:
 
-- authoritative DB guard на decrease/delete available loose NULL-batch/NULL-container
+- authoritative DB guard на уменьшение/удаление доступного россыпного остатка без партии/контейнера
   inventory;
 - единый lock order `inventory scope -> KIZ rows -> events`;
 - assignment под `SELECT inventory ... FOR UPDATE`;

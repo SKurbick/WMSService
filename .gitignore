@@ -11,10 +11,24 @@ dev_insert_stock_reservation_test_data.py
 FBS_WRITE_OFF_AUDIT.md
 docs/proposals/saga_fbo_wms_analysis.md
 docs/archive/audits/kit_operations_orchestration_audit.md
-FBS_AVAILABLE_LOAD_REQUEST.json
-FBS_AVAILABLE_RESET_REQUEST.json
+# Одноразовые операционные payload'ы для ручных складских корректировок.
+# Правила ограничены корнем репозитория, чтобы не скрывать JSON fixtures в tests/.
+/*_AVAILABLE_LOAD_REQUEST*.json
+/*_AVAILABLE_RESET_REQUEST*.json
+/STORAGE_TEST_TO_L108_TRANSFER_REQUEST.json
 FBS_INVENTORY_RESET_PLAN.md
 movement_matches_202608310937.csv
 sql_results.txt
 chat.txt
 kiz_steps_tests.md
+
+# Локальные ТЗ, prompts и результаты архитектурных аудитов KIZ.
+# Актуальная проектная документация хранится в docs/ и этими правилами не затрагивается.
+/kiz_stage*_architecture.md
+/kiz_stage*_audit*.md
+/wms_stage*.md
+/ТЗ_ KIZ Stage *.md
+
+# Локальная диагностика RabbitMQ, не относящаяся к реализации KIZ.
+/scripts/peek_stock_reservation_messages.py
+/tests/test_peek_stock_reservation_messages.py

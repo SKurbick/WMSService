@@ -48,7 +48,7 @@
 
 Префикс: `/api/movements`.
 
-- `POST /api/movements` - создать batch movements, 1-500 элементов, атомарно. Используется также для ручной корректировки остатков через `movement_type="adjust"`: приходная корректировка задается через `to_location_code`, расходная - через `from_location_code`.
+- `POST /api/movements` - создать атомарный batch loose-only movements, 1-500 элементов. `container_code` должен быть `null`/omitted; container stock меняют только `/api/container-operations/*`.
 - `GET /api/movements` - история движений с фильтрами.
 - `GET /api/movements/product/{product_id}` - история движений товара.
 
@@ -69,10 +69,8 @@
 
 Префикс: `/api/containers`.
 
-- `POST /api/containers/register` - зарегистрировать контейнер и содержимое через `wms.register_container`.
+- `POST /api/containers/register` - создать пустой контейнер; `contents` обязан быть пустым.
 - `GET /api/containers/{qr_code}` - получить контейнер по QR.
-- `PUT /api/containers/{container_id}/location` - переместить контейнер.
-- `POST /api/containers/{container_id}/unpack` - извлечь товар из контейнера в россыпь через `wms.unpack_from_container`.
 - `PATCH /api/containers/{container_id}/status` - изменить статус контейнера, кроме уже заблокированного.
 - `GET /api/containers/{qr_code}/history` - история движений контейнера.
 - `GET /api/containers/location/{location_id}` - контейнеры в локации.
@@ -113,7 +111,7 @@
 
 - `GET /api/system/audit-summary` - read-only count-проверки известных рисков качества данных.
 - `POST /api/system/validate-integrity` - сверить `inventory` с расчетом из `movements`.
-- `POST /api/system/recalculate-inventory` - пересчитать available через UPSERT/obsolete DELETE с KIZ validation.
+- `POST /api/system/recalculate-inventory` - пересчитать available через UPSERT/obsolete DELETE с KIZ validation и container projection pre/post guard.
 - `POST /api/system/create-snapshot` - создать снимок остатков.
 - `POST /api/system/refresh-materialized-views` - обновить `wms.mv_product_stock`.
 
@@ -213,13 +211,14 @@ Legacy revisions читаются из `public.supply_to_sellers_warehouse`, cur
 ## KIZ v1
 
 - GET /api/kiz — список с product_id/location_code/lifecycle_status, limit/offset.
-- POST /api/kiz/assign — назначить новый КИЗ существующей loose available единице.
+- POST /api/kiz/assign — назначить новый КИЗ единице доступного россыпного остатка.
 - GET /api/kiz/stock-summary — exact product_id/location_code summary.
 - GET /api/kiz/{kiz_code} — current state.
 - GET /api/kiz/{kiz_code}/events — paginated immutable audit.
 - POST /api/kiz/{kiz_code}/mark-error — active → error, author/reason.
 - POST /api/kiz/{kiz_code}/deactivate — active → deactivated, author/reason.
-- GET /api/system/kiz-integrity — read-only нарушения identified <= physical.
+- GET /api/system/kiz-integrity — read-only нарушения: КИЗ-идентифицированный остаток превышает физический.
+- POST /api/kiz-operations/transfer — атомарное идемпотентное перемещение доступного россыпного остатка и выбранных active КИЗ.
 
 [Полные контракты и JSON-примеры](../flows/kiz_v1.md). KIZ guard и concurrency
 конфликты существующих write endpoints возвращают HTTP 409; FBS журнал сохраняется.
@@ -248,3 +247,82 @@ app/api/v1/endpoints/{kiz,movements,system,fbs_shipments}.py,
 app/core/schemas/{kiz,inventory,movement,system}.py, tests/test_swagger_documentation.py
 и этот документ. Стандартные кнопки Swagger (Try it out, Execute, Schema) остаются
 английскими; русифицированы описания API, заголовки операций и новые примеры.
+
+## KIZ Stage 2A Phase 5
+
+- `POST /api/kiz-operations/ship` — atomic idempotent physical shipment выбранных
+  active KIZ и/или неидентифицированного по КИЗ остатка.
+- Request повторяет transfer envelope, но item не содержит destination.
+- `quantity` — строго положительное целое JSON-число; `external_line_id` стабилен
+  для одной строки внешней команды.
+- Existing KIZ reads показывают shipped с NULL location и shipped event/movement_ref.
+- Старые movement, FBS и KIZ v1 contracts не изменены.
+
+## KIZ Stage 3A history
+
+`GET /api/kiz-history?kiz_code=<KIZ>` читает current projection из `wms.kiz`, lifecycle
+из `wms.kiz_events`, physical transfer/ship только через
+`kiz_movement_links → movement_registry → movements`. Совпавшие по `movement_ref`
+ship movement и shipped event объединяются в одну запись `ship`. Assignment не получает
+искусственного receive. `quantity` в timeline относится ко всему movement, не к одному
+linked КИЗ. [Полный контракт](../flows/kiz_stage3a_history.md).
+
+## Container Stage 3B B1 contract normalization
+
+Новых container endpoints нет. Все существующие `/api/containers` URLs сохранены.
+Request/response enum совпадает с DB: status `empty/open/sealed/blocked`, type
+`pallet/box/cage/trolley`. После B4 `register` создаёт только empty container,
+а QR create input требует непустую identity без краевых пробелов.
+
+## Container Stage 3B B2.1
+
+- `POST /api/container-operations/fill` — additive idempotent loose-to-container fill.
+- `201` используется и для new, и для exact replay с сохранённым response.
+- `404`: container/product отсутствует; `409`: state/stock/invariant/idempotency conflict;
+  `422`: request schema, duplicate line, invalid decimal/Unicode.
+- После B4 `POST /api/containers/register` принимает только empty contents; receipt-to-container
+  выполняется пока как receipt в loose stock с последующим controlled fill.
+
+## Container Stage 3B B2.2
+
+- `POST /api/container-operations/extract` — additive idempotent partial/full
+  container-to-loose extract для `open` flat container.
+- Request использует stable `container_id`, exact product/batch и Decimal quantity;
+  destination всегда равен direct `container.location_id`.
+- `201` используется для new и exact replay; response содержит итоговый
+  `container_status` и два `movement_ref` на item.
+- `404`: container/product отсутствует; `409`: status/stock/invariant/idempotency
+  conflict; `422`: malformed request, duplicate line/scope, invalid Decimal/Unicode.
+- B4 удаляет legacy unpack route; partial/full extraction выполняют B2.2/B3 endpoints.
+
+## Container Stage 3B B3
+
+- `POST /api/container-operations/move` — idempotent same-warehouse move; response
+  фиксирует source/destination/status и один movement ref на фактически перемещённый scope.
+- `POST /api/container-operations/unpack-all` — idempotent full open-container unpack;
+  items формируются сервером и содержат два movement refs на scope.
+- `201`: new/exact replay; `404`: container/destination отсутствует; `409`: status,
+  warehouse, projection, concurrency или idempotency conflict; `422`: malformed request.
+- Legacy move/unpack URLs и их public contracts не изменены.
+
+## Container Stage 3B B4 Final
+
+- Generic `POST /api/movements` остаётся loose-only; non-NULL `container_code` возвращает
+  `400 GENERIC_CONTAINER_MOVEMENT_NOT_ALLOWED`, весь batch откатывается.
+- Legacy container move/unpack routes удалены из runtime/OpenAPI.
+- Empty register сохранён; non-empty contents возвращает `400 CONTAINER_CONTENTS_NOT_ALLOWED`.
+- Tasks читают exact `available` loose product/batch scope.
+- Recalculate проверяет ledger/contents/inventory/location container projection до и после rewrite.
+- `GET /api/system/audit-summary` включает container mismatch, state и provenance counters.
+
+## Container Stage 3C C1
+
+- `fill`/`extract`: item additive принимает `kiz_codes`, default `[]`; response сохраняет
+  canonical identity list. KIZ set входит в idempotency intent, порядок кодов — нет.
+- `move`/`unpack-all`: request не изменён; response item additive возвращает server-derived
+  `kiz_codes`.
+- `GET /api/kiz` поддерживает `container_id`/`container_qr_code`; `location_code` остаётся
+  direct loose-holder filter.
+- `GET /api/kiz/stock-summary` требует ровно один loose/container holder scope.
+- `GET /api/kiz-history` группирует paired legs container operation в logical item.
+- `GET /api/system/kiz-integrity` проверяет loose и contained holder/quantity scopes.

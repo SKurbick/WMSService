@@ -7,24 +7,19 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
-Lifecycle = Literal["active", "error", "deactivated"]
+from app.core.json_validation import validate_jsonb_value
+
+Lifecycle = Literal["active", "error", "deactivated", "shipped"]
 NonEmpty = Annotated[str, StringConstraints(min_length=1)]
 
 
 def _validate_metadata(value):
-    """Проверить строки, включая ключи и вложенные значения, до записи jsonb."""
-    pending = [value]
-    while pending:
-        item = pending.pop()
-        if isinstance(item, str):
-            if "\x00" in item or any(0xD800 <= ord(char) <= 0xDFFF for char in item):
-                raise ValueError("metadata не должна содержать NUL или некорректные Unicode-символы")
-        elif isinstance(item, dict):
-            pending.extend(item.keys())
-            pending.extend(item.values())
-        elif isinstance(item, list):
-            pending.extend(item)
-    return value
+    try:
+        return validate_jsonb_value(value)
+    except ValueError as exc:
+        raise ValueError(
+            "metadata не должна содержать NUL или некорректные Unicode-символы"
+        ) from exc
 
 
 class KizAssignment(BaseModel):
@@ -100,14 +95,18 @@ class KizState(BaseModel):
     product_id: str = Field(
         description="Идентификатор существующего товара (SKU) из public.products.id."
     )
-    location_id: int = Field(
-        description="Внутренний идентификатор точной локации; дочерние адреса не учитываются."
+    location_id: int | None = Field(
+        description="Текущая точная локация; null у КИЗ, покинувшего склад в состоянии shipped."
     )
-    location_code: str = Field(
-        description="Код существующей точной локации. Дочерние адреса не учитываются."
+    location_code: str | None = Field(
+        description="Код direct loose holder; null для contained и shipped КИЗ."
     )
+    container_id: int | None = Field(default=None, description="Прямой holder-контейнер.")
+    container_qr_code: str | None = Field(default=None, description="QR прямого holder-контейнера.")
+    container_location_id: int | None = Field(default=None, description="Текущая локация holder-контейнера.")
+    container_location_code: str | None = Field(default=None, description="Код текущей локации holder-контейнера.")
     lifecycle_status: Lifecycle = Field(
-        description="Состояние: active — действующий; error — ошибочное назначение; deactivated — деактивирован. Закрытые состояния окончательные."
+        description="Состояние: active, error, deactivated или shipped. Shipped означает, что единица покинула склад."
     )
     origin_type: Literal["warehouse_assignment"] = Field(
         description="Источник появления КИЗ. В первой версии всегда warehouse_assignment — назначение на существующий остаток."
@@ -136,12 +135,16 @@ class KizStockSummary(BaseModel):
     product_id: str = Field(
         description="Идентификатор существующего товара (SKU) из public.products.id."
     )
-    location_id: int = Field(
-        description="Внутренний идентификатор точной локации; дочерние адреса не учитываются."
+    location_id: int | None = Field(
+        description="Прямая loose-локация; null для container scope."
     )
-    location_code: str = Field(
-        description="Код существующей точной локации. Дочерние адреса не учитываются."
+    location_code: str | None = Field(
+        description="Код прямой loose-локации; null для container scope."
     )
+    container_id: int | None = Field(default=None, description="ID контейнера — прямого holder КИЗ.")
+    container_qr_code: str | None = Field(default=None, description="QR контейнера — прямого holder КИЗ.")
+    container_location_id: int | None = Field(default=None, description="ID текущей локации holder-контейнера.")
+    container_location_code: str | None = Field(default=None, description="Код текущей локации holder-контейнера.")
     physical_quantity: Decimal = Field(
         description="Физическое количество: только available, без партии и контейнера на точном адресе. В JSON — десятичная строка."
     )
@@ -163,20 +166,25 @@ class KizAssignmentResult(KizStockSummary):
 class KizEvent(BaseModel):
     kiz_event_id: int = Field(description="Внутренний идентификатор неизменяемого события КИЗ.")
     kiz_id: int = Field(description="Внутренний идентификатор записи КИЗ.")
-    event_type: Literal["assigned", "marked_as_error", "deactivated"] = Field(
-        description="Событие: assigned — назначен; marked_as_error — признан ошибочным; deactivated — деактивирован."
+    event_type: Literal["assigned", "marked_as_error", "deactivated", "shipped"] = Field(
+        description="Событие: assigned, marked_as_error, deactivated или shipped."
     )
     from_status: Lifecycle | None = Field(
         description="Состояние до события; null для первоначального назначения."
     )
     to_status: Lifecycle = Field(
-        description="Состояние после события: active, error или deactivated."
+        description="Состояние после события: active, error, deactivated или shipped."
     )
     product_id: str = Field(
         description="Идентификатор существующего товара (SKU) из public.products.id."
     )
-    location_id: int = Field(
-        description="Внутренний идентификатор точной локации; дочерние адреса не учитываются."
+    location_id: int | None = Field(
+        description="Прямая loose-локация holder; null для contained lifecycle events."
+    )
+    container_id: int | None = Field(default=None, description="Снимок прямого holder-контейнера.")
+    movement_ref: int | None = Field(
+        default=None,
+        description="Ссылка на physical movement; обязательна для shipped и null для событий KIZ v1."
     )
     author: str = Field(
         description="Автор операции: логин оператора или имя вызывающей системы. Не подтверждает права доступа."
@@ -218,15 +226,18 @@ class KizEventPage(BaseModel):
 
 
 class KizIntegrityViolation(BaseModel):
+    violation_type: str = Field(default="loose_quantity", description="Тип нарушения holder/physical целостности КИЗ.")
     product_id: str = Field(
         description="Идентификатор существующего товара (SKU) из public.products.id."
     )
-    location_id: int = Field(
-        description="Внутренний идентификатор точной локации; дочерние адреса не учитываются."
+    location_id: int | None = Field(
+        description="Прямая loose-локация, если применимо."
     )
-    location_code: str = Field(
-        description="Код существующей точной локации. Дочерние адреса не учитываются."
+    location_code: str | None = Field(
+        description="Код прямой loose-локации, если применимо."
     )
+    container_id: int | None = Field(default=None, description="ID контейнера — прямого holder КИЗ.")
+    container_qr_code: str | None = Field(default=None, description="QR контейнера — прямого holder КИЗ.")
     physical_quantity: Decimal = Field(
         description="Физическое количество: только available, без партии и контейнера на точном адресе. В JSON — десятичная строка."
     )

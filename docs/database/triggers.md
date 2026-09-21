@@ -54,3 +54,79 @@ NEW.quantity >= active count; DELETE/key change требуют active count=0. I
 Существующий trg_inventory_updated_at остаётся включён, в том числе при assignment touch.
 KIZ trigger запрещает hard delete/identity edits/повторный terminal; event trigger запрещает
 UPDATE/DELETE. Trigger не защищает от отключения владельцем или TRUNCATE.
+
+## Movement identity triggers
+
+`trg_register_movement_identity` — `AFTER INSERT`, row trigger на partitioned
+`wms.movements`; вызывает `wms.register_movement_identity()` и создаёт одну registry row
+по точным `movement_id + created_at` в той же transaction. Он покрывает Python,
+PL/pgSQL и direct supported writers. Ошибка регистрации откатывает movement и изменения
+inventory другого AFTER trigger.
+
+`trg_movement_registry_immutable` вызывает `guard_movement_registry_immutable()` и
+запрещает UPDATE/DELETE mapping с SQLSTATE 55000.
+
+## KIZ association trigger
+
+`trg_kiz_movement_links_immutable` — BEFORE UPDATE OR DELETE row trigger; вызывает
+`wms.guard_kiz_movement_link_immutable()`. Прямой KIZ identity guard не ослаблен:
+location update и active→shipped остаются запрещены до реализации controlled operation.
+
+## KIZ operation idempotency triggers
+
+- `trg_kiz_operations_guard` — BEFORE UPDATE OR DELETE; identity immutable, result
+  допускает только NULL→jsonb.
+- `trg_kiz_operations_result_at_commit` — deferred constraint trigger; COMMIT intent
+  без result запрещён.
+- `trg_kiz_operation_items_guard` — BEFORE UPDATE OR DELETE; разрешает однократное
+  присоединение movement_ref.
+
+### Phase 4 controlled KIZ transfer
+
+`trg_kiz_identity_guard` допускает location-only update лишь при точном authorization
+текущей transaction. Deferred `trg_complete_kiz_location_transfer` откатывает incomplete
+operation до commit.
+
+### Phase 5 controlled KIZ shipment
+
+`trg_kiz_identity_guard` допускает active/source → shipped/NULL только при exact
+shipment authorization текущей transaction. Deferred
+`trg_complete_kiz_shipment` запрещает commit неполного physical shipment graph.
+
+## Container Stage 3B B1 guards
+
+- `trg_container_identity_immutable` (`BEFORE UPDATE OF container_id,qr_code OR DELETE`)
+  запрещает rename/re-identification/hard delete с SQLSTATE `55000`.
+- `trg_container_empty_state` запрещает status `empty`, если active contents существуют.
+- `trg_active_content_container_state` запрещает INSERT/UPDATE active content в `empty`.
+
+Legacy sync/move triggers не переработаны; B1 не добавляет quantity или movement writes.
+
+## Container B2.1 triggers
+
+- Immutable guards разрешают operation result и пару refs установить ровно один раз.
+- Deferred constraint triggers запрещают commit без result, items или двух movement refs.
+- Legacy contents-to-inventory trigger не создаёт receive для авторизованного fill INSERT;
+  все остальные legacy inserts сохраняют прежнее поведение.
+
+## Container B3 trigger behavior
+
+`trg_move_container_inventory` не отключается. Для обычного UPDATE он работает как
+раньше; controlled move устанавливает transaction-local operation id, который функция
+проверяет по unfinished operation/container и пропускает только duplicate legacy path.
+Deferred operation-item completeness теперь отслеживает и single `movement_ref`.
+
+## Container B4 trigger changes
+
+После `20260917_add_container_b4_final.sql` trigger `trg_move_container_inventory` удалён.
+Добавлен `BEFORE INSERT` trigger `trg_guard_controlled_container_movement` на
+`wms.movements`: non-NULL `container_code` допустим только при
+`source_type='container_operation'` и заполненных `source_id/source_item_id`.
+Controlled B3 move выполняет location update и movement самостоятельно в одной transaction.
+
+## Container Stage 3C C1 triggers
+
+- `trg_complete_kiz_container_holder` запрещает commit неполной holder transition.
+- `trg_kiz_final_holder_integrity` deferred проверяет final loose/contained quantity.
+- Existing `trg_kiz_identity_guard` разрешает container holder update только при exact
+  transaction authorization; terminal diagnostic holder сохраняется.

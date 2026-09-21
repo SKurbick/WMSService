@@ -4,7 +4,10 @@ from typing import List, Optional
 from datetime import date
 from asyncpg import Pool, Record
 from app.infrastructure.database.queries import system as queries
-from app.core.exceptions import NegativeCalculatedInventoryError
+from app.core.exceptions import (
+    ContainerInventoryIntegrityError,
+    NegativeCalculatedInventoryError,
+)
 from app.core.kiz_errors import KizConflictError
 from app.infrastructure.database.queries.kiz import INTEGRITY as KIZ_INTEGRITY
 
@@ -59,6 +62,15 @@ class SystemRepository:
                 # A conflicting legacy lock order may deadlock: rollback maps to HTTP 409.
                 await conn.execute("LOCK TABLE wms.movements IN SHARE MODE")
                 await conn.execute("LOCK TABLE wms.inventory IN EXCLUSIVE MODE")
+                container_conflicts = await conn.fetch(
+                    queries.CHECK_CONTAINER_PROJECTION, product_id
+                )
+                if container_conflicts:
+                    raise ContainerInventoryIntegrityError(
+                        "Container projection invariant нарушен до пересчета inventory",
+                        diagnostics=[dict(row) for row in container_conflicts],
+                    )
+
                 negative_rows = await conn.fetch(
                     queries.CHECK_NEGATIVE_CALCULATED_INVENTORY, product_id
                 )
@@ -82,6 +94,15 @@ class SystemRepository:
                     raise KizConflictError(
                         "Нарушение KIZ integrity после пересчета",
                         diagnostics=[dict(row) for row in final_conflicts],
+                    )
+
+                final_container_conflicts = await conn.fetch(
+                    queries.CHECK_CONTAINER_PROJECTION, product_id
+                )
+                if final_container_conflicts:
+                    raise ContainerInventoryIntegrityError(
+                        "Container projection invariant нарушен после пересчета inventory",
+                        diagnostics=[dict(row) for row in final_container_conflicts],
                     )
 
                 result = await conn.fetchrow(queries.GET_INVENTORY_STATS, product_id)

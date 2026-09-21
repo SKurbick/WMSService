@@ -32,6 +32,12 @@ from app.core.exceptions import (
     OperationsHistoryValidationError,
     ReceiptHistoryNotFoundError,
     ReceiptHistoryValidationError,
+    KizOperationIdempotencyConflictError,
+    ContainerOperationConflictError,
+    ContainerOperationIdempotencyConflictError,
+    ContainerContentsNotAllowedError,
+    ContainerInventoryIntegrityError,
+    GenericContainerMovementNotAllowedError,
 )
 import logging
 import json
@@ -53,8 +59,26 @@ def add_exception_handlers(app: FastAPI):
         })
 
     @app.exception_handler(KizConflictError)
+    @app.exception_handler(KizOperationIdempotencyConflictError)
+    @app.exception_handler(ContainerOperationConflictError)
+    @app.exception_handler(ContainerOperationIdempotencyConflictError)
     @app.exception_handler(asyncpg.PostgresError)
     async def write_conflict_handler(request, exc):
+        if isinstance(exc, KizOperationIdempotencyConflictError):
+            return JSONResponse(status_code=409, content={
+                "detail": str(exc), "error_code": "KIZ_IDEMPOTENCY_CONFLICT",
+                "operation_id": exc.operation_id,
+            })
+        if isinstance(exc, ContainerOperationIdempotencyConflictError):
+            return JSONResponse(status_code=409, content={
+                "detail": str(exc),
+                "error_code": "CONTAINER_IDEMPOTENCY_CONFLICT",
+                "operation_id": exc.operation_id,
+            })
+        if isinstance(exc, ContainerOperationConflictError):
+            return JSONResponse(status_code=409, content={
+                "detail": str(exc), "error_code": "CONTAINER_OPERATION_CONFLICT"
+            })
         code = write_conflict_code(exc)
         if code is None:
             return await general_exception_handler(request, exc)
@@ -75,6 +99,40 @@ def add_exception_handlers(app: FastAPI):
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={"detail": str(exc), "message": str(exc), "error_code": "LOCATION_NOT_FOUND"},
+        )
+
+    @app.exception_handler(GenericContainerMovementNotAllowedError)
+    async def generic_container_movement_handler(request, exc):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "detail": str(exc),
+                "message": str(exc),
+                "error_code": "GENERIC_CONTAINER_MOVEMENT_NOT_ALLOWED",
+            },
+        )
+
+    @app.exception_handler(ContainerContentsNotAllowedError)
+    async def container_contents_not_allowed_handler(request, exc):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "detail": str(exc),
+                "message": str(exc),
+                "error_code": "CONTAINER_CONTENTS_NOT_ALLOWED",
+            },
+        )
+
+    @app.exception_handler(ContainerInventoryIntegrityError)
+    async def container_inventory_integrity_handler(request, exc):
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=jsonable_encoder({
+                "detail": str(exc),
+                "message": str(exc),
+                "error_code": "CONTAINER_INVENTORY_INTEGRITY_ERROR",
+                "diagnostics": exc.diagnostics,
+            }),
         )
 
     @app.exception_handler(ContainerNotFoundError)

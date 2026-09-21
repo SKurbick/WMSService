@@ -16,6 +16,14 @@ from app.core.schemas.kiz import (
     KizTerminalRequest,
     KizIntegrityViolation,
 )
+from app.core.schemas.kiz_history import KizHistory
+from app.core.schemas.kiz_operations import (
+    KizShipRequest,
+    KizShipResponse,
+    KizTransferRequest,
+    KizTransferResponse,
+)
+from app.core.schemas.container_operations import ContainerFillRequest, ContainerFillResponse
 from app.core.schemas.movement import MovementBulkCreateResponse, MovementCreate
 from app.core.schemas.system import RecalculateInventoryResponse, RecalculateInventoryRequest
 from app.main import app
@@ -31,6 +39,10 @@ from app.main import app
         ("/api/kiz/{kiz_code}/events", "get", "200", KizEventPage),
         ("/api/kiz/{kiz_code}/mark-error", "post", "200", KizState),
         ("/api/kiz/{kiz_code}/deactivate", "post", "200", KizState),
+        ("/api/kiz-operations/transfer", "post", "201", KizTransferResponse),
+        ("/api/kiz-operations/ship", "post", "201", KizShipResponse),
+        ("/api/kiz-history", "get", "200", KizHistory),
+        ("/api/container-operations/fill", "post", "201", ContainerFillResponse),
         ("/api/movements", "post", "201", MovementBulkCreateResponse),
         ("/api/system/recalculate-inventory", "post", "200", RecalculateInventoryResponse),
     ],
@@ -47,6 +59,21 @@ def test_request_examples_match_real_models():
     KizTerminalRequest.model_validate(TERMINAL)
     KizIntegrityViolation.model_validate(INTEGRITY_EXAMPLE)
     schema = app.openapi()
+    transfer_examples = schema["paths"]["/api/kiz-operations/transfer"]["post"][
+        "requestBody"
+    ]["content"]["application/json"]["examples"]
+    for item in transfer_examples.values():
+        KizTransferRequest.model_validate(item["value"])
+    ship_examples = schema["paths"]["/api/kiz-operations/ship"]["post"][
+        "requestBody"
+    ]["content"]["application/json"]["examples"]
+    for item in ship_examples.values():
+        KizShipRequest.model_validate(item["value"])
+    fill_examples = schema["paths"]["/api/container-operations/fill"]["post"][
+        "requestBody"
+    ]["content"]["application/json"]["examples"]
+    for item in fill_examples.values():
+        ContainerFillRequest.model_validate(item["value"])
     for item in schema["paths"]["/api/movements"]["post"]["requestBody"]["content"][
         "application/json"
     ]["examples"].values():

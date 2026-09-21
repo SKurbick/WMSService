@@ -155,10 +155,10 @@ async def refresh_materialized_views(
 @router.get(
     '/kiz-integrity', response_model=list[KizIntegrityViolation],
     summary="Проверить соответствие КИЗ физическим остаткам",
-    description=("Только чтение. Возвращает адреса и товары, где активных КИЗ больше, чем "
-                 "available-остатка без партии и контейнера. difference = identified_quantity − physical_quantity. "
-                 "Пустой массив означает отсутствие этих нарушений. Данные не исправляет; "
-                 "сверка движений с остатками выполняется отдельно через validate-integrity."),
+    description=("Только чтение. Возвращает нарушения holder shape и превышение active КИЗ "
+                 "над exact available batch-less physical quantity для loose/container scopes, "
+                 "а также container contents/location/link batch anomalies. Пустой массив означает "
+                 "отсутствие нарушений; данные endpoint не исправляет."),
     responses={200: {"description": "Нарушения учёта КИЗ или пустой массив.", "content": {"application/json": {
         "examples": {"ok": {"summary": "Нарушений нет", "value": []},
                      "shortage": {"summary": "Четыре КИЗ при трёх единицах", "value": [INTEGRITY_EXAMPLE]}}

@@ -7,10 +7,6 @@ from app.core.schemas.container import (
     ContainerRegister,
     ContainerRegisterResponse,
     ContainerResponse,
-    ContainerLocationUpdate,
-    ContainerLocationUpdateResponse,
-    ContainerUnpack,
-    ContainerUnpackResponse,
     ContainerStatusUpdate,
     ContainerStatusUpdateResponse,
     ContainerHistoryItem,
@@ -27,7 +23,10 @@ router = APIRouter(prefix="/containers", tags=["Контейнеры"])
     response_model=ContainerRegisterResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Зарегистрировать контейнер",
-    description="Создаёт контейнер с содержимым и запускает DB flow регистрации остатков через movements.",
+    description=(
+        "Создаёт только пустой контейнер. contents должен быть пустым; товар добавляется "
+        "через POST /api/container-operations/fill."
+    ),
 )
 async def register_container(
     data: ContainerRegister,
@@ -36,14 +35,13 @@ async def register_container(
     """
     Зарегистрировать контейнер
 
-    Создаёт новый контейнер с содержимым. Автоматически создаёт события
-    `receive` в movements для каждого товара.
+    Создаёт новый пустой контейнер.
 
     **Параметры:**
     - **qr_code**: QR-код контейнера
     - **container_type**: Тип контейнера (pallet, box, cage, trolley)
     - **location_code**: Код локации размещения
-    - **contents**: Список товаров в контейнере
+    - **contents**: Обязательный пустой список
 
     **Возвращает:**
     - ID созданного контейнера и количество зарегистрированных позиций
@@ -76,62 +74,6 @@ async def get_container(
     return await service.get_container_by_qr(qr_code)
 
 
-@router.put(
-    "/{container_id}/location",
-    response_model=ContainerLocationUpdateResponse,
-    summary="Переместить контейнер",
-    description="Обновляет локацию контейнера; DB trigger создаёт transfer movements по содержимому.",
-)
-async def update_container_location(
-    container_id: int = Path(..., description="ID контейнера"),
-    data: ContainerLocationUpdate = ...,
-    service: ContainerService = Depends(get_container_service),
-):
-    """
-    Обновить локацию контейнера
-
-    Перемещает контейнер в новую локацию. Триггер в БД создаёт
-    события `transfer` в movements с batch_number.
-
-    **Параметры:**
-    - **container_id**: ID контейнера
-    - **location_code**: Новый код локации
-
-    **Возвращает:**
-    - Обновлённую информацию о контейнере
-    """
-    return await service.update_container_location(container_id, data)
-
-
-@router.post(
-    "/{container_id}/unpack",
-    response_model=ContainerUnpackResponse,
-    summary="Распаковать товар из контейнера",
-    description="Извлекает часть товара из контейнера в россыпь и создаёт movements.",
-)
-async def unpack_container(
-    container_id: int = Path(..., description="ID контейнера"),
-    data: ContainerUnpack = ...,
-    service: ContainerService = Depends(get_container_service),
-):
-    """
-    Вскрыть контейнер
-
-    Извлекает часть товара из контейнера в россыпь.
-    Создаёт два положительных движения в movements.
-
-    **Параметры:**
-    - **container_id**: ID контейнера
-    - **qr_code**: QR-код контейнера (для проверки)
-    - **product_id**: ID товара для извлечения
-    - **quantity**: Количество для извлечения
-
-    **Возвращает:**
-    - Информацию об оставшемся количестве в контейнере и россыпи
-    """
-    return await service.unpack_container(container_id, data)
-
-
 @router.patch(
     "/{container_id}/status",
     response_model=ContainerStatusUpdateResponse,
@@ -146,7 +88,7 @@ async def update_container_status(
     """
     Обновить статус контейнера
 
-    Меняет статус контейнера (empty, sealed, open, in_transit, blocked).
+    Меняет статус контейнера (empty, open, sealed, blocked).
     Заблокированный контейнер нельзя разблокировать через этот endpoint.
 
     **Параметры:**

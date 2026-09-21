@@ -12,6 +12,7 @@ from app.infrastructure.database.repositories.movement_repository import Movemen
 from app.infrastructure.database.repositories.location_repository import LocationRepository
 from app.infrastructure.database.queries import movements as queries
 from app.core.exceptions import (
+    GenericContainerMovementNotAllowedError,
     InvalidMovementError,
     LocationNotFoundError,
 )
@@ -68,6 +69,11 @@ class MovementService:
         """
         # 1. Валидация базовых правил
         for idx, movement in enumerate(data):
+            if movement.container_code is not None:
+                raise GenericContainerMovementNotAllowedError(
+                    f"Movement #{idx + 1}: generic movements работают только с россыпью; "
+                    "используйте container operations"
+                )
             if not movement.from_location_code and not movement.to_location_code:
                 raise InvalidMovementError(
                     f"Movement #{idx + 1}: Должна быть указана хотя бы одна локация"

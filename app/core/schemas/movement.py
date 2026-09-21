@@ -63,8 +63,8 @@ class MovementCreate(BaseModel):
     container_code: Optional[str] = Field(
         None,
         description=(
-            "QR/code контейнера. Используется для контейнерных остатков. Для обычной "
-            "россыпи передавайте null."
+            "Только null/omitted. Generic movements работают исключительно с россыпью; "
+            "контейнерный остаток меняется через container operations."
         ),
         examples=[None],
     )

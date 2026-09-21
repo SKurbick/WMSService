@@ -17,6 +17,9 @@ from app.api.v1.endpoints import (
     operations_history,
     receipt_history,
     kiz,
+    kiz_operations,
+    kiz_history,
+    container_operations,
 )
 
 api_router = APIRouter()
@@ -38,3 +41,6 @@ api_router.include_router(operations_history.router)
 api_router.include_router(receipt_history.router)
 
 api_router.include_router(kiz.router)
+api_router.include_router(kiz_operations.router)
+api_router.include_router(kiz_history.router)
+api_router.include_router(container_operations.router)

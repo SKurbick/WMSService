@@ -5,10 +5,6 @@ from app.core.schemas.container import (
     ContainerRegister,
     ContainerRegisterResponse,
     ContainerResponse,
-    ContainerLocationUpdate,
-    ContainerLocationUpdateResponse,
-    ContainerUnpack,
-    ContainerUnpackResponse,
     ContainerStatusUpdate,
     ContainerStatusUpdateResponse,
     ContainerHistoryItem,
@@ -20,8 +16,8 @@ from app.core.exceptions import (
     ContainerNotFoundError,
     ContainerAlreadyExistsError,
     ContainerBlockedError,
+    ContainerContentsNotAllowedError,
     LocationNotFoundError,
-    InsufficientContainerQuantityError,
 )
 
 
@@ -40,8 +36,14 @@ class ContainerService:
         """
         Зарегистрировать контейнер
 
-        Создаёт контейнер, его содержимое и события receive в movements.
+        Создать пустой контейнер. Товар добавляется только через controlled fill.
         """
+        if data.contents:
+            raise ContainerContentsNotAllowedError(
+                "Создание контейнера с товаром запрещено; создайте пустой контейнер "
+                "и используйте POST /api/container-operations/fill"
+            )
+
         # Проверка: контейнер с таким QR уже существует?
         if await self.container_repo.exists(data.qr_code):
             raise ContainerAlreadyExistsError(
@@ -55,15 +57,12 @@ class ContainerService:
                 f"Локация с кодом '{data.location_code}' не найдена"
             )
 
-        # Подготовка содержимого для PostgreSQL функции
-        contents = [item.model_dump() for item in data.contents]
-
         # Регистрация через репозиторий
         result = await self.container_repo.register(
             qr_code=data.qr_code,
             container_type=data.container_type.value,
             location_code=data.location_code,
-            contents=contents,
+            contents=[],
         )
 
         return ContainerRegisterResponse.model_validate(dict(result))
@@ -74,75 +73,6 @@ class ContainerService:
         if not container:
             raise ContainerNotFoundError(f"Контейнер с QR-кодом '{qr_code}' не найден")
         return ContainerResponse.model_validate(dict(container))
-
-    async def update_container_location(
-        self, container_id: int, data: ContainerLocationUpdate
-    ) -> ContainerLocationUpdateResponse:
-        """
-        Переместить контейнер в новую локацию
-
-        Триггер в БД создаст события transfer в movements.
-        """
-        # Проверка: контейнер существует?
-        container = await self.container_repo.get_by_id(container_id)
-        if not container:
-            raise ContainerNotFoundError(f"Контейнер с ID {container_id} не найден")
-
-        # Проверка: контейнер не заблокирован?
-        if container["status"] == "blocked":
-            raise ContainerBlockedError(
-                f"Контейнер '{container['qr_code']}' заблокирован"
-            )
-
-        # Проверка: локация существует?
-        location = await self.location_repo.get_by_code(data.location_code)
-        if not location:
-            raise LocationNotFoundError(
-                f"Локация с кодом '{data.location_code}' не найдена"
-            )
-
-        # Обновление локации
-        result = await self.container_repo.update_location(container_id, data.location_code)
-        return ContainerLocationUpdateResponse.model_validate(dict(result))
-
-    async def unpack_container(
-        self, container_id: int, data: ContainerUnpack
-    ) -> ContainerUnpackResponse:
-        """
-        Вскрыть контейнер и извлечь товар
-
-        Создаёт два положительных движения:
-        - from=ЯЧЕЙКА, to=NULL - убыль из контейнера
-        - from=NULL, to=ЯЧЕЙКА - прибыль в россыпь
-        """
-        # Проверка: контейнер существует?
-        container = await self.container_repo.get_by_id(container_id)
-        if not container:
-            raise ContainerNotFoundError(f"Контейнер с ID {container_id} не найден")
-
-        # Проверка: QR код совпадает?
-        if container["qr_code"] != data.qr_code:
-            raise ContainerNotFoundError(
-                f"QR-код '{data.qr_code}' не соответствует контейнеру ID {container_id}"
-            )
-
-        # Проверка: контейнер не заблокирован?
-        if container["status"] == "blocked":
-            raise ContainerBlockedError(
-                f"Контейнер '{data.qr_code}' заблокирован"
-            )
-
-        # Вскрытие через PostgreSQL функцию
-        result = await self.container_repo.unpack(
-            data.qr_code, data.product_id, data.quantity
-        )
-
-        if not result:
-            raise InsufficientContainerQuantityError(
-                f"Недостаточно товара '{data.product_id}' в контейнере"
-            )
-
-        return ContainerUnpackResponse.model_validate(dict(result))
 
     async def update_container_status(
         self, container_id: int, data: ContainerStatusUpdate
@@ -157,7 +87,7 @@ class ContainerService:
         result = await self.container_repo.update_status(container_id, data.status.value)
         if not result:
             raise ContainerBlockedError(
-                f"Невозможно изменить статус заблокированного контейнера"
+                "Невозможно изменить статус заблокированного контейнера"
             )
 
         return ContainerStatusUpdateResponse.model_validate(dict(result))

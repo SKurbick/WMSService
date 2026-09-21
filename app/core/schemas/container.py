@@ -18,7 +18,13 @@ class ContainerContent(BaseModel):
 class ContainerRegister(BaseModel):
     """Схема для регистрации контейнера"""
 
-    qr_code: str = Field(..., max_length=50, description="QR-код контейнера")
+    qr_code: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        pattern=r"^\S(?:.*\S)?$",
+        description="Неизменяемый внешний QR-код контейнера, уникальный навсегда.",
+    )
     container_type: ContainerType = Field(..., description="Тип контейнера")
     location_code: str = Field(..., description="Код локации размещения")
     contents: List[ContainerContent] = Field(..., description="Содержимое контейнера")
@@ -60,42 +66,6 @@ class ContainerResponse(BaseModel):
     created_at: datetime = Field(..., description="Дата создания")
     updated_at: datetime = Field(..., description="Дата обновления")
     contents: Optional[List[dict]] = Field(None, description="Содержимое контейнера")
-
-    class Config:
-        from_attributes = True
-
-
-class ContainerLocationUpdate(BaseModel):
-    """Схема для обновления локации контейнера"""
-
-    location_code: str = Field(..., description="Новый код локации")
-
-
-class ContainerLocationUpdateResponse(BaseModel):
-    """Ответ при обновлении локации контейнера"""
-
-    container_id: int
-    qr_code: str
-    location_id: int
-
-    class Config:
-        from_attributes = True
-
-
-class ContainerUnpack(BaseModel):
-    """Схема для вскрытия контейнера"""
-
-    qr_code: str = Field(..., description="QR-код контейнера")
-    product_id: str = Field(..., description="ID товара для извлечения")
-    quantity: int = Field(..., ge=1, description="Количество для извлечения")
-
-
-class ContainerUnpackResponse(BaseModel):
-    """Ответ при вскрытии контейнера"""
-
-    success: bool = Field(..., description="Успешность операции")
-    remaining_in_container: int = Field(..., description="Осталось в контейнере")
-    loose_quantity: int = Field(..., description="Количество россыпью")
 
     class Config:
         from_attributes = True

@@ -50,7 +50,7 @@
 
 Поля: `container_id`, `qr_code`, `container_type`, `parent_container_id`, `location_id`, `status`, `metadata`, `created_at`, `updated_at`.
 
-Ограничения: PK `container_id`; unique `qr_code`; FK `location_id -> locations ON DELETE RESTRICT`; FK `parent_container_id -> containers ON DELETE RESTRICT`; check `container_type` in `pallet/box/unit`; check `status` in `sealed/opened/empty/blocked`. Defaults: `status='sealed'`, timestamps `now()`, sequence for id.
+Ограничения: PK `container_id`; unique `qr_code`; FK `location_id -> locations ON DELETE RESTRICT`; FK `parent_container_id -> containers ON DELETE RESTRICT`; check `container_type` in `pallet/box/cage/trolley`; check `status` in `empty/open/sealed/blocked`; `location_id` и `status` NOT NULL; `parent_container_id IS NULL`; QR непустой без краевых пробелов. Defaults: `status='sealed'`, timestamps `now()`, sequence for id.
 
 Связи: `container_contents.container_id`; при изменении `location_id` trigger создает transfer movements для inventory rows с `container_code = NEW.qr_code`.
 
@@ -60,9 +60,9 @@
 
 Поля: `content_id`, `container_id`, `product_id`, `quantity`, `batch_number`, `is_scanned`, `status`, `created_at`, `updated_at`.
 
-Ограничения: PK `content_id`; unique `(container_id, product_id, batch_number, status)`; FK `container_id -> containers ON DELETE CASCADE`; FK `product_id -> public.products(id) ON DELETE RESTRICT`; check `quantity > 0`; check `status` in `active/replaced/removed`. Defaults: `is_scanned=false`, `status='active'`, timestamps `now()`, sequence for id.
+Ограничения: PK `content_id`; `UNIQUE NULLS NOT DISTINCT (container_id, product_id, batch_number, status)`; FK `container_id -> containers ON DELETE CASCADE`; FK `product_id -> public.products(id) ON DELETE RESTRICT`; check `quantity > 0`; check `status` in `active/replaced/removed`. Defaults: `is_scanned=false`, `status='active'`, timestamps `now()`, sequence for id.
 
-Связи: after insert trigger создает receive movement только для `status='active'`. Важное несоответствие: `unpack_from_container` пытается получить `quantity=0` и `status='empty'`, но DDL это запрещает.
+Связи: after insert trigger создает receive movement только для `status='active'`. Полное извлечение остаётся отложенным дефектом: функция сначала пытается записать `quantity=0`, но DDL требует positive current row; `removed` достигается только после этого шага.
 
 ## `wms.tasks` и `wms.task_items`
 
@@ -158,9 +158,78 @@ Snapshot поступлений из 1С: `receipt_item_id`, `guid`, `product_id
 wms.kiz: identity bigint kiz_id, глобальный unique kiz_code, product/location FK RESTRICT,
 lifecycle active/error/deactivated, origin warehouse_assignment/reference,
 assigned/closed/created/updated timestamptz, created_by, object metadata jsonb.
-Scope активных записей — available loose без batch/container. Не добавляется в ключ inventory.
+Scope активных записей — доступный россыпной остаток без партии и контейнера. КИЗ не
+добавляется в ключ inventory.
 
 wms.kiz_events: identity bigint kiz_event_id, KIZ/product/location FK RESTRICT,
 event_type/from_status/to_status, author/reason, object metadata, occurred_at.
 Событие assigned одно на assignment; terminal reason обязателен. Это identity audit,
 не physical ledger. [DDL](../../scripts/migrations/20260906_add_kiz_v1.sql).
+
+## `wms.movement_registry` (Stage 2A Phase 1)
+
+Непартиционированный stable identity registry для ledger. Поля: identity PK
+`movement_ref`, `movement_id`, `movement_created_at`, `registered_at`. Exact coordinate
+unique и имеет composite FK RESTRICT к partitioned `wms.movements`. Mapping immutable;
+новые rows создаёт movement AFTER INSERT trigger, историю — resumable batch backfill.
+
+## `wms.kiz_movement_links` (Stage 2A Phase 2)
+
+Два поля: `kiz_id` и `movement_ref`. Composite PK запрещает повтор одной пары; FK
+RESTRICT ведут в `wms.kiz` и `wms.movement_registry`. Таблица immutable.
+`wms.kiz` допускает shipped/current location NULL. `wms.kiz_events` получает nullable
+`movement_ref`; composite FK `(kiz_id,movement_ref)` гарантирует association того же KIZ.
+
+## KIZ operation tables (Stage 2A Phase 3)
+
+`wms.kiz_operations`: identity PK, operation_type, source_system,
+external_operation_id, SHA-256 request_fingerprint, author, nullable-during-transaction
+result_payload и timestamps. Business key уникален.
+
+`wms.kiz_operation_items`: identity PK, operation FK, external_line_id, nullable
+movement_ref и created_at. Строка уникальна по operation/external line; movement_ref
+уникален и имеет FK на registry. Product/quantity/location здесь не хранятся.
+
+### `wms.kiz_location_update_authorizations`
+
+Transaction-bound таблица Phase 4. PK `(transaction_id,kiz_id)`, FK на operation item
+и KIZ. Успешный deferred check удаляет строки; history остаётся в operations/movements/links.
+
+### `wms.kiz_shipment_authorizations`
+
+Transaction-bound таблица Phase 5: transaction/item/KIZ identity, expected product,
+source и item quantity. PK `(transaction_id,kiz_id)`, FK на operation item и KIZ.
+Она не хранит shipment history и пуста после успешного deferred commit check.
+
+## Container B1 overlay
+
+После `20260915_add_container_b1_contract.sql`: `containers.location_id/status` NOT NULL;
+checks фиксируют flat parent, непустой QR без краевых пробелов, statuses
+`empty/open/sealed/blocked`, types `pallet/box/cage/trolley`. Identity trigger запрещает
+QR/container_id update и hard delete. `container_contents` использует
+`UNIQUE NULLS NOT DISTINCT (container_id,product_id,batch_number,status)`.
+
+## Container B2.1 operation graph
+
+- `wms.container_operations` — idempotency key, request fingerprint и immutable result.
+- `wms.container_operation_items` — exact fill lines с FK на container/product и двумя
+  FK на `wms.movement_registry`.
+- `wms.movements.source_type='container_operation'` связывает ledger pair через
+  `source_id/source_item_id`.
+- Quantitative state остаётся transitional dual projection:
+  `wms.inventory.container_code + wms.container_contents`.
+
+## Container B3 additions
+
+`container_operations.container_id` — immutable target FK, в том числе для itemless empty
+move. `container_operation_items.movement_ref` хранит single move transfer; существующие
+outgoing/incoming refs используются fill/extract/unpack-all. Physical ledger остаётся
+`movements`, stable identity — `movement_registry`.
+
+## Container Stage 3C C1 additions
+
+`wms.kiz.container_id` — direct container holder FK. Индекс
+`idx_kiz_active_container_product` покрывает active contained product lookup.
+`wms.kiz_events.container_id` хранит terminal diagnostic holder snapshot.
+`wms.kiz_container_holder_authorizations` существует только внутри controlled transaction
+и очищается deferred completeness trigger.

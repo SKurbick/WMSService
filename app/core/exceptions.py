@@ -55,6 +55,12 @@ class InsufficientContainerQuantityError(DomainException):
     pass
 
 
+class ContainerContentsNotAllowedError(DomainException):
+    """Containers must be created empty and filled through controlled operations."""
+
+    pass
+
+
 # === Inventory ===
 
 
@@ -111,6 +117,12 @@ class ReceiptHistoryNotFoundError(DomainException):
 
 class InvalidMovementError(DomainException):
     """Некорректное перемещение"""
+
+    pass
+
+
+class GenericContainerMovementNotAllowedError(DomainException):
+    """The generic movement writer is restricted to loose inventory."""
 
     pass
 
@@ -185,6 +197,40 @@ class ReSortingOperationValidationError(DomainException):
 
 class ReSortingOperationConflictError(DomainException):
     pass
+
+
+# === KIZ-aware operation idempotency ===
+
+
+class KizOperationIdempotencyConflictError(DomainException):
+    """Existing idempotency key was registered with another physical intent."""
+
+    def __init__(self, message: str, *, operation_id: int):
+        super().__init__(message)
+        self.operation_id = operation_id
+
+
+# === Container physical operations ===
+
+
+class ContainerOperationConflictError(DomainException):
+    """The container operation cannot be applied to the locked physical state."""
+
+
+class ContainerOperationIdempotencyConflictError(DomainException):
+    """Existing idempotency key belongs to another container physical intent."""
+
+    def __init__(self, message: str, *, operation_id: int):
+        super().__init__(message)
+        self.operation_id = operation_id
+
+
+class ContainerInventoryIntegrityError(DomainException):
+    """Container projections disagree, so maintenance must roll back."""
+
+    def __init__(self, message: str, *, diagnostics: list[dict]):
+        super().__init__(message)
+        self.diagnostics = diagnostics
 
 
 # === Tasks ===

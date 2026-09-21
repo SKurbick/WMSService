@@ -218,9 +218,10 @@ SELECT
     l.location_code,
     i.quantity,
     i.batch_number,
+    ti.batch_number AS requested_batch_number,
     i.created_at,
     ROW_NUMBER() OVER (
-        PARTITION BY ti.product_id
+        PARTITION BY ti.product_id, ti.batch_number
         ORDER BY i.created_at ASC
     )                            AS fifo_priority
 FROM wms.task_items ti
@@ -232,8 +233,11 @@ WHERE ti.task_id = $1
         SELECT path FROM wms.locations
         WHERE location_id = t.from_location_id
       )
+  AND i.status = 'available'
+  AND i.container_code IS NULL
+  AND i.batch_number IS NOT DISTINCT FROM ti.batch_number
   AND i.quantity > 0
-ORDER BY ti.product_id, i.created_at ASC;
+ORDER BY ti.product_id, ti.batch_number NULLS FIRST, i.created_at ASC;
 """
 
 # Суммарное количество по товару в зоне (для warnings при создании)
@@ -242,6 +246,9 @@ SELECT COALESCE(SUM(i.quantity), 0) AS available
 FROM wms.inventory i
 JOIN wms.locations l ON i.location_id = l.location_id
 WHERE i.product_id = $1
+  AND i.status = 'available'
+  AND i.container_code IS NULL
+  AND i.batch_number IS NOT DISTINCT FROM $3::varchar
   AND l.path <@ (SELECT path FROM wms.locations WHERE location_code = $2);
 """
 
@@ -250,20 +257,26 @@ CHECK_AVAILABILITY_ON_START = """
 WITH task_avail AS (
     SELECT
         ti.product_id,
+        ti.batch_number,
         ti.quantity_planned,
         COALESCE(SUM(i.quantity), 0) AS quantity_available
     FROM wms.task_items ti
     JOIN wms.tasks t ON ti.task_id = t.task_id
-    LEFT JOIN wms.inventory i ON ti.product_id = i.product_id
+    LEFT JOIN wms.inventory i
+      ON ti.product_id = i.product_id
+     AND i.status = 'available'
+     AND i.container_code IS NULL
+     AND i.batch_number IS NOT DISTINCT FROM ti.batch_number
     LEFT JOIN wms.locations l ON i.location_id = l.location_id
     WHERE ti.task_id = $1
       AND (l.path IS NULL OR
            l.path <@ (SELECT path FROM wms.locations
                       WHERE location_id = t.from_location_id))
-    GROUP BY ti.product_id, ti.quantity_planned
+    GROUP BY ti.product_id, ti.batch_number, ti.quantity_planned
 )
 SELECT
     product_id,
+    batch_number,
     quantity_planned,
     quantity_available
 FROM task_avail
@@ -324,7 +337,10 @@ GET_INVENTORY_QTY_IN_LOCATION = """
 SELECT COALESCE(SUM(quantity), 0) AS available
 FROM wms.inventory
 WHERE product_id = $1
-  AND location_id = $2;
+  AND location_id = $2
+  AND status = 'available'
+  AND container_code IS NULL
+  AND batch_number IS NOT DISTINCT FROM $3::varchar;
 """
 
 GET_TASK_ITEMS_FOR_MOVEMENTS = """
@@ -379,7 +395,10 @@ SELECT COALESCE(SUM(i.quantity), 0) AS current_qty
 FROM wms.inventory i
 JOIN wms.locations l ON i.location_id = l.location_id
 WHERE i.product_id = $1
-  AND l.location_code = $2;
+  AND l.location_code = $2
+  AND i.status = 'available'
+  AND i.container_code IS NULL
+  AND i.batch_number IS NOT DISTINCT FROM $3::varchar;
 """
 
 VALIDATE_ITEM_IDS_BELONG_TO_TASK = """

@@ -413,16 +413,21 @@ class FakeTransaction:
 
 
 class FakeConnection:
-    def __init__(self, negative_rows=None):
+    def __init__(self, negative_rows=None, container_pre=None, container_post=None):
         self.calls = []
         self.negative_rows = negative_rows or []
+        self.container_results = [container_pre or [], container_post or []]
 
     def transaction(self, **kwargs):
         return FakeTransaction(self.calls)
 
     async def fetch(self, query, *args):
         self.calls.append(("fetch", query, args))
-        return self.negative_rows
+        if query == system_queries.CHECK_CONTAINER_PROJECTION:
+            return self.container_results.pop(0)
+        if query == system_queries.CHECK_NEGATIVE_CALCULATED_INVENTORY:
+            return self.negative_rows
+        return []
 
     async def execute(self, query, *args):
         self.calls.append(("execute", query, args))
@@ -464,11 +469,13 @@ async def test_recalculate_repository_runs_locked_check_upsert_delete_validate_i
         ("transaction_enter",),
         ("execute", "LOCK TABLE wms.movements IN SHARE MODE", ()),
         ("execute", "LOCK TABLE wms.inventory IN EXCLUSIVE MODE", ()),
+        ("fetch", system_queries.CHECK_CONTAINER_PROJECTION, ("sku",)),
         ("fetch", system_queries.CHECK_NEGATIVE_CALCULATED_INVENTORY, ("sku",)),
         ("fetch", system_queries.CHECK_CALCULATED_KIZ, ("sku",)),
         ("execute", system_queries.RECALCULATE_INVENTORY, ("sku",)),
         ("execute", system_queries.DELETE_AVAILABLE_INVENTORY, ("sku",)),
         ("fetch", KIZ_INTEGRITY, ("sku",)),
+        ("fetch", system_queries.CHECK_CONTAINER_PROJECTION, ("sku",)),
         ("fetchrow", system_queries.GET_INVENTORY_STATS, ("sku",)),
         ("transaction_exit", None),
     ]
@@ -501,6 +508,7 @@ async def test_recalculate_repository_stops_before_delete_when_negative_calculat
         "execute",
         "execute",
         "fetch",
+        "fetch",
         "transaction_exit",
     ]
 
@@ -520,3 +528,80 @@ async def test_recalculate_service_rejects_from_date_before_repository_call():
 
     assert "from_date" in str(exc_info.value)
     assert "полный пересчет available" in str(exc_info.value)
+
+
+def test_container_projection_guard_compares_ledger_contents_inventory_and_location():
+    sql = system_queries.CHECK_CONTAINER_PROJECTION
+    assert "ledger_scope" in sql
+    assert "content_scope" in sql
+    assert "inventory_scope" in sql
+    assert "ledger_location_mismatch" in sql
+    assert "inventory_location_mismatch" in sql
+    assert "ledger_contents_quantity_mismatch" in sql
+    assert "inventory_contents_quantity_mismatch" in sql
+    assert "FULL OUTER" not in sql
+
+
+def test_audit_summary_contains_all_b4_container_categories():
+    sql = system_queries.GET_AUDIT_SUMMARY
+    for alias in (
+        "active_contents_without_inventory_count",
+        "contained_inventory_without_contents_count",
+        "container_quantity_mismatch_count",
+        "container_location_mismatch_count",
+        "unsupported_container_inventory_status_count",
+        "empty_container_with_contents_count",
+        "nonempty_container_without_contents_count",
+        "invalid_container_movement_provenance_count",
+    ):
+        assert alias in sql
+
+
+@pytest.mark.asyncio
+async def test_recalculate_stops_before_rewrite_on_container_projection_mismatch():
+    diagnostic = {
+        "product_id": "sku",
+        "batch_number": None,
+        "container_code": "BOX-1",
+        "ledger_quantity": Decimal("2"),
+        "contents_quantity": Decimal("1"),
+        "inventory_quantity": Decimal("1"),
+        "ledger_location_id": 1,
+        "container_location_id": 1,
+        "inventory_location_id": 1,
+        "issue": "ledger_contents_quantity_mismatch",
+    }
+    conn = FakeConnection(container_pre=[diagnostic])
+    repo = SystemRepository(FakePool(conn))
+
+    from app.core.exceptions import ContainerInventoryIntegrityError
+
+    with pytest.raises(ContainerInventoryIntegrityError) as exc_info:
+        await repo.recalculate_inventory(product_id="sku")
+
+    assert exc_info.value.diagnostics == [diagnostic]
+    assert [call[0] for call in conn.calls] == [
+        "transaction_enter", "execute", "execute", "fetch", "transaction_exit"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recalculate_post_guard_rolls_back_after_rewrite_mismatch():
+    diagnostic = {
+        "product_id": "sku",
+        "batch_number": None,
+        "container_code": "BOX-1",
+        "issue": "contained_inventory_missing",
+    }
+    conn = FakeConnection(container_post=[diagnostic])
+    repo = SystemRepository(FakePool(conn))
+
+    from app.core.exceptions import ContainerInventoryIntegrityError
+
+    with pytest.raises(ContainerInventoryIntegrityError) as exc_info:
+        await repo.recalculate_inventory(product_id="sku")
+
+    assert exc_info.value.diagnostics == [diagnostic]
+    assert ("execute", system_queries.RECALCULATE_INVENTORY, ("sku",)) in conn.calls
+    assert ("execute", system_queries.DELETE_AVAILABLE_INVENTORY, ("sku",)) in conn.calls
+    assert conn.calls[-1] == ("transaction_exit", ContainerInventoryIntegrityError)

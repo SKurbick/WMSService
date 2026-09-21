@@ -65,10 +65,19 @@ class KizService:
         if status not in {'error', 'deactivated'}:
             raise KizConflictError('Недопустимый переход КИЗ')
         initial = await self._get(conn, kiz_code)
-        await self.repo.lock_inventory(conn, initial['product_id'], initial['location_id'])
+        if initial.get('container_id') is None:
+            await self.repo.lock_inventory(conn, initial['product_id'], initial['location_id'])
+        else:
+            await self.repo.lock_container_inventory(
+                conn, initial['product_id'], initial['container_id']
+            )
         kiz = await self._get(conn, kiz_code, lock=True)
         if kiz['lifecycle_status'] != 'active':
             raise KizConflictError('КИЗ уже закрыт')
+        if (kiz['product_id'], kiz['location_id'], kiz.get('container_id')) != (
+            initial['product_id'], initial['location_id'], initial.get('container_id')
+        ):
+            raise KizConflictError('КИЗ изменился до terminal transition')
         await self.repo.terminate(conn, kiz['kiz_id'], status)
         event = 'marked_as_error' if status == 'error' else 'deactivated'
         await self.repo.event(conn, kiz, event, 'active', status, data)
@@ -79,11 +88,12 @@ class KizService:
             return await self._get(conn, kiz_code)
 
     async def list(self, product_id=None, location_code=None, lifecycle_status=None,
-                   limit=50, offset=0):
+                   container_id=None, container_qr_code=None, limit=50, offset=0):
         async with self.repo.pool.acquire() as conn:
             async with conn.transaction(isolation='repeatable_read', readonly=True):
                 return await self.repo.list(
-                    conn, product_id, location_code, lifecycle_status, limit, offset)
+                    conn, product_id, location_code, lifecycle_status,
+                    container_id, container_qr_code, limit, offset)
 
     async def events(self, kiz_code, limit=50, offset=0):
         async with self.repo.pool.acquire() as conn:
@@ -91,11 +101,24 @@ class KizService:
                 kiz = await self._get(conn, kiz_code)
                 return await self.repo.events(conn, kiz['kiz_id'], limit, offset)
 
-    async def summary(self, product_id, location_code):
+    async def summary(self, product_id, location_code=None, container_id=None,
+                      container_qr_code=None):
+        scopes = int(location_code is not None) + int(container_id is not None) + int(container_qr_code is not None)
+        if scopes != 1:
+            raise KizConflictError(
+                'Укажите ровно один holder scope: location_code, container_id или container_qr_code'
+            )
         async with self.repo.pool.acquire() as conn:
             async with conn.transaction(isolation='repeatable_read', readonly=True):
-                location = await self._scope(conn, product_id, location_code)
-                return await self.repo.summary(conn, product_id, location['location_id'])
+                if location_code is not None:
+                    location = await self._scope(conn, product_id, location_code)
+                    return await self.repo.summary(conn, product_id, location['location_id'])
+                if not await self.repo.get_product(conn, product_id):
+                    raise ProductNotFoundError(f'Товар {product_id} не найден')
+                container = await self.repo.get_container(conn, container_id, container_qr_code)
+                if container is None:
+                    raise KizConflictError('Контейнер не найден')
+                return await self.repo.container_summary(conn, product_id, container['container_id'])
 
     async def integrity(self):
         async with self.repo.pool.acquire() as conn:
