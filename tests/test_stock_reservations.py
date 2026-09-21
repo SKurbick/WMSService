@@ -1,10 +1,16 @@
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
 
 from app.api.v1.endpoints import inventory as inventory_endpoint
-from app.consumer import start_consumer, start_stock_reservation_consumer
+from app import consumer
+from app.consumer import (
+    _process_stock_reservation_message,
+    start_consumer,
+    start_stock_reservation_consumer,
+)
 from app.core.exceptions import LocationNotFoundError
 from app.core.schemas.stock_reservation import ProductAvailabilityResponse
 from app.core.services.stock_reservation_service import StockReservationService
@@ -42,6 +48,24 @@ class FakeLocationRepository:
 class FakeAvailabilityRepository(FakeReservationRepository):
     async def get_location_subtree_availability(self, location_id):
         return []
+
+
+class FakeRabbitMessage:
+    def __init__(self, body: bytes):
+        self.body = body
+        self.message_id = "message-1"
+        self.routing_key = "orders.stock.reservations"
+        self.redelivered = False
+        self.acked = False
+        self.nacked = False
+        self.requeue = None
+
+    async def ack(self):
+        self.acked = True
+
+    async def nack(self, *, requeue):
+        self.nacked = True
+        self.requeue = requeue
 
 
 @pytest.mark.asyncio
@@ -140,6 +164,81 @@ def test_reservation_consumer_uses_separate_queue_from_fbs_consumer():
     assert "RABBITMQ_QUEUE" in fbs_names
     assert "STOCK_RESERVATION_QUEUE" not in fbs_names
     assert "STOCK_RESERVATION_QUEUE" in reservation_names
+
+
+@pytest.mark.asyncio
+async def test_reservation_consumer_logs_connection_stage_failure(monkeypatch, caplog):
+    async def failed_connect(_url):
+        raise RuntimeError("connection failed")
+
+    monkeypatch.setattr(consumer.aio_pika, "connect_robust", failed_connect)
+
+    with caplog.at_level(logging.ERROR, logger="app.consumer.stock_reservation"):
+        with pytest.raises(RuntimeError, match="connection failed"):
+            await start_stock_reservation_consumer()
+
+    assert "stage=connect" in caplog.text
+    assert "connection failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_reservation_message_logs_commit_and_ack(monkeypatch, caplog):
+    class SuccessfulService:
+        def __init__(self, _repository):
+            pass
+
+        async def process_rabbitmq_message(self, _raw):
+            return {"processed": 1}
+
+    async def fake_pool():
+        return object()
+
+    monkeypatch.setattr(consumer, "get_db_pool", fake_pool)
+    monkeypatch.setattr(consumer, "StockReservationRepository", lambda pool: pool)
+    monkeypatch.setattr(consumer, "StockReservationService", SuccessfulService)
+    message = FakeRabbitMessage(b'[{"wild":"wild1340","orders":[]}]')
+
+    with caplog.at_level(logging.INFO, logger="app.consumer.stock_reservation"):
+        await _process_stock_reservation_message(
+            message,
+            queue_name="orders.stock.reservations",
+        )
+
+    assert message.acked is True
+    assert message.nacked is False
+    assert "message получено" in caplog.text
+    assert "DB transaction зафиксирована" in caplog.text
+    assert "message ACK" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_reservation_message_logs_rollback_and_requeue(monkeypatch, caplog):
+    class FailedService:
+        def __init__(self, _repository):
+            pass
+
+        async def process_rabbitmq_message(self, _raw):
+            raise RuntimeError("database failed")
+
+    async def fake_pool():
+        return object()
+
+    monkeypatch.setattr(consumer, "get_db_pool", fake_pool)
+    monkeypatch.setattr(consumer, "StockReservationRepository", lambda pool: pool)
+    monkeypatch.setattr(consumer, "StockReservationService", FailedService)
+    message = FakeRabbitMessage(b'[{"wild":"wild1340","orders":[]}]')
+
+    with caplog.at_level(logging.INFO, logger="app.consumer.stock_reservation"):
+        await _process_stock_reservation_message(
+            message,
+            queue_name="orders.stock.reservations",
+        )
+
+    assert message.acked is False
+    assert message.nacked is True
+    assert message.requeue is True
+    assert "DB processing завершился ошибкой" in caplog.text
+    assert "message NACK/requeue" in caplog.text
 
 
 def test_reservation_sql_is_idempotent_and_does_not_touch_inventory_or_movements():

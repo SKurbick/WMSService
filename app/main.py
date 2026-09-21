@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from functools import partial
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -25,6 +26,25 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _log_background_task_completion(task: asyncio.Task, *, task_name: str) -> None:
+    """Сразу зафиксировать неожиданное завершение фоновой задачи."""
+    if task.cancelled():
+        logger.info("Фоновая задача остановлена | task=%s", task_name)
+        return
+
+    exception = task.exception()
+    if exception is None:
+        logger.error("Фоновая задача неожиданно завершилась | task=%s", task_name)
+        return
+
+    logger.error(
+        "Фоновая задача завершилась с ошибкой | task=%s | error=%s",
+        task_name,
+        exception,
+        exc_info=(type(exception), exception, exception.__traceback__),
+    )
 
 
 @asynccontextmanager
@@ -52,8 +72,15 @@ async def lifespan(app: FastAPI):
         logger.info("Retry worker запущен")
 
     if settings.RESERVATION_CONSUMER_ENABLED:
-        reservation_consumer_task = asyncio.create_task(start_stock_reservation_consumer())
-        logger.info("✅ Stock reservation RabbitMQ consumer запущен")
+        task_name = "stock-reservation-consumer"
+        reservation_consumer_task = asyncio.create_task(
+            start_stock_reservation_consumer(),
+            name=task_name,
+        )
+        reservation_consumer_task.add_done_callback(
+            partial(_log_background_task_completion, task_name=task_name)
+        )
+        logger.info("Stock reservation RabbitMQ consumer запланирован | task=%s", task_name)
 
     yield
 
