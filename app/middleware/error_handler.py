@@ -32,6 +32,9 @@ from app.core.exceptions import (
     OperationsHistoryValidationError,
     ReceiptHistoryNotFoundError,
     ReceiptHistoryValidationError,
+    KizImportMessageNotFoundError,
+    KizImportBusinessError,
+    KizImportConcurrentConflictError,
 )
 import logging
 
@@ -272,6 +275,29 @@ def add_exception_handlers(app: FastAPI):
                 "message": str(exc),
                 "error_code": "RE_SORTING_OPERATION_CONFLICT",
             },
+        )
+
+    @app.exception_handler(KizImportMessageNotFoundError)
+    async def kiz_import_not_found_handler(request: Request, exc: KizImportMessageNotFoundError):
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": str(exc), "error_code": "KIZ_IMPORT_MESSAGE_NOT_FOUND"},
+        )
+
+    @app.exception_handler(KizImportBusinessError)
+    async def kiz_import_business_handler(request: Request, exc: KizImportBusinessError):
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": str(exc), "error_code": exc.error_code},
+        )
+
+    @app.exception_handler(KizImportConcurrentConflictError)
+    async def kiz_import_concurrent_handler(
+        request: Request, exc: KizImportConcurrentConflictError
+    ):
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": str(exc), "error_code": "KIZ_IMPORT_CONCURRENT_CONFLICT"},
         )
 
     @app.exception_handler(RequestValidationError)

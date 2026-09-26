@@ -15,6 +15,7 @@ from app.middleware.logging import add_logging_middleware
 from app.consumer import (
     start_consumer,
     start_external_fbs_consumer,
+    start_kiz_import_consumer,
     start_stock_reservation_consumer,
 )
 from app.retry_worker import start_retry_worker
@@ -57,6 +58,7 @@ async def lifespan(app: FastAPI):
     consumer_task = None
     external_fbs_consumer_task = None
     reservation_consumer_task = None
+    kiz_import_consumer_task = None
     retry_task = None
 
     if settings.CONSUMER_ENABLED:
@@ -82,6 +84,17 @@ async def lifespan(app: FastAPI):
         )
         logger.info("Stock reservation RabbitMQ consumer запланирован | task=%s", task_name)
 
+    if settings.KIZ_IMPORT_CONSUMER_ENABLED:
+        task_name = "kiz-import-consumer"
+        kiz_import_consumer_task = asyncio.create_task(
+            start_kiz_import_consumer(),
+            name=task_name,
+        )
+        kiz_import_consumer_task.add_done_callback(
+            partial(_log_background_task_completion, task_name=task_name)
+        )
+        logger.info("KIZ import RabbitMQ consumer запланирован | task=%s", task_name)
+
     yield
 
     logger.info("🛑 Остановка WMS Service...")
@@ -103,6 +116,12 @@ async def lifespan(app: FastAPI):
             await reservation_consumer_task
         except asyncio.CancelledError:
             pass
+    if kiz_import_consumer_task:
+        kiz_import_consumer_task.cancel()
+        try:
+            await kiz_import_consumer_task
+        except asyncio.CancelledError:
+            pass
     if retry_task:
         retry_task.cancel()
         try:
@@ -122,6 +141,10 @@ tags_metadata = [
     {
         "name": "FBS Shipments",
         "description": "Журнал отгрузок из ФБС зоны. Просмотр, статистика и переобработка записей, полученных из RabbitMQ.",
+    },
+    {
+        "name": "KIZ Import",
+        "description": "Read-only raw inbox сообщений импорта КИЗ из RabbitMQ.",
     },
 ]
 

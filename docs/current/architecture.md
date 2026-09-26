@@ -127,3 +127,30 @@ Write path `POST /api/kit-operations` выполняется в одной DB tr
 ## Re-sorting operations
 
 Модуль следует endpoint/schema/service/repository/query архитектуре kit operations. Write flow использует одну asyncpg connection и transaction. Allow-list блокируется `FOR SHARE`, каноническая пара SKU — transaction advisory lock, source loose inventory — `FOR UPDATE`. Inventory изменяется только movement trigger.
+
+
+## KIZ import raw inbox
+
+Отдельный `start_kiz_import_consumer()` пассивно подключается к существующей очереди
+`orders.kiz.imported` и не использует FBS/reservation processing. Адаптер передаёт bytes
+и RabbitMQ metadata в `KizImportService`, repository записывает одну строку
+`wms.kiz_import_messages` в отдельной транзакции. Consumer ACK-ает сообщение только после
+возврата из repository, то есть после commit; ошибка БД приводит к NACK/requeue.
+
+R1 является только ingestion/audit слоем: raw body и parsed JSON сохраняются без
+складских операций. Consumer выключен по умолчанию настройкой
+`KIZ_IMPORT_CONSUMER_ENABLED=false` и запускается независимой lifespan task.
+
+## KIZ import controlled business apply
+
+B2 запускается только явным `POST /api/kiz-import/messages/{message_id}/process`; RabbitMQ
+consumer остаётся B1 raw-ingestion-only. Service блокирует inbox row, все receipt rows
+документа, exact available loose inventory и KIZ в детерминированном порядке. Business
+apply выполняется во вложенном savepoint: любой конфликт откатывает KIZ/events/links
+целиком, после чего outer transaction фиксирует `business_status=rejected`.
+
+Успех создаёт только `wms.kiz`, `wms.kiz_events` и immutable provenance
+`wms.kiz_import_message_kiz`; movements, inventory и receipt_items не изменяются.
+Receipt quantity и all-source active KIZ count exact loose scope проверяются до insert и
+повторно после него. PostgreSQL serialization/deadlock/integrity conflicts возвращаются
+как controlled concurrent conflict. Applied message возвращает сохранённый result.

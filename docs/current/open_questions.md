@@ -1,6 +1,6 @@
 # Open Questions
 
-Статус: `CURRENT`. Последний triage: 2026-08-08.
+Статус: `CURRENT`. Последний triage: 2026-09-24.
 
 Статусы: `open` — требуется решение или проверка; `answered` — ответ подтверждён
 источником; `accepted-risk` — ограничение осознанно принято; `obsolete` — вопрос потерял
@@ -36,3 +36,5 @@ issue tracker не назначены.
 | FBS-05 | accepted-risk | FBS сейчас списывает агрегированный available остаток без batch/container dimensions. | Product + WMS owner | Текущий pipeline; расширение требует отдельного решения |
 | TEST-01 | answered | Production `vector_db` нельзя использовать; нужен отдельный development/stage клон и выделенные fixtures. | QA + DB owner | Подтверждение владельца 2026-08-08; `runtime_concurrency_plan.md` |
 | TEST-02 | open | Добавить ли regression-тест полной/частичной распаковки после выбора модели CNT-01? | QA + WMS owner | Блокируется решением CNT-01 |
+| KIZ-01 | open | Какое поле фактически и стабильно присылает producer: `supply.order_guid` или `supply.supply_guid`? | Integration owner | KIZ import R1 raw inbox; подтвердить по stage-сообщениям до следующих фаз |
+| KIZ-02 | open | Как идентифицировать receipt units, уже перемещённые из `PUSHKINO-ПРИЁМКА`, без поиска по всему складу и неоднозначного holder? | Product + WMS owner | B2 намеренно поддерживает только exact loose receipt location |

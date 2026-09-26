@@ -327,3 +327,38 @@ item retry используют `_process_shipment_group`. Внутри пере
 items и assembly tasks, создаётся movement, обновляются item links и parent shipment.
 Location validation также использует этот `conn`. Ошибка на любом шаге откатывает всю
 product group. Existing orphan movements автоматически не восстанавливаются.
+
+
+## 2026-09-23 - KIZ import начинается с raw inbox
+
+- Статус решения: `active`
+- Связанные endpoints: `GET /api/kiz-import/messages`, `GET /api/kiz-import/messages/{message_id}`
+- Связанные миграции: `20260923_kiz_import_inbox_preflight.sql`, `20260923_add_kiz_import_inbox.sql`
+- Superseded: нет
+
+Первый этап интеграции КИЗ отделён от складской бизнес-логики. Каждая доставка RabbitMQ
+сохраняется как самостоятельная audit row вместе с неизменённым UTF-8 body либо
+lossless base64 representation для non-UTF-8 body. ACK разрешён только после commit;
+ошибка БД возвращает сообщение через NACK/requeue. Consumer пассивно использует
+существующую очередь и выключен до ручного применения migration на stage.
+
+`order_guid` извлекается диагностически. Временное чтение `supply_guid` не становится
+стабильным producer contract: raw payload не переписывается, mismatch логируется.
+Normalization КИЗ и любые физические складские изменения вынесены за scope R1.
+
+## 2026-09-24 - KIZ receipt import применяет идентификацию без physical movement
+
+- Статус решения: `active`
+- Связанные endpoints: `POST /api/kiz-import/messages/{message_id}/process`, `GET /api/kiz-import/integrity`
+- Связанные миграции: `20260924_kiz_import_b2_preflight.sql`, `20260924_add_kiz_import_b2.sql`
+- Superseded: нет
+
+B2 рассматривает receipt payload как идентификацию уже принятого товара. Поэтому KIZ
+создаётся active в exact loose receipt location, но movements/inventory/receipt_items не
+изменяются. Capacity ограничена одновременно receipt quantity и all-source active KIZ
+точного loose scope.
+
+Один message обрабатывается под row locks и savepoint. Business conflict откатывает все
+KIZ changes, но сохраняет rejected state; DB/system error откатывает outer transaction.
+Replay связывается через immutable message↔KIZ provenance. Consumer остаётся raw-only;
+automatic apply отложен до отдельной фазы.

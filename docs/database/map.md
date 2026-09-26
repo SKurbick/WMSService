@@ -152,3 +152,13 @@ Snapshot поступлений из 1С: `receipt_item_id`, `guid`, `product_id
 - `wms.re_sorting_operation_items`: две role-строки и movement identity.
 - `wms.operation_locations`: поддерживает `operation_code=re_sorting_operations`.
 - `wms.movements`: поддерживает `movement_type=re_sorting`, source type `re_sorting_operation`.
+
+## KIZ import B1/B2
+
+`wms.kiz_import_messages` хранит raw body/payload, RabbitMQ metadata, диагностические
+поля и B2 state `pending/applied/rejected`, result либо deterministic business error.
+
+`wms.kiz_import_message_kiz` имеет PK `(message_id, kiz_id)`, FK на inbox/KIZ,
+`was_created` и immutable trigger. Один KIZ может быть связан с несколькими duplicate
+messages. `wms.kiz.origin_type` поддерживает `warehouse_assignment` и `receipt_import`;
+partial index `idx_kiz_active_receipt_origin` ускоряет receipt capacity check.

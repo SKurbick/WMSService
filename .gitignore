@@ -43,6 +43,11 @@ kiz_steps_tests.md
 /kiz_stage*_audit*.md
 /wms_stage*.md
 /ТЗ_ KIZ Stage *.md
+/wms_kiz_receipt_*.md
+
+# Локальные входные списки и сгенерированные аналитические отчёты.
+/sz_fix.txt
+/reports/
 
 # Локальная диагностика RabbitMQ, не относящаяся к реализации сервиса.
 /scripts/peek_stock_reservation_messages.py

@@ -15,6 +15,8 @@ from app.infrastructure.database.repositories.stock_reservation_repository impor
     StockReservationRepository,
 )
 from app.core.services.stock_reservation_service import StockReservationService
+from app.infrastructure.database.repositories.kiz_import_repository import KizImportRepository
+from app.core.services.kiz_import_service import KizImportService
 from app.handlers.write_off_fbs_handler import handle_write_off_fbs
 from app.core.schemas.write_off_fbs import WriteOffAccordingToFBS
 from app.core.enums import FbsShipmentSource
@@ -22,6 +24,8 @@ from app.core.enums import FbsShipmentSource
 logger = logging.getLogger(__name__)
 reservation_logger = logging.getLogger(f"{__name__}.stock_reservation")
 reservation_logger.setLevel(logging.INFO)
+kiz_import_logger = logging.getLogger(f"{__name__}.kiz_import")
+kiz_import_logger.setLevel(logging.INFO)
 
 fbs_shipment_repo = FbsShipmentRepository()
 
@@ -193,8 +197,7 @@ async def _process_stock_reservation_message(message, *, queue_name: str) -> Non
         return
 
     reservation_logger.info(
-        "Stock reservation DB transaction зафиксирована | queue=%s | "
-        "message_id=%s | stats=%s",
+        "Stock reservation DB transaction зафиксирована | queue=%s | " "message_id=%s | stats=%s",
         queue_name,
         message_id,
         stats,
@@ -205,3 +208,77 @@ async def _process_stock_reservation_message(message, *, queue_name: str) -> Non
         queue_name,
         message_id,
     )
+
+
+async def start_kiz_import_consumer() -> None:
+    queue_name = settings.KIZ_IMPORT_QUEUE
+    stage = "connect"
+    kiz_import_logger.info("KIZ import consumer: подключение | queue=%s", queue_name)
+
+    try:
+        connection = await aio_pika.connect_robust(settings.RABBITMQ_URL)
+        async with connection:
+            stage = "open_channel"
+            channel = await connection.channel()
+            stage = "declare_queue"
+            queue = await channel.declare_queue(queue_name, passive=True)
+            kiz_import_logger.info(
+                "KIZ import consumer готов | queue=%s | exchange=%s | routing_key=%s",
+                queue_name,
+                settings.KIZ_IMPORT_EXCHANGE,
+                settings.KIZ_IMPORT_ROUTING_KEY,
+            )
+            stage = "consume"
+            async for message in queue:
+                await _process_kiz_import_message(message, queue_name=queue_name)
+    except asyncio.CancelledError:
+        kiz_import_logger.info("KIZ import consumer остановлен | queue=%s", queue_name)
+        raise
+    except Exception:
+        kiz_import_logger.exception(
+            "KIZ import consumer завершился с ошибкой | queue=%s | stage=%s",
+            queue_name,
+            stage,
+        )
+        raise
+
+
+async def _process_kiz_import_message(message, *, queue_name: str) -> None:
+    rabbit_message_id = message.message_id
+    try:
+        pool = await get_db_pool()
+        result = await KizImportService(KizImportRepository(pool)).ingest(
+            message.body,
+            exchange_name=message.exchange or None,
+            routing_key=message.routing_key or None,
+            rabbit_message_id=rabbit_message_id,
+            correlation_id=message.correlation_id,
+            headers=message.headers,
+        )
+    except Exception as error:
+        kiz_import_logger.error(
+            "KIZ import message не сохранено | queue=%s | rabbit_message_id=%s | error=%s",
+            queue_name,
+            rabbit_message_id or "-",
+            error,
+            exc_info=True,
+        )
+        await message.nack(requeue=True)
+        return
+
+    if result.used_supply_guid_alias:
+        kiz_import_logger.warning(
+            "KIZ import source field mismatch: supply_guid вместо order_guid | message_id=%s",
+            result.message_id,
+        )
+    kiz_import_logger.info(
+        "KIZ import message сохранено | message_id=%s | order_guid=%s | "
+        "supply_number=%s | wild_group_count=%s | mark_code_count=%s | parse_status=%s",
+        result.message_id,
+        result.order_guid,
+        result.supply_number,
+        result.wild_group_count,
+        result.mark_code_count,
+        result.parse_status,
+    )
+    await message.ack()

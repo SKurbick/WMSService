@@ -34,10 +34,15 @@ class Settings(BaseSettings):
     RABBITMQ_QUEUE: str = "wms.fbs.write_off"
     EXTERNAL_FBS_QUEUE: str = "wms.fbs.external_write_off"
     STOCK_RESERVATION_QUEUE: str = "wms.stock.reservations"
+    KIZ_IMPORT_QUEUE: str = "orders.kiz.imported"
     RABBITMQ_EXCHANGE: str = "orders"
+    KIZ_IMPORT_EXCHANGE: str = "orders"
+    KIZ_IMPORT_ROUTING_KEY: str = "orders.kiz.imported"
+    KIZ_IMPORT_RECEIPT_LOCATION_CODE: str = "PUSHKINO-ПРИЁМКА"
     CONSUMER_ENABLED: bool = True
     EXTERNAL_FBS_CONSUMER_ENABLED: bool = False
     RESERVATION_CONSUMER_ENABLED: bool = True
+    KIZ_IMPORT_CONSUMER_ENABLED: bool = False
     FBS_VALIDATE_ASSEMBLY_TASKS: bool = True
 
     # Локации

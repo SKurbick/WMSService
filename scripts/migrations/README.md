@@ -12,6 +12,10 @@ Alembic и автоматический migration runner в проекте от�
 | 2 | `20260614_add_fbs_shipment_source.sql` | `fbs_shipments.source` и индексы |
 | 3 | `20260707_add_kit_operations.sql` | Source-поля movements, allow-list и kit operations |
 | 4 | `20260715_add_re_sorting_operations.sql` | Re-sorting tables, constraints, indexes и audit views |
+| 5 | `20260923_kiz_import_inbox_preflight.sql` | Проверка отсутствия raw inbox импорта КИЗ |
+| 6 | `20260923_add_kiz_import_inbox.sql` | Additive raw inbox сообщений импорта КИЗ |
+| 7 | `20260924_kiz_import_b2_preflight.sql` | Read-only проверка C1/B1 объектов перед B2 |
+| 8 | `20260924_add_kiz_import_b2.sql` | Processing state, receipt origin и immutable message↔KIZ provenance |
 
 Порядок выше отражает хронологию и зависимости файлов репозитория, но не доказывает, что целевая БД начинает с состояния, совместимого с первым файлом. Перед применением нужно сравнить runtime schema с ожидаемыми объектами каждого SQL.
 
@@ -21,6 +25,8 @@ Alembic и автоматический migration runner в проекте от�
 - `scripts/migrations.sql` находится вне датированного каталога, хотя является миграцией stock reservations.
 - Миграция FBS source от 2026-06-14 первоначально разрешает только `standard` и `external_detected`. Текущий код также пишет `http_api`; расширение constraint в репозитории отдельной датированной миграцией не найдено и описано как ручная операция владельца БД.
 - Re-sorting migration содержит `CREATE TABLE` без `IF NOT EXISTS`; повторное применение не является гарантированно безопасным.
+- KIZ import consumer должен оставаться выключенным до успешного применения preflight и migration KIZ inbox на stage.
+- B2 migration применяется только после B1 и до выкладки кода с process endpoint.
 - Rollback-скрипты в репозитории не найдены.
 - Для `wms.movements` должна существовать партиция, охватывающая дату выполнения операций.
 

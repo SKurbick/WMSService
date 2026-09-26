@@ -242,3 +242,20 @@ class NotificationNotFoundError(DomainException):
     """Уведомление не найдено"""
 
     pass
+
+
+# === KIZ Import ===
+
+
+class KizImportMessageNotFoundError(DomainException):
+    pass
+
+
+class KizImportBusinessError(DomainException):
+    def __init__(self, message: str, *, error_code: str):
+        super().__init__(message)
+        self.error_code = error_code
+
+
+class KizImportConcurrentConflictError(DomainException):
+    pass

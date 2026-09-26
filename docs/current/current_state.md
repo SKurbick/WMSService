@@ -180,3 +180,24 @@ Changed/physical/movement fields намеренно отсутствуют: ст
 - Валидный payload синхронно использует общий `handle_write_off_fbs`, включая
   группировку, транзакционную обработку product group, movements и retry.
 - DB constraint для `http_api` применяется владельцем БД вручную.
+
+
+## KIZ import raw inbox
+
+Подготовлен выключенный по умолчанию RabbitMQ consumer очереди `orders.kiz.imported`.
+Он сохраняет raw payload, parsed JSON, диагностические счётчики и RabbitMQ metadata в
+`wms.kiz_import_messages`. Malformed JSON также сохраняется и ACK-ается после commit;
+ошибка записи БД приводит к NACK/requeue. Доступны read-only endpoints списка и detail.
+Создание КИЗ и любые изменения movements, inventory или receipt flow не выполняются.
+Перед включением consumer требуется применить датированную additive migration на stage.
+
+## KIZ import controlled apply
+
+Сохранённое B1-сообщение можно вручную применить к существующему receipt через
+`POST /api/kiz-import/messages/{message_id}/process`. B2 создаёт active KIZ с
+`origin_type=receipt_import`, `origin_reference=order_guid` в точной loose receipt
+location из `KIZ_IMPORT_RECEIPT_LOCATION_CODE`. Partial coverage разрешён.
+
+Обработка атомарна и идемпотентна для same message, duplicate inbox rows и additive
+replay. Terminal KIZ не реактивируется. Physical quantity, receipt snapshot и movements
+не меняются. Автоматический B2 запуск из RabbitMQ consumer не реализован.

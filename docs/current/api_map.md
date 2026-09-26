@@ -209,3 +209,12 @@ row_id служит только глобальным ключом строки.
 Legacy revisions читаются из `public.supply_to_sellers_warehouse`, current snapshot —
 из `wms.receipt_items`. Пагинация применяется к revisions. GUID сравнивается как строка,
 без UUID parsing. Документ, отсутствующий в обоих источниках, возвращает 404.
+
+
+# KIZ import raw inbox
+
+- `GET /api/kiz-import/messages?limit=100&offset=0` — список диагностических полей без raw payload, сортировка `message_id DESC`.
+- `GET /api/kiz-import/messages/{message_id}` — detail с raw body, parsed payload, parse error и RabbitMQ metadata.
+- `POST /api/kiz-import/messages/{message_id}/process` — атомарно применяет сохранённый payload к существующим loose units поступления без movements/inventory writes.
+- `GET /api/kiz-import/integrity` — read-only проверка receipt quantity и orphan receipt-origin KIZ.
+- Write endpoints отсутствуют; API не создаёт КИЗ и не изменяет складские сущности.

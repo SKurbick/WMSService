@@ -126,3 +126,27 @@
 - Расходуется только available loose stock без batch/container; физические мягкие резервы игнорируются.
 - Операция атомарна, создаёт две item-строки и два movements; inventory напрямую не изменяется.
 - Нет вызовов 1С/RabbitMQ и нет idempotency key.
+
+
+## KIZ import R1
+
+- `raw_body` и `raw_payload` являются source of truth; диагностические поля не заменяют исходное сообщение.
+- Строки `mark_codes` не нормализуются, не сортируются и не дедуплицируются.
+- Каждая RabbitMQ delivery создаёт отдельную inbox row; бизнес-дедупликации по GUID, номеру поставки или КИЗ нет.
+- Валидный JSON без ожидаемых полей и malformed JSON должны сохраняться; после успешного commit сообщение ACK-ается.
+- Ошибка записи в inbox приводит к NACK/requeue; ACK до commit запрещён.
+- `supply.order_guid` является семантическим полем. Временный fallback из `supply.supply_guid` заполняет только диагностический `order_guid`, не изменяя raw payload, и логируется как mismatch.
+- R1 не создаёт и не изменяет KIZ, KIZ events/links, movements, inventory, receipt items и container operations.
+
+## KIZ receipt import B2
+
+- B2 идентифицирует уже существующие loose units и не создаёт physical receipt или movement.
+- Eligible stock: exact configured receipt location, `available`, без batch и container.
+- Active receipt-import KIZ count не превышает `receipt_items.quantity` для `(order_guid, product_id)`.
+- Все active KIZ exact loose scope независимо от origin уменьшают unidentified capacity.
+- Один code во входном сообщении допустим только один раз; строки не нормализуются.
+- Existing active KIZ того же product/receipt является idempotent; terminal не реактивируется.
+- Existing KIZ другого product/origin отклоняет всё сообщение.
+- Message применяется атомарно; business conflict сохраняет `rejected`, system/DB error откатывается.
+- `wms.kiz_import_message_kiz` хранит immutable provenance и допускает несколько messages на один KIZ.
+- Consumer завершает только B1 save/ACK и никогда автоматически не запускает B2.

@@ -241,3 +241,13 @@ Audit всех входящих событий резервов хранится
 ## Re-sorting operation
 
 `wms.re_sorting_operations` — audit header пересортицы; `wms.re_sorting_operation_items` — ровно две строки ролей `source_outgoing`/`target_incoming`. Каждая строка связана с movement посредством `(movement_id, movement_created_at)`. Allow-list хранится в общей `wms.operation_locations` с отдельным operation_code.
+
+## KIZ receipt identification
+
+`wms.kiz` представляет идентифицированную физическую единицу. Для receipt import active
+KIZ имеет loose holder `location_id`, `container_id=NULL`, `origin_type=receipt_import`
+и `origin_reference=receipt_items.guid`. Один active KIZ занимает одну physical unit.
+
+`wms.kiz_import_messages` хранит raw delivery и B2 processing state. Связь message с
+созданными либо idempotent-existing KIZ хранится append-only в
+`wms.kiz_import_message_kiz`; она является provenance, а не quantity ledger.
