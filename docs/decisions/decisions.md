@@ -327,3 +327,34 @@ item retry используют `_process_shipment_group`. Внутри пере
 items и assembly tasks, создаётся movement, обновляются item links и parent shipment.
 Location validation также использует этот `conn`. Ошибка на любом шаге откатывает всю
 product group. Existing orphan movements автоматически не восстанавливаются.
+
+## 2026-09-28 - Предложена task-level обработка смешанных FBS payload
+
+- Статус решения: `proposed`
+- Связанные endpoints: будущий `GET /api/fbs-shipments/{shipment_id}/task-results`
+- Связанные миграции: будущая миграция `wms.fbs_shipment_task_results`
+- Superseded: нет
+
+Контекст: текущая атомарная проверка всей product group отклоняет новые СЗ, если
+вместе с ними пришло хотя бы одно ранее отгруженное СЗ. Это защищает от двойного
+списания, но создает потенциальный пропуск физического списания новых СЗ.
+
+Предложено классифицировать каждое СЗ внутри заблокированной product group:
+
+- новое СЗ списывается текущим movement;
+- подтвержденный дубль с существующим success item и movement пропускается;
+- `is_shipped=true` без подтвержденного movement изолируется как `inconsistent`;
+- отсутствующее СЗ фиксируется как `not_found`.
+
+Дубли и аномалии не должны блокировать атомарное списание новых СЗ. Результат
+каждого СЗ предлагается хранить в `wms.fbs_shipment_task_results`; физическим
+источником истины остается `wms.movements`.
+
+Обратная совместимость обеспечивается неизменным входным payload, additive
+read-only endpoint и режимами `legacy`, `observe`, `task_level`. До реализации
+решение остается proposal и не изменяет текущие `CURRENT` FBS-инварианты.
+
+Подробности:
+
+- `docs/proposals/fbs_task_results_read_model.md`;
+- `docs/proposals/fbs_task_level_processing_spec.md`.

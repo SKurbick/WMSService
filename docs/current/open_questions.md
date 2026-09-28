@@ -34,5 +34,7 @@ issue tracker не назначены.
 | FBS-03 | open | Как структурно связывать task movements с task/items? | WMS + DB owner | `known_issues.md`, пункты 4 и 8 |
 | FBS-04 | open | Нужен ли retry claim через `FOR UPDATE SKIP LOCKED`? | WMS owner | External FBS tech debt в `known_issues.md` |
 | FBS-05 | accepted-risk | FBS сейчас списывает агрегированный available остаток без batch/container dimensions. | Product + WMS owner | Текущий pipeline; расширение требует отдельного решения |
+| FBS-06 | open | Допускают ли legacy-клиенты `movement_id` у failed FBS item, если новые СЗ смешанной позиции уже списаны, а часть СЗ требует сверки? | Product + WMS owner | `proposals/fbs_task_level_processing_spec.md`, разделы 10 и 18 |
+| FBS-07 | open | Какой retention нужен для `fbs_shipment_task_results` и требуется ли партиционирование таблицы при фактическом объеме СЗ? | Product + DB owner | `proposals/fbs_task_level_processing_spec.md`, разделы 17 и 18 |
 | TEST-01 | answered | Production `vector_db` нельзя использовать; нужен отдельный development/stage клон и выделенные fixtures. | QA + DB owner | Подтверждение владельца 2026-08-08; `runtime_concurrency_plan.md` |
 | TEST-02 | open | Добавить ли regression-тест полной/частичной распаковки после выбора модели CNT-01? | QA + WMS owner | Блокируется решением CNT-01 |
