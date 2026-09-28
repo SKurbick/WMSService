@@ -387,4 +387,3 @@ PostgreSQL, не на production.
    процент shipment IDs?
 5. Требуется ли отдельный ручной workflow разрешения `inconsistent`, или на
    первом этапе достаточно read-only диагностики?
-
