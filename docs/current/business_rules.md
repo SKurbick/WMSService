@@ -138,15 +138,17 @@
 - `supply.order_guid` является семантическим полем. Временный fallback из `supply.supply_guid` заполняет только диагностический `order_guid`, не изменяя raw payload, и логируется как mismatch.
 - R1 не создаёт и не изменяет KIZ, KIZ events/links, movements, inventory, receipt items и container operations.
 
-## KIZ receipt import B2
+## KIZ receipt import B2.1
 
-- B2 идентифицирует уже существующие loose units и не создаёт physical receipt или movement.
-- Eligible stock: exact configured receipt location, `available`, без batch и container.
-- Active receipt-import KIZ count не превышает `receipt_items.quantity` для `(order_guid, product_id)`.
-- Все active KIZ exact loose scope независимо от origin уменьшают unidentified capacity.
+- B2.1 регистрирует identity для receipt, но не назначает KIZ физической единице и не создаёт receipt/movement.
+- Новый `receipt_import` KIZ имеет `lifecycle_status=registered`, `location_id=NULL`, `container_id=NULL`.
+- Registered KIZ не участвует в `identified/unidentified` и physical guards; physical identity определяют только active KIZ с holder.
+- Registration не требует physical stock в receipt location; обязателен receipt item для `(order_guid, product_id)`.
+- Current `registered` + `active` receipt-import KIZ count не превышает `receipt_items.quantity` для `(order_guid, product_id)`; terminal KIZ слот не занимают.
 - Один code во входном сообщении допустим только один раз; строки не нормализуются.
-- Existing active KIZ того же product/receipt является idempotent; terminal не реактивируется.
+- Existing registered/active KIZ того же product/receipt является idempotent; terminal не реактивируется.
 - Existing KIZ другого product/origin отклоняет всё сообщение.
 - Message применяется атомарно; business conflict сохраняет `rejected`, system/DB error откатывается.
 - `wms.kiz_import_message_kiz` хранит immutable provenance и допускает несколько messages на один KIZ.
+- Replay applied message возвращает `new_kiz_count=0`, а linked current KIZ учитывает как existing.
 - Consumer завершает только B1 save/ACK и никогда автоматически не запускает B2.

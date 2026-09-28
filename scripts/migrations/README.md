@@ -16,6 +16,8 @@ Alembic и автоматический migration runner в проекте от�
 | 6 | `20260923_add_kiz_import_inbox.sql` | Additive raw inbox сообщений импорта КИЗ |
 | 7 | `20260924_kiz_import_b2_preflight.sql` | Read-only проверка C1/B1 объектов перед B2 |
 | 8 | `20260924_add_kiz_import_b2.sql` | Processing state, receipt origin и immutable message↔KIZ provenance |
+| 9 | `20260928_kiz_receipt_b21_preflight.sql` | Read-only проверка безопасности existing B2 receipt-import KIZ |
+| 10 | `20260928_kiz_receipt_b21_registered.sql` | Lifecycle `registered` и backfill безопасных receipt-import KIZ |
 
 Порядок выше отражает хронологию и зависимости файлов репозитория, но не доказывает, что целевая БД начинает с состояния, совместимого с первым файлом. Перед применением нужно сравнить runtime schema с ожидаемыми объектами каждого SQL.
 
@@ -27,6 +29,8 @@ Alembic и автоматический migration runner в проекте от�
 - Re-sorting migration содержит `CREATE TABLE` без `IF NOT EXISTS`; повторное применение не является гарантированно безопасным.
 - KIZ import consumer должен оставаться выключенным до успешного применения preflight и migration KIZ inbox на stage.
 - B2 migration применяется только после B1 и до выкладки кода с process endpoint.
+- B2.1 preflight выполняется после B2; B2.1 migration не применяется, если preflight нашёл unsafe active receipt-import KIZ.
+- B2.1 migration конвертирует только safe legacy B2 rows; её нужно применить до выкладки B2.1-кода.
 - Rollback-скрипты в репозитории не найдены.
 - Для `wms.movements` должна существовать партиция, охватывающая дату выполнения операций.
 

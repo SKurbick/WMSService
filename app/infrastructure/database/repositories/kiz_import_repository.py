@@ -111,11 +111,11 @@ class KizImportRepository:
             return []
         return await connection.fetch(queries.LOCK_EXISTING_CODES, codes)
 
-    async def lock_active_receipt_kiz(
+    async def lock_current_receipt_kiz(
         self, connection: Connection, order_guid: str, product_ids: list[str]
     ):
         return await connection.fetch(
-            queries.LOCK_ACTIVE_RECEIPT_KIZ,
+            queries.LOCK_CURRENT_RECEIPT_KIZ,
             order_guid,
             product_ids,
         )
@@ -135,7 +135,6 @@ class KizImportRepository:
         *,
         kiz_code: str,
         product_id: str,
-        location_id: int,
         order_guid: str,
         author: str,
         metadata: dict[str, Any],
@@ -144,7 +143,6 @@ class KizImportRepository:
             queries.INSERT_KIZ,
             kiz_code,
             product_id,
-            location_id,
             order_guid,
             author,
             json.dumps(metadata, ensure_ascii=False),
@@ -153,21 +151,19 @@ class KizImportRepository:
     async def lock_kiz_by_code(self, connection: Connection, kiz_code: str):
         return await connection.fetchrow(queries.LOCK_KIZ_BY_CODE, kiz_code)
 
-    async def insert_assigned_event(
+    async def insert_registered_event(
         self,
         connection: Connection,
         *,
         kiz_id: int,
         product_id: str,
-        location_id: int,
         author: str,
         metadata: dict[str, Any],
     ) -> int:
         return await connection.fetchval(
-            queries.INSERT_ASSIGNED_EVENT,
+            queries.INSERT_REGISTERED_EVENT,
             kiz_id,
             product_id,
-            location_id,
             author,
             json.dumps(metadata, ensure_ascii=False),
         )
@@ -182,15 +178,18 @@ class KizImportRepository:
             was_created,
         )
 
-    async def count_active_receipt_kiz(
+    async def count_current_receipt_kiz(
         self, connection: Connection, order_guid: str, product_ids: list[str]
     ) -> dict[str, int]:
         rows = await connection.fetch(
-            queries.COUNT_ACTIVE_RECEIPT_KIZ,
+            queries.COUNT_CURRENT_RECEIPT_KIZ,
             order_guid,
             product_ids,
         )
         return {row["product_id"]: row["quantity"] for row in rows}
+
+    async def get_message_linked_kiz(self, connection: Connection, message_id: int):
+        return await connection.fetch(queries.GET_MESSAGE_LINKED_KIZ, message_id)
 
     async def count_active_loose_kiz(
         self, connection: Connection, location_id: int, product_ids: list[str]
@@ -202,9 +201,12 @@ class KizImportRepository:
         )
         return {row["product_id"]: row["quantity"] for row in rows}
 
-    async def get_integrity_issues(self) -> tuple[list[Record], list[Record]]:
+    async def get_integrity_issues(self) -> tuple[list[Record], ...]:
         async with self.pool.acquire() as connection:
             async with connection.transaction(readonly=True):
                 capacity = await connection.fetch(queries.GET_RECEIPT_CAPACITY_VIOLATIONS)
                 orphans = await connection.fetch(queries.GET_ORPHAN_RECEIPT_KIZ)
-        return capacity, orphans
+                holder_violations = await connection.fetch(queries.GET_REGISTERED_HOLDER_VIOLATIONS)
+                origin_violations = await connection.fetch(queries.GET_REGISTERED_ORIGIN_VIOLATIONS)
+                invalid_links = await connection.fetch(queries.GET_INVALID_MESSAGE_KIZ_LINKS)
+        return capacity, orphans, holder_violations, origin_violations, invalid_links

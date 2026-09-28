@@ -156,7 +156,11 @@ class KizImportService:
                         f"KIZ import message {message_id} не найдено"
                     )
                 if message["business_status"] == "applied":
-                    return message["business_result"]
+                    return await self._build_replay_result(
+                        connection,
+                        message_id,
+                        message["business_result"],
+                    )
 
                 try:
                     request = self._canonicalize(message)
@@ -189,12 +193,49 @@ class KizImportService:
         return result
 
     async def get_integrity(self) -> dict[str, Any]:
-        capacity, orphans = await self.repository.get_integrity_issues()
+        (
+            capacity,
+            orphans,
+            holders,
+            origins,
+            invalid_links,
+        ) = await self.repository.get_integrity_issues()
         return {
-            "is_valid": not capacity and not orphans,
+            "is_valid": not any((capacity, orphans, holders, origins, invalid_links)),
             "receipt_capacity_violations": [dict(row) for row in capacity],
             "orphan_receipt_kiz": [dict(row) for row in orphans],
+            "registered_holder_violations": [dict(row) for row in holders],
+            "registered_origin_violations": [dict(row) for row in origins],
+            "invalid_message_kiz_links": [dict(row) for row in invalid_links],
         }
+
+    async def _build_replay_result(
+        self,
+        connection,
+        message_id: int,
+        stored_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        result = json.loads(json.dumps(stored_result, ensure_ascii=False, default=str))
+        linked_rows = await self.repository.get_message_linked_kiz(connection, message_id)
+        current_by_product: dict[str, int] = {}
+        terminal_by_product: dict[str, int] = {}
+        for row in linked_rows:
+            target = (
+                current_by_product
+                if row["lifecycle_status"] in {"registered", "active"}
+                else terminal_by_product
+            )
+            target[row["product_id"]] = target.get(row["product_id"], 0) + row["quantity"]
+
+        for group in result["groups"]:
+            product_id = group["product_id"]
+            group["new_kiz"] = 0
+            group["existing_kiz"] = current_by_product.get(product_id, 0)
+            group["terminal_existing"] = terminal_by_product.get(product_id, 0)
+        result["new_kiz_count"] = 0
+        result["existing_kiz_count"] = sum(current_by_product.values())
+        result["terminal_existing_count"] = sum(terminal_by_product.values())
+        return result
 
     def _canonicalize(self, message: dict[str, Any]) -> KizImportBusinessRequest:
         if message["parse_status"] != "received" or not isinstance(message["raw_payload"], dict):
@@ -333,7 +374,7 @@ class KizImportService:
 
         all_codes = sorted(code for codes in request.codes_by_product.values() for code in codes)
         existing_rows = await self.repository.lock_existing_codes(connection, all_codes)
-        await self.repository.lock_active_receipt_kiz(
+        await self.repository.lock_current_receipt_kiz(
             connection,
             request.order_guid,
             product_ids,
@@ -345,19 +386,13 @@ class KizImportService:
         )
 
         existing_by_code = {row["kiz_code"]: row for row in existing_rows}
-        active_receipt_counts = await self.repository.count_active_receipt_kiz(
+        current_receipt_counts = await self.repository.count_current_receipt_kiz(
             connection,
             request.order_guid,
             product_ids,
         )
-        active_loose_counts = await self.repository.count_active_loose_kiz(
-            connection,
-            location_id,
-            product_ids,
-        )
-
         planned_new: dict[str, list[str]] = {}
-        existing_active: dict[str, list[Any]] = {product_id: [] for product_id in product_ids}
+        existing_current: dict[str, list[Any]] = {product_id: [] for product_id in product_ids}
         existing_terminal: dict[str, list[Any]] = {product_id: [] for product_id in product_ids}
         for product_id in product_ids:
             new_codes = []
@@ -368,18 +403,18 @@ class KizImportService:
                     continue
                 self._validate_existing_kiz(current, product_id, request.order_guid)
                 target = (
-                    existing_active
-                    if current["lifecycle_status"] == "active"
+                    existing_current
+                    if current["lifecycle_status"] in {"registered", "active"}
                     else existing_terminal
                 )
                 target[product_id].append(current)
             planned_new[product_id] = new_codes
 
             receipt_quantity = receipt_by_product[product_id]
-            current_receipt_count = active_receipt_counts.get(product_id, 0)
+            current_receipt_count = current_receipt_counts.get(product_id, 0)
             if current_receipt_count > receipt_quantity:
                 raise KizImportBusinessError(
-                    f"Active receipt KIZ уже превышают quantity для {product_id}",
+                    f"Current receipt KIZ уже превышают quantity для {product_id}",
                     error_code="RECEIPT_KIZ_INTEGRITY_CONFLICT",
                 )
             if Decimal(current_receipt_count + len(new_codes)) > receipt_quantity:
@@ -387,25 +422,12 @@ class KizImportService:
                     f"Недостаточно receipt quantity для {product_id}",
                     error_code="RECEIPT_QUANTITY_EXCEEDED",
                 )
-
-            physical_quantity = physical_by_product[product_id]
-            identified_quantity = active_loose_counts.get(product_id, 0)
-            if Decimal(identified_quantity) > physical_quantity:
-                raise KizImportBusinessError(
-                    f"Active KIZ уже превышают loose physical для {product_id}",
-                    error_code="PHYSICAL_KIZ_INTEGRITY_CONFLICT",
-                )
-            if Decimal(identified_quantity + len(new_codes)) > physical_quantity:
-                raise KizImportBusinessError(
-                    f"Недостаточно unidentified loose units для {product_id}",
-                    error_code="INSUFFICIENT_UNIDENTIFIED_QUANTITY",
-                )
-
         metadata = {
             "source": self.SOURCE,
             "order_guid": request.order_guid,
             "supply_number": request.supply_number,
             "kiz_import_message_id": message_id,
+            "receipt_location_code": receipt_location_code,
         }
         created_by_product: dict[str, list[Any]] = {product_id: [] for product_id in product_ids}
         for product_id in product_ids:
@@ -414,7 +436,6 @@ class KizImportService:
                     connection,
                     kiz_code=code,
                     product_id=product_id,
-                    location_id=location_id,
                     order_guid=request.order_guid,
                     author=self.AUTHOR,
                     metadata=metadata,
@@ -423,17 +444,16 @@ class KizImportService:
                     current = await self.repository.lock_kiz_by_code(connection, code)
                     self._validate_existing_kiz(current, product_id, request.order_guid)
                     target = (
-                        existing_active
-                        if current["lifecycle_status"] == "active"
+                        existing_current
+                        if current["lifecycle_status"] in {"registered", "active"}
                         else existing_terminal
                     )
                     target[product_id].append(current)
                     continue
-                await self.repository.insert_assigned_event(
+                await self.repository.insert_registered_event(
                     connection,
                     kiz_id=created["kiz_id"],
                     product_id=product_id,
-                    location_id=location_id,
                     author=self.AUTHOR,
                     metadata=metadata,
                 )
@@ -447,7 +467,7 @@ class KizImportService:
                     row["kiz_id"],
                     True,
                 )
-            for row in existing_active[product_id] + existing_terminal[product_id]:
+            for row in existing_current[product_id] + existing_terminal[product_id]:
                 await self.repository.link_message_kiz(
                     connection,
                     message_id,
@@ -455,7 +475,7 @@ class KizImportService:
                     False,
                 )
 
-        final_receipt_counts = await self.repository.count_active_receipt_kiz(
+        final_receipt_counts = await self.repository.count_current_receipt_kiz(
             connection,
             request.order_guid,
             product_ids,
@@ -471,10 +491,7 @@ class KizImportService:
             physical_quantity = physical_by_product[product_id]
             receipt_identified = final_receipt_counts.get(product_id, 0)
             identified = final_loose_counts.get(product_id, 0)
-            if (
-                Decimal(receipt_identified) > receipt_quantity
-                or Decimal(identified) > physical_quantity
-            ):
+            if Decimal(receipt_identified) > receipt_quantity:
                 raise KizImportBusinessError(
                     f"Final KIZ invariant нарушен для {product_id}",
                     error_code="FINAL_KIZ_INTEGRITY_CONFLICT",
@@ -485,7 +502,7 @@ class KizImportService:
                     "receipt_quantity": _quantity(receipt_quantity),
                     "requested_codes": len(request.codes_by_product[product_id]),
                     "new_kiz": len(created_by_product[product_id]),
-                    "existing_kiz": len(existing_active[product_id]),
+                    "existing_kiz": len(existing_current[product_id]),
                     "terminal_existing": len(existing_terminal[product_id]),
                     "physical_quantity": _quantity(physical_quantity),
                     "identified_quantity": identified,
@@ -499,7 +516,7 @@ class KizImportService:
             "order_guid": request.order_guid,
             "supply_number": request.supply_number,
             "new_kiz_count": sum(len(rows) for rows in created_by_product.values()),
-            "existing_kiz_count": sum(len(rows) for rows in existing_active.values()),
+            "existing_kiz_count": sum(len(rows) for rows in existing_current.values()),
             "terminal_existing_count": sum(len(rows) for rows in existing_terminal.values()),
             "groups": groups,
         }

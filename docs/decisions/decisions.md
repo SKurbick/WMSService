@@ -348,10 +348,10 @@ Normalization КИЗ и любые физические складские из�
 
 ## 2026-09-24 - KIZ receipt import применяет идентификацию без physical movement
 
-- Статус решения: `active`
+- Статус решения: `superseded`
 - Связанные endpoints: `POST /api/kiz-import/messages/{message_id}/process`, `GET /api/kiz-import/integrity`
 - Связанные миграции: `20260924_kiz_import_b2_preflight.sql`, `20260924_add_kiz_import_b2.sql`
-- Superseded: нет
+- Superseded: решением 2026-09-28 о registered receipt KIZ без physical reservation
 
 B2 рассматривает receipt payload как идентификацию уже принятого товара. Поэтому KIZ
 создаётся active в exact loose receipt location, но movements/inventory/receipt_items не
@@ -362,3 +362,18 @@ B2 рассматривает receipt payload как идентификацию 
 KIZ changes, но сохраняет rejected state; DB/system error откатывает outer transaction.
 Replay связывается через immutable message↔KIZ provenance. Consumer остаётся raw-only;
 automatic apply отложен до отдельной фазы.
+
+## 2026-09-28 - Receipt import регистрирует KIZ без physical reservation
+
+- Статус решения: `active`
+- Связанные endpoints: `POST /api/kiz-import/messages/{message_id}/process`, `GET /api/kiz-import/integrity`
+- Связанные миграции: `20260928_kiz_receipt_b21_preflight.sql`, `20260928_kiz_receipt_b21_registered.sql`
+- Superseded: нет
+
+Receipt import создаёт `registered` KIZ без location/container holder. Такой KIZ
+сохраняет product и receipt origin, но не входит в physical `identified/unidentified`
+и не ограничивает legacy loose movements. Active KIZ с holder по-прежнему
+защищается DB guard. Receipt limit учитывает current registered + active identities.
+
+Переход `registered -> active`, holder assignment и автоматический apply из consumer
+в решение не входят.

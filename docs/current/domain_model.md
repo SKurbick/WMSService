@@ -244,9 +244,14 @@ Audit всех входящих событий резервов хранится
 
 ## KIZ receipt identification
 
-`wms.kiz` представляет идентифицированную физическую единицу. Для receipt import active
-KIZ имеет loose holder `location_id`, `container_id=NULL`, `origin_type=receipt_import`
-и `origin_reference=receipt_items.guid`. Один active KIZ занимает одну physical unit.
+`wms.kiz` хранит identity и её lifecycle. Active KIZ с exact-one holder представляет
+идентифицированную физическую единицу. Receipt import создаёт `registered` KIZ с
+`origin_type=receipt_import`, `origin_reference=receipt_items.guid`, `location_id=NULL` и
+`container_id=NULL`; это identity receipt, а не physical holder.
+
+Registration записывается событием `registered`; expected receipt location живёт
+в event metadata. Legacy-поле `assigned_at` для registered row содержит timestamp
+регистрации; rename в B2.1 не выполняется.
 
 `wms.kiz_import_messages` хранит raw delivery и B2 processing state. Связь message с
 созданными либо idempotent-existing KIZ хранится append-only в

@@ -101,12 +101,13 @@
 
 Completed операция имеет две разные роли и одинаковое положительное целое quantity. Оба movements имеют `movement_type=re_sorting`, `source_type=re_sorting_operation`, положительное quantity и в сумме направленный net delta 0. Конкурентность защищают canonical-pair advisory lock и source inventory row lock.
 
-## KIZ receipt import B2
+## KIZ receipt import B2.1
 
-- Один active KIZ занимает одну physical unit своего holder scope.
-- Active `receipt_import` KIZ по `(origin_reference, product_id)` не превышают `receipt_items.quantity`.
-- B2 создаёт KIZ только в exact available loose receipt location без batch/container.
-- Все active KIZ exact loose scope независимо от origin учитываются в identified quantity.
+- `registered` KIZ не имеет holder: `location_id IS NULL AND container_id IS NULL`; active holder contract не меняется.
+- Registered KIZ не занимает physical unit, не входит в identified quantity и не ограничивает loose movement.
+- Один active KIZ занимает одну physical unit своего holder scope; physical guards продолжают считать только active KIZ.
+- Current `registered` + `active` receipt-import KIZ по `(origin_reference, product_id)` не превышают `receipt_items.quantity`.
+- Registration требует receipt item, но не требует inventory в configured receipt location.
 - B2 не создаёт movements и не изменяет inventory/receipt_items quantity.
 - Один message применяется атомарно; provenance links immutable и не являются quantity ledger.
 - Replay terminal KIZ не меняет lifecycle; conflicting origin/product отклоняет весь message.

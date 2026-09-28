@@ -215,6 +215,8 @@ Legacy revisions читаются из `public.supply_to_sellers_warehouse`, cur
 
 - `GET /api/kiz-import/messages?limit=100&offset=0` — список диагностических полей без raw payload, сортировка `message_id DESC`.
 - `GET /api/kiz-import/messages/{message_id}` — detail с raw body, parsed payload, parse error и RabbitMQ metadata.
-- `POST /api/kiz-import/messages/{message_id}/process` — атомарно применяет сохранённый payload к существующим loose units поступления без movements/inventory writes.
-- `GET /api/kiz-import/integrity` — read-only проверка receipt quantity и orphan receipt-origin KIZ.
-- Write endpoints отсутствуют; API не создаёт КИЗ и не изменяет складские сущности.
+- `POST /api/kiz-import/messages/{message_id}/process` — атомарно регистрирует receipt KIZ без physical holder, movements и inventory writes.
+- `GET /api/kiz-import/integrity` — read-only проверка receipt quantity, registered holder/origin, orphan receipt-origin KIZ и message↔KIZ links.
+
+KIZ card/list/history API в текущем сервисе нет. Process endpoint не реализует
+`registered -> active` и не подставляет receipt location как current holder.

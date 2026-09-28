@@ -103,13 +103,13 @@ ORDER BY kiz_code, kiz_id
 FOR UPDATE;
 """
 
-LOCK_ACTIVE_RECEIPT_KIZ = """
+LOCK_CURRENT_RECEIPT_KIZ = """
 SELECT kiz_id, kiz_code, product_id
 FROM wms.kiz
 WHERE origin_type = 'receipt_import'
   AND origin_reference = $1
   AND product_id = ANY($2::varchar[])
-  AND lifecycle_status = 'active'
+  AND lifecycle_status IN ('registered', 'active')
 ORDER BY product_id, kiz_id
 FOR UPDATE;
 """
@@ -130,7 +130,7 @@ INSERT INTO wms.kiz (
     kiz_code, product_id, location_id, container_id, lifecycle_status,
     origin_type, origin_reference, created_by, metadata
 )
-VALUES ($1, $2, $3, NULL, 'active', 'receipt_import', $4, $5, $6::jsonb)
+VALUES ($1, $2, NULL, NULL, 'registered', 'receipt_import', $3, $4, $5::jsonb)
 ON CONFLICT (kiz_code) DO NOTHING
 RETURNING
     kiz_id, kiz_code, product_id, location_id, container_id,
@@ -146,14 +146,14 @@ WHERE kiz_code = $1
 FOR UPDATE;
 """
 
-INSERT_ASSIGNED_EVENT = """
+INSERT_REGISTERED_EVENT = """
 INSERT INTO wms.kiz_events (
     kiz_id, event_type, from_status, to_status, product_id, location_id,
     container_id, author, reason, metadata, movement_ref
 )
 VALUES (
-    $1, 'assigned', NULL, 'active', $2, $3,
-    NULL, $4, NULL, $5::jsonb, NULL
+    $1, 'registered', NULL, 'registered', $2, NULL,
+    NULL, $3, NULL, $4::jsonb, NULL
 )
 RETURNING kiz_event_id;
 """
@@ -164,15 +164,24 @@ VALUES ($1, $2, $3)
 ON CONFLICT (message_id, kiz_id) DO NOTHING;
 """
 
-COUNT_ACTIVE_RECEIPT_KIZ = """
+COUNT_CURRENT_RECEIPT_KIZ = """
 SELECT product_id, count(*)::bigint AS quantity
 FROM wms.kiz
 WHERE origin_type = 'receipt_import'
   AND origin_reference = $1
   AND product_id = ANY($2::varchar[])
-  AND lifecycle_status = 'active'
+  AND lifecycle_status IN ('registered', 'active')
 GROUP BY product_id
 ORDER BY product_id;
+"""
+
+GET_MESSAGE_LINKED_KIZ = """
+SELECT k.product_id, k.lifecycle_status, count(*)::bigint AS quantity
+FROM wms.kiz_import_message_kiz link
+JOIN wms.kiz k USING (kiz_id)
+WHERE link.message_id = $1
+GROUP BY k.product_id, k.lifecycle_status
+ORDER BY k.product_id, k.lifecycle_status;
 """
 
 COUNT_ACTIVE_LOOSE_KIZ = """
@@ -190,14 +199,14 @@ GET_RECEIPT_CAPACITY_VIOLATIONS = """
 SELECT
     k.origin_reference AS order_guid,
     k.product_id,
-    count(*)::bigint AS active_kiz_count,
+    count(*)::bigint AS current_kiz_count,
     ri.quantity AS receipt_quantity
 FROM wms.kiz k
 JOIN wms.receipt_items ri
   ON ri.guid = k.origin_reference
  AND ri.product_id = k.product_id
 WHERE k.origin_type = 'receipt_import'
-  AND k.lifecycle_status = 'active'
+  AND k.lifecycle_status IN ('registered', 'active')
 GROUP BY k.origin_reference, k.product_id, ri.quantity
 HAVING count(*) > ri.quantity
 ORDER BY k.origin_reference, k.product_id;
@@ -214,4 +223,38 @@ LEFT JOIN wms.receipt_items ri
 WHERE k.origin_type = 'receipt_import'
   AND ri.receipt_item_id IS NULL
 ORDER BY k.kiz_id;
+"""
+
+GET_REGISTERED_HOLDER_VIOLATIONS = """
+SELECT kiz_id, kiz_code, product_id, location_id, container_id
+FROM wms.kiz
+WHERE lifecycle_status = 'registered'
+  AND (location_id IS NOT NULL OR container_id IS NOT NULL)
+ORDER BY kiz_id;
+"""
+
+GET_REGISTERED_ORIGIN_VIOLATIONS = """
+SELECT kiz_id, kiz_code, product_id, origin_type, origin_reference
+FROM wms.kiz
+WHERE lifecycle_status = 'registered'
+  AND (
+      origin_type <> 'receipt_import'
+      OR NULLIF(btrim(origin_reference), '') IS NULL
+  )
+ORDER BY kiz_id;
+"""
+
+GET_INVALID_MESSAGE_KIZ_LINKS = """
+SELECT
+    link.message_id,
+    link.kiz_id,
+    message.order_guid AS message_order_guid,
+    k.origin_type,
+    k.origin_reference
+FROM wms.kiz_import_message_kiz link
+JOIN wms.kiz_import_messages message USING (message_id)
+JOIN wms.kiz k USING (kiz_id)
+WHERE k.origin_type <> 'receipt_import'
+   OR message.order_guid IS DISTINCT FROM k.origin_reference
+ORDER BY link.message_id, link.kiz_id;
 """

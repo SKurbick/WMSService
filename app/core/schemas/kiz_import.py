@@ -62,7 +62,7 @@ class KizImportProcessResult(BaseModel):
 class KizReceiptCapacityViolation(BaseModel):
     order_guid: str
     product_id: str
-    active_kiz_count: int
+    current_kiz_count: int
     receipt_quantity: Decimal
 
 
@@ -74,7 +74,34 @@ class KizOrphanReceiptOrigin(BaseModel):
     lifecycle_status: str
 
 
+class KizRegisteredHolderViolation(BaseModel):
+    kiz_id: int
+    kiz_code: str
+    product_id: str
+    location_id: int | None = None
+    container_id: int | None = None
+
+
+class KizRegisteredOriginViolation(BaseModel):
+    kiz_id: int
+    kiz_code: str
+    product_id: str
+    origin_type: str
+    origin_reference: str | None = None
+
+
+class KizInvalidMessageLink(BaseModel):
+    message_id: int
+    kiz_id: int
+    message_order_guid: str | None = None
+    origin_type: str
+    origin_reference: str | None = None
+
+
 class KizImportIntegrityResponse(BaseModel):
     is_valid: bool
     receipt_capacity_violations: list[KizReceiptCapacityViolation]
     orphan_receipt_kiz: list[KizOrphanReceiptOrigin]
+    registered_holder_violations: list[KizRegisteredHolderViolation]
+    registered_origin_violations: list[KizRegisteredOriginViolation]
+    invalid_message_kiz_links: list[KizInvalidMessageLink]

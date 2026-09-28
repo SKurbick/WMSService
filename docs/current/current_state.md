@@ -194,10 +194,13 @@ Changed/physical/movement fields намеренно отсутствуют: ст
 ## KIZ import controlled apply
 
 Сохранённое B1-сообщение можно вручную применить к существующему receipt через
-`POST /api/kiz-import/messages/{message_id}/process`. B2 создаёт active KIZ с
-`origin_type=receipt_import`, `origin_reference=order_guid` в точной loose receipt
-location из `KIZ_IMPORT_RECEIPT_LOCATION_CODE`. Partial coverage разрешён.
+`POST /api/kiz-import/messages/{message_id}/process`. B2.1 создаёт KIZ в статусе
+`registered` с `origin_type=receipt_import` и `origin_reference=order_guid`, но без
+текущего physical holder. Receipt location сохраняется только в metadata
+события `registered`. Partial coverage разрешён.
 
 Обработка атомарна и идемпотентна для same message, duplicate inbox rows и additive
 replay. Terminal KIZ не реактивируется. Physical quantity, receipt snapshot и movements
-не меняются. Автоматический B2 запуск из RabbitMQ consumer не реализован.
+не меняются. Registered KIZ не участвует в `identified/unidentified` и не
+резервирует loose stock. Автоматический apply из RabbitMQ consumer и переход
+`registered -> active` не реализованы.

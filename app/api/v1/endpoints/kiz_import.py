@@ -44,7 +44,7 @@ async def list_kiz_import_messages(
     response_model=KizImportProcessResult,
     summary="Применить сохранённое сообщение к существующему поступлению",
     description=(
-        "Создаёт/связывает KIZ с уже существующими loose units receipt location. "
+        "Регистрирует receipt KIZ без physical holder и резервирования остатков. "
         "Не создаёт movements, inventory или receipt_items и не вызывается consumer-ом автоматически."
     ),
 )

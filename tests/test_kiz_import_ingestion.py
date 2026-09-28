@@ -1,11 +1,15 @@
 import json
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from app import consumer
 from app.api.v1.endpoints import kiz_import as endpoint
+from app.core.exceptions import KizConflictError
 from app.core.services.kiz_import_service import KizImportService
 from app.infrastructure.database.queries import kiz_import as queries
+from app.middleware.error_handler import add_exception_handlers
 
 
 class RecordingRepository:
@@ -36,6 +40,24 @@ async def ingest(repository, body: bytes):
         correlation_id="correlation-1",
         headers={"attempt": 1, "binary": b"\x00\xff"},
     )
+
+
+def test_kiz_guard_conflict_is_mapped_to_http_409():
+    app = FastAPI()
+
+    @app.post("/guard-conflict")
+    async def guard_conflict():
+        raise KizConflictError("Недостаточно неидентифицированного остатка")
+
+    add_exception_handlers(app)
+
+    response = TestClient(app).post("/guard-conflict")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "Недостаточно неидентифицированного остатка",
+        "error_code": "KIZ_CONFLICT",
+    }
 
 
 @pytest.mark.asyncio

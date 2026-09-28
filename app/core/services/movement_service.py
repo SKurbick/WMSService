@@ -2,6 +2,8 @@
 
 from typing import List, Optional, Set
 from datetime import date
+import asyncpg
+
 from app.core.schemas.movement import (
     MovementCreate,
     MovementBulkCreateResponse,
@@ -13,6 +15,7 @@ from app.infrastructure.database.repositories.location_repository import Locatio
 from app.infrastructure.database.queries import movements as queries
 from app.core.exceptions import (
     InvalidMovementError,
+    KizConflictError,
     LocationNotFoundError,
 )
 
@@ -39,9 +42,14 @@ class MovementService:
         Сам открывает и управляет транзакцией.
         """
         pool = self.movement_repo.pool
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                created = await self.create_movement_in_transaction(conn, data)
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    created = await self.create_movement_in_transaction(conn, data)
+        except asyncpg.PostgresError as error:
+            if error.sqlstate == "P7501":
+                raise KizConflictError(str(error)) from error
+            raise
         return MovementBulkCreateResponse(created=created, total=len(created))
 
     async def create_movement_in_transaction(

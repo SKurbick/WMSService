@@ -49,6 +49,11 @@ kiz_steps_tests.md
 /sz_fix.txt
 /reports/
 
+# Локальные списки СЗ и сгенерированные retry payload'ы FBS.
+/*-fbs2.txt
+/*-нехватает.txt
+/fbs2-*-retry-*.json
+
 # Локальная диагностика RabbitMQ, не относящаяся к реализации сервиса.
 /scripts/peek_stock_reservation_messages.py
 /tests/test_peek_stock_reservation_messages.py

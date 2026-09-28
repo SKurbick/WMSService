@@ -37,4 +37,5 @@ issue tracker не назначены.
 | TEST-01 | answered | Production `vector_db` нельзя использовать; нужен отдельный development/stage клон и выделенные fixtures. | QA + DB owner | Подтверждение владельца 2026-08-08; `runtime_concurrency_plan.md` |
 | TEST-02 | open | Добавить ли regression-тест полной/частичной распаковки после выбора модели CNT-01? | QA + WMS owner | Блокируется решением CNT-01 |
 | KIZ-01 | open | Какое поле фактически и стабильно присылает producer: `supply.order_guid` или `supply.supply_guid`? | Integration owner | KIZ import R1 raw inbox; подтвердить по stage-сообщениям до следующих фаз |
-| KIZ-02 | open | Как идентифицировать receipt units, уже перемещённые из `PUSHKINO-ПРИЁМКА`, без поиска по всему складу и неоднозначного holder? | Product + WMS owner | B2 намеренно поддерживает только exact loose receipt location |
+| KIZ-02 | answered | Receipt import не ищет текущую physical unit: B2.1 создаёт `registered` KIZ без holder и резерва. | Product + WMS owner | Решение 2026-09-28; `wms_kiz_receipt_b21_registered_no_reservation.md` |
+| KIZ-03 | open | Какая операция и проверки должны выполнять `registered -> active` и назначать physical holder? | Product + WMS owner | Намеренно вне scope B2.1 |

@@ -144,13 +144,13 @@ R1 является только ingestion/audit слоем: raw body и parsed 
 ## KIZ import controlled business apply
 
 B2 запускается только явным `POST /api/kiz-import/messages/{message_id}/process`; RabbitMQ
-consumer остаётся B1 raw-ingestion-only. Service блокирует inbox row, все receipt rows
-документа, exact available loose inventory и KIZ в детерминированном порядке. Business
+consumer остаётся B1 raw-ingestion-only. Service блокирует inbox row, receipt rows
+документа, диагностический receipt inventory и KIZ в детерминированном порядке. Business
 apply выполняется во вложенном savepoint: любой конфликт откатывает KIZ/events/links
 целиком, после чего outer transaction фиксирует `business_status=rejected`.
 
-Успех создаёт только `wms.kiz`, `wms.kiz_events` и immutable provenance
-`wms.kiz_import_message_kiz`; movements, inventory и receipt_items не изменяются.
-Receipt quantity и all-source active KIZ count exact loose scope проверяются до insert и
-повторно после него. PostgreSQL serialization/deadlock/integrity conflicts возвращаются
-как controlled concurrent conflict. Applied message возвращает сохранённый result.
+Успех создаёт `registered` rows в `wms.kiz`, registration events и immutable
+provenance `wms.kiz_import_message_kiz`; movements, inventory и receipt_items не изменяются.
+Registration не проверяет unidentified physical capacity. Receipt quantity limit считает
+current registered + active receipt identities до insert и после него. Replay applied message
+пересчитывает counters по immutable links и возвращает `new=0`.

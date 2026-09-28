@@ -152,3 +152,13 @@
 - Verified: 2026-08-07 по migration и unit/contract test boundary
 
 Unit/SQL-contract тесты не заменяют integration verification на PostgreSQL с фактическими movement triggers и partitions. Перед production rollout требуется применить миграцию на stage и прогнать atomicity/concurrency scenarios на реальной БД.
+
+## KIZ receipt registration: activation не определена
+
+- Triage: `accepted-limitation`, open question KIZ-03
+- Verified: 2026-09-28 по B2.1 service/API scope
+
+B2.1 регистрирует receipt KIZ без physical holder. Переход
+`registered -> active`, сканирование/assignment и KIZ card/list/history API в текущем
+scope не реализованы. До отдельного решения registered KIZ не представляет
+текущую физическую единицу.

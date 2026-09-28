@@ -259,3 +259,9 @@ class KizImportBusinessError(DomainException):
 
 class KizImportConcurrentConflictError(DomainException):
     pass
+
+
+class KizConflictError(DomainException):
+    """DB KIZ guard отклонил физическую операцию."""
+
+    pass
