@@ -328,11 +328,11 @@ items и assembly tasks, создаётся movement, обновляются ite
 Location validation также использует этот `conn`. Ошибка на любом шаге откатывает всю
 product group. Existing orphan movements автоматически не восстанавливаются.
 
-## 2026-09-28 - Предложена task-level обработка смешанных FBS payload
+## 2026-09-29 - Task-level обработка смешанных FBS payload
 
-- Статус решения: `proposed`
-- Связанные endpoints: будущий `GET /api/fbs-shipments/{shipment_id}/task-results`
-- Связанные миграции: будущая миграция `wms.fbs_shipment_task_results`
+- Статус решения: `active` в feature branch, rollout через feature setting
+- Связанные endpoints: `GET /api/fbs-shipments/{shipment_id}/task-results`
+- Связанные миграции: `20260929_add_fbs_task_level_processing.sql`
 - Superseded: нет
 
 Контекст: текущая атомарная проверка всей product group отклоняет новые СЗ, если
@@ -347,14 +347,33 @@ product group. Existing orphan movements автоматически не вос�
 - отсутствующее СЗ фиксируется как `not_found`.
 
 Дубли и аномалии не должны блокировать атомарное списание новых СЗ. Результат
-каждого СЗ предлагается хранить в `wms.fbs_shipment_task_results`; физическим
+каждого вхождения СЗ хранится в `wms.fbs_shipment_task_results`; физическим
 источником истины остается `wms.movements`.
 
 Обратная совместимость обеспечивается неизменным входным payload, additive
-read-only endpoint и режимами `legacy`, `observe`, `task_level`. До реализации
-решение остается proposal и не изменяет текущие `CURRENT` FBS-инварианты.
+read-only endpoint и режимами `legacy`, `task_level`. Значение по умолчанию —
+`legacy`; включение `task_level` требует предварительного применения миграции.
+Для failed item legacy `movement_id` не заполняется, а связь частичного
+физического эффекта публикуется через task results.
 
 Подробности:
 
 - `docs/proposals/fbs_task_results_read_model.md`;
 - `docs/proposals/fbs_task_level_processing_spec.md`.
+
+## 2026-09-29 - Нормализация assembly_tasks в FBS retry worker
+
+- Статус решения: `active`
+- Связанные endpoints: ручной retry FBS item использует тот же формат СЗ
+- Связанные миграции: —
+- Superseded: нет
+
+`asyncpg` без пользовательского JSON codec может возвращать PostgreSQL `jsonb`
+как JSON-строку, хотя первичный payload представлен Python-массивом. Retry worker
+обязан нормализовать каждое сохранённое `assembly_tasks` до `list[str]` перед
+`extend`; прямое объединение строки посимвольно запрещено.
+
+Выбран локальный FBS-нормализатор, принимающий строку, list или tuple. Глобальный
+JSON codec пула не меняется, чтобы не изменить типы данных во всех остальных
+репозиториях сервиса. Решение одинаково действует в режимах `legacy` и
+`task_level` и не требует миграции БД.

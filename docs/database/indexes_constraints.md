@@ -59,6 +59,10 @@ Parent indexes: `created_at`, `product_id`, `(product_id, created_at)`, `from_lo
 - `idx_fbs_shipment_items_next_retry(next_retry_at) WHERE status='pending_retry'` - основной индекс retry worker.
 - `idx_fbs_shipment_items_status(status)` - фильтр по статусу.
 - `idx_fbs_shipment_items_shipment_id(shipment_id)` - позиции shipment.
+- `idx_fbs_task_results_task(task_id)` - поиск результата по СЗ.
+- `idx_fbs_task_results_shipment_outcome(shipment_id, outcome)` - read-only
+  детализация и агрегаты shipment.
+- `idx_fbs_task_results_product_updated(product_id, updated_at DESC)` - аудит по товару.
 
 ## Containers and other indexes
 

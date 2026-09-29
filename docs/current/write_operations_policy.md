@@ -66,6 +66,10 @@
 - Обновление FBS item status/retry должно быть транзакционно согласовано с созданием movement и внешними отметками, если они выполняются в той же операции.
 - Retry worker должен избегать параллельной обработки одной позиции; рекомендуемый подход - row lock с `FOR UPDATE SKIP LOCKED` или advisory lock.
 - Если `movement_id` заполняется, сервис должен гарантировать существование соответствующего movement, пока FK в DDL отсутствует.
+- В task-level режиме movement, новые `assembly_task.is_shipped`, task results и
+  агрегированные item/shipment statuses записываются одной product-group транзакцией.
+- После rollback из-за нехватки остатка `pending_retry` task results сохраняются
+  отдельной короткой транзакцией без физического movement.
 
 ## Требования к новым write endpoint'ам
 

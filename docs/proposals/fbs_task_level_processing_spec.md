@@ -1,7 +1,7 @@
 # Техническое задание: обработка FBS на уровне сборочных заданий
 
-> **Статус: PROPOSAL.** ТЗ фиксирует согласованное направление разработки.
-> Оно не описывает уже работающую production-логику.
+> **Статус: IMPLEMENTED IN FEATURE BRANCH.** В production режим включается только
+> после применения миграции и установки `FBS_TASK_PROCESSING_MODE=task_level`.
 
 Дата: 2026-09-28.
 
@@ -72,12 +72,10 @@
 Предлагается настройка:
 
 ```text
-FBS_TASK_PROCESSING_MODE=legacy|observe|task_level
+FBS_TASK_PROCESSING_MODE=legacy|task_level
 ```
 
 - `legacy` — точное текущее поведение; новая таблица не влияет на решение.
-- `observe` — вычисляется и сохраняется классификация, но write-off выполняется
-  по текущему all-or-nothing алгоритму. Режим нужен для сравнения результатов.
 - `task_level` — подтвержденные дубли и аномалии не блокируют новые СЗ.
 
 Значение по умолчанию первого релиза — `legacy`. Переключение выполняется
@@ -160,20 +158,33 @@ status сохраняются отдельной короткой транзак
 
 ## 9. Таблица результатов
 
-Предварительная DDL-модель:
+Фактическая DDL находится в
+`scripts/migrations/20260929_add_fbs_task_level_processing.sql`. Важные отличия
+от первоначального эскиза:
+
+- `occurrence_index` сохраняет каждое вхождение, включая повтор одного СЗ внутри item;
+- уникальность задана по `(item_id, occurrence_index)`;
+- `movement_created_at` и `existing_movement_created_at` дополняют ID движения,
+  потому что `movement_id` не глобально уникален между партициями;
+- retry обновляет текущую строку и увеличивает `attempt_count`.
+
+Упрощённая модель:
 
 ```sql
 CREATE TABLE wms.fbs_shipment_task_results (
     result_id                  bigserial PRIMARY KEY,
     shipment_id               bigint NOT NULL,
     item_id                   bigint NOT NULL,
+    occurrence_index          integer NOT NULL,
     task_id                   bigint NOT NULL,
     product_id                varchar NOT NULL,
     outcome                   varchar NOT NULL,
     effect_quantity           smallint NOT NULL DEFAULT 0,
     movement_id               bigint,
+    movement_created_at       timestamptz,
     existing_success_item_id  bigint,
     existing_movement_id      bigint,
+    existing_movement_created_at timestamptz,
     is_shipped_before         boolean,
     reason                    text,
     details                   jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -192,6 +203,7 @@ CREATE TABLE wms.fbs_shipment_task_results (
         outcome IN (
             'written_off',
             'duplicate_skipped',
+            'duplicate_in_payload',
             'inconsistent',
             'not_found',
             'pending_retry',
@@ -201,7 +213,7 @@ CREATE TABLE wms.fbs_shipment_task_results (
     CONSTRAINT chk_fbs_task_result_effect CHECK (
         effect_quantity IN (0, 1)
     ),
-    CONSTRAINT uq_fbs_task_result_item_task UNIQUE (item_id, task_id)
+    CONSTRAINT uq_fbs_task_result_item_occurrence UNIQUE (item_id, occurrence_index)
 );
 
 CREATE INDEX idx_fbs_task_results_task
@@ -214,13 +226,25 @@ CREATE INDEX idx_fbs_task_results_product_created
     ON wms.fbs_shipment_task_results(product_id, created_at DESC);
 ```
 
-Финальная миграция должна учитывать фактические типы production-колонок и
-соглашения именования миграций. FK на movements не добавляется без решения
-проблемы глобальной identity partitioned `wms.movements`.
+Миграция использует фактические типы snapshot/runtime schema. FK на movements не
+добавляется без решения проблемы глобальной identity partitioned
+`wms.movements`; вместо этого хранится составная identity ID + created_at.
 
 ## 10. Совместимость legacy item status
 
 Первая версия не добавляет новые значения `fbs_shipment_items.status`.
+Отдельная nullable-колонка `task_resolution_status` даёт точный агрегированный
+итог и не меняет старый словарь статусов:
+
+- `completed` — все вхождения списаны текущим movement;
+- `completed_with_duplicates` — новые списаны, дубли безопасно пропущены;
+- `duplicate_only` — физический no-op, новых СЗ нет;
+- `partially_completed` — новые списаны, но есть anomaly;
+- `pending_retry` — новые СЗ ожидают retry;
+- `failed` — текущая попытка не дала нового физического эффекта и не является
+  полностью подтверждённым no-op.
+
+Для исторических и legacy-обработанных строк значение остаётся `NULL`.
 
 - Item с успешно списанными новыми СЗ и только подтвержденными дублями получает
   `success` и новый `movement_id`.
@@ -228,8 +252,8 @@ CREATE INDEX idx_fbs_task_results_product_created
   с нормализованным сообщением о no-op; task results показывают, что физической
   ошибки и нового списания нет.
 - Item с `inconsistent` или `not_found` остается `failed`, даже если новые СЗ
-  этой product group были успешно списаны. Если item содержит успешно списанные
-  новые СЗ, его `movement_id` заполняется для сохранения audit link.
+  этой product group были успешно списаны. Для обратной совместимости его legacy
+  `movement_id` остаётся `NULL`; точная ссылка хранится в task results.
 - Нехватка остатка сохраняет текущий `pending_retry/retry_exhausted` flow.
 - `success` без `movement_id` не создается.
 
@@ -238,21 +262,21 @@ CREATE INDEX idx_fbs_task_results_product_created
 индикатором и не используется для расчета фактического количества смешанной
 позиции.
 
-Перед реализацией необходимо подтвердить, допускают ли текущие response schemas
-и клиенты `movement_id` у failed item. Если нет, связь частичного movement
-публикуется только через task results, а legacy item остается без movement_id.
+Legacy-клиентам не требуется поддерживать `movement_id` у failed item: связь
+частичного movement публикуется только через task results.
 
 ## 11. Retry
 
-- Retry выбирает только task results `pending_retry` и при необходимости
-  повторно классифицирует `inconsistent/not_found` после изменения внешних
-  данных.
+- Retry worker по-прежнему выбирает legacy items `pending_retry`, затем под
+  блокировкой повторно классифицирует их СЗ. Физически повторяются только
+  нерешённые новые СЗ; `inconsistent/not_found` автоматически не списываются.
 - `written_off` и `duplicate_skipped` повторно не списываются.
 - Полный повтор того же payload после успеха становится безопасным no-op.
 - Retry использует те же блокировки и общий `_process_shipment_group`, отдельной
   упрощенной write-логики быть не должно.
-- Параллельные worker/manual retry одной позиции сериализуются row lock или
-  claim через `FOR UPDATE SKIP LOCKED`.
+- Параллельные worker/manual retry одной позиции сериализуются row lock; после
+  получения lock повтор проверяет ожидаемый item status и становится no-op,
+  если конкурент уже завершил обработку.
 
 ## 12. Read-only API
 
@@ -306,7 +330,7 @@ inconsistent_tasks, not_found_tasks, movement_id, processing_mode
    списания.
 10. Сбой между movement и task results откатывает всю product group.
 11. Старые shipments без task results читаются прежними endpoints.
-12. `legacy`, `observe` и `task_level` дают ожидаемое различие поведения.
+12. `legacy` и `task_level` дают ожидаемое различие поведения.
 13. GET task results не выполняет writes и соблюдает права доступа.
 
 Проверки остатков и конкурентности выполняются только на отдельном test/stage
@@ -321,25 +345,19 @@ PostgreSQL, не на production.
 - read-only endpoint;
 - режим по умолчанию `legacy`.
 
-### Этап B — observe
-
-- классификация task-level без изменения физического write-off;
-- сравнение классификации с текущими failed/success результатами;
-- проверка производительности и объема таблицы.
-
-### Этап C — task-level на development/stage
+### Этап B — task-level на development/stage
 
 - включение нового write flow;
 - конкурентные и fault-injection тесты;
 - проверка retry и mixed payload.
 
-### Этап D — production canary
+### Этап C — production canary
 
 - включение для ограниченного источника/автора или процента shipments;
 - мониторинг outcome и movement invariants;
 - возможность немедленно вернуть `legacy`.
 
-### Этап E — штатный режим
+### Этап D — штатный режим
 
 - включение `task_level` по умолчанию;
 - актуализация `docs/current/`, database map, migrations README и решений;
@@ -348,7 +366,7 @@ PostgreSQL, не на production.
 ## 16. Критерии приемки
 
 - Смешанная группа с подтвержденным дублем создает movement только на новые СЗ.
-- Для каждого входного валидного СЗ сохраняется один текущий task result.
+- Для каждого вхождения входного валидного СЗ сохраняется один текущий task result.
 - Один task ID не может создать два физических списания при конкурентной
   обработке.
 - `SUM(effect_quantity)` строк `written_off` для movement совпадает с movement

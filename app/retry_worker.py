@@ -15,7 +15,10 @@ from app.core.services.movement_service import MovementService
 from app.handlers.write_off_fbs_handler import (
     _calc_next_retry_at,
     _process_shipment_group,
+    normalize_stored_assembly_tasks,
+    record_task_level_attempt_failure,
 )
+from app.shared.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -59,15 +62,17 @@ async def process_pending_retries(pool) -> None:
             max_retries: int = first["max_retries"]
             item_ids: List[int] = [r["item_id"] for r in group_rows]
 
-            # Собираем суммарное количество и все assembly_tasks группы
+            # Собираем суммарное количество группы. asyncpg по умолчанию может
+            # вернуть jsonb assembly_tasks строкой, поэтому задачи нормализуем
+            # внутри try до объединения.
             total_quantity: int = sum(r["quantity"] for r in group_rows)
-            all_assembly_tasks: List[str] = []
-            for r in group_rows:
-                all_assembly_tasks.extend(r["assembly_tasks"])
-
             new_retry_count = retry_count + 1
 
             try:
+                all_assembly_tasks: List[str] = []
+                for r in group_rows:
+                    all_assembly_tasks.extend(normalize_stored_assembly_tasks(r["assembly_tasks"]))
+
                 async with pool.acquire() as conn:
                     async with conn.transaction():
                         # validate_assembly_tasks + create_movement — одна транзакция.
@@ -82,6 +87,7 @@ async def process_pending_retries(pool) -> None:
                             shipment_repo=shipment_repo,
                             item_ids=item_ids,
                             retry_count=new_retry_count,
+                            expected_statuses={"pending_retry"},
                         )
 
                 logger.info(
@@ -96,14 +102,27 @@ async def process_pending_retries(pool) -> None:
                         f"product_id={product_id} | попытка={new_retry_count}/{max_retries}"
                     )
                     async with pool.acquire() as conn:
-                        for item_id in item_ids:
-                            await shipment_repo.update_item_status(
-                                conn,
-                                item_id=item_id,
-                                status="retry_exhausted",
-                                error_message="Исчерпаны попытки. Недостаточно остатка.",
-                                retry_count=new_retry_count,
-                            )
+                        if settings.FBS_TASK_PROCESSING_MODE == "task_level":
+                            async with conn.transaction():
+                                await record_task_level_attempt_failure(
+                                    conn,
+                                    product_id=product_id,
+                                    item_ids=item_ids,
+                                    shipment_repo=shipment_repo,
+                                    outcome="failed",
+                                    error_message="Исчерпаны попытки. Недостаточно остатка.",
+                                    retry_count=new_retry_count,
+                                    item_status_override="retry_exhausted",
+                                )
+                        else:
+                            for item_id in item_ids:
+                                await shipment_repo.update_item_status(
+                                    conn,
+                                    item_id=item_id,
+                                    status="retry_exhausted",
+                                    error_message="Исчерпаны попытки. Недостаточно остатка.",
+                                    retry_count=new_retry_count,
+                                )
                 else:
                     next_retry_at = _calc_next_retry_at(new_retry_count)
                     logger.warning(
@@ -112,15 +131,28 @@ async def process_pending_retries(pool) -> None:
                         f"next_retry_at={next_retry_at.isoformat()} | error={e}"
                     )
                     async with pool.acquire() as conn:
-                        for item_id in item_ids:
-                            await shipment_repo.update_item_status(
-                                conn,
-                                item_id=item_id,
-                                status="pending_retry",
-                                error_message=str(e),
-                                retry_count=new_retry_count,
-                                next_retry_at=next_retry_at,
-                            )
+                        if settings.FBS_TASK_PROCESSING_MODE == "task_level":
+                            async with conn.transaction():
+                                await record_task_level_attempt_failure(
+                                    conn,
+                                    product_id=product_id,
+                                    item_ids=item_ids,
+                                    shipment_repo=shipment_repo,
+                                    outcome="pending_retry",
+                                    error_message=str(e),
+                                    retry_count=new_retry_count,
+                                    next_retry_at=next_retry_at,
+                                )
+                        else:
+                            for item_id in item_ids:
+                                await shipment_repo.update_item_status(
+                                    conn,
+                                    item_id=item_id,
+                                    status="pending_retry",
+                                    error_message=str(e),
+                                    retry_count=new_retry_count,
+                                    next_retry_at=next_retry_at,
+                                )
 
             except Exception as e:
                 logger.error(
@@ -129,14 +161,26 @@ async def process_pending_retries(pool) -> None:
                     exc_info=True,
                 )
                 async with pool.acquire() as conn:
-                    for item_id in item_ids:
-                        await shipment_repo.update_item_status(
-                            conn,
-                            item_id=item_id,
-                            status="failed",
-                            error_message=str(e),
-                            retry_count=new_retry_count,
-                        )
+                    if settings.FBS_TASK_PROCESSING_MODE == "task_level":
+                        async with conn.transaction():
+                            await record_task_level_attempt_failure(
+                                conn,
+                                product_id=product_id,
+                                item_ids=item_ids,
+                                shipment_repo=shipment_repo,
+                                outcome="failed",
+                                error_message=str(e),
+                                retry_count=new_retry_count,
+                            )
+                    else:
+                        for item_id in item_ids:
+                            await shipment_repo.update_item_status(
+                                conn,
+                                item_id=item_id,
+                                status="failed",
+                                error_message=str(e),
+                                retry_count=new_retry_count,
+                            )
 
         # Пересчитать статус shipment после обработки всех его групп
         async with pool.acquire() as conn:

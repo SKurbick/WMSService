@@ -1,7 +1,7 @@
 # Результаты обработки FBS по сборочным заданиям
 
-> **Статус: PROPOSAL.** Таблица и API из этого документа пока не реализованы и не
-> являются текущим production-контрактом.
+> **Статус: IMPLEMENTED IN FEATURE BRANCH.** Для включения требуется миграция и
+> `FBS_TASK_PROCESSING_MODE=task_level`.
 
 Дата проектирования: 2026-09-28.
 
@@ -60,6 +60,9 @@ wms.fbs_shipments                         одно входящее сообще
 - `wms.movements` — единственный источник факта физического изменения остатка;
 - `public.assembly_task` — внешний реестр СЗ и его текущий `is_shipped`.
 
+Nullable `fbs_shipment_items.task_resolution_status` агрегирует task results для
+нового клиента, но не заменяет legacy `status` и остаётся `NULL` у старых строк.
+
 ## 4. Предлагаемые поля
 
 | Поле | Тип | Смысл |
@@ -67,21 +70,24 @@ wms.fbs_shipments                         одно входящее сообще
 | `result_id` | `bigserial` | Внутренний идентификатор результата |
 | `shipment_id` | `bigint` | Входящее FBS-сообщение |
 | `item_id` | `bigint` | Исходная позиция FBS payload |
+| `occurrence_index` | `integer` | Позиция СЗ внутри `assembly_tasks`; сохраняет повторы |
 | `task_id` | `bigint` | Номер сборочного задания Wildberries |
 | `product_id` | `varchar` | Товар из позиции payload |
 | `outcome` | `varchar` | Итог обработки конкретного СЗ |
 | `effect_quantity` | `smallint` | `1`, если текущая обработка создала физическое списание, иначе `0` |
 | `movement_id` | `bigint`, nullable | Новое движение текущей обработки |
+| `movement_created_at` | `timestamptz`, nullable | Вторая часть устойчивой ссылки на новое movement |
 | `existing_success_item_id` | `bigint`, nullable | Ранее успешный item для подтвержденного дубля |
 | `existing_movement_id` | `bigint`, nullable | Ранее созданное движение для подтвержденного дубля |
+| `existing_movement_created_at` | `timestamptz`, nullable | Вторая часть ссылки на прежнее movement |
 | `is_shipped_before` | `boolean`, nullable | Значение `assembly_task.is_shipped` до обработки |
 | `reason` | `text`, nullable | Краткое диагностическое пояснение |
 | `details` | `jsonb` | Дополнительные технические данные без изменения основного контракта |
 | `created_at` | `timestamptz` | Первое сохранение результата |
 | `updated_at` | `timestamptz` | Последнее изменение результата после retry |
 
-Предлагаемая уникальность: `(item_id, task_id)`. Retry обновляет существующий
-результат, а не создает второй текущий итог для той же пары.
+Уникальность: `(item_id, occurrence_index)`. Retry обновляет существующий
+результат, а не создает второй текущий итог для того же вхождения.
 
 FK от `task_id` к `public.assembly_task` намеренно не нужен: таблица должна
 сохранять `not_found`, когда соответствующей строки не существует.
@@ -95,6 +101,7 @@ FK от `task_id` к `public.assembly_task` намеренно не нужен: 
 |---|---:|---|
 | `written_off` | `-1` единица | СЗ было новым и списано текущим movement |
 | `duplicate_skipped` | нет | Найден прежний `success` item с существующим movement |
+| `duplicate_in_payload` | нет | Повтор того же СЗ внутри текущей товарной группы |
 | `inconsistent` | неизвестен | `is_shipped=true`, но подтвержденное FBS-движение не найдено |
 | `not_found` | нет | СЗ отсутствует в `public.assembly_task` |
 | `pending_retry` | нет | СЗ новое, но движение не создано, например из-за нехватки остатка |

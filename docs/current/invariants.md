@@ -77,6 +77,13 @@
 - FBS ship movement с `user_name IN ('FBS-service', 'FBS 2.0')` не должен оставаться без
   связи через `fbs_shipment_items.movement_id`.
 - `fbs_shipment_items.status='success'` требует непустой `movement_id`.
+- В task-level режиме один уникальный новый `task_id` уменьшает остаток ровно на
+  одну единицу; подтверждённые дубли, повторы payload, `inconsistent` и `not_found`
+  имеют `effect_quantity=0`.
+- Task result со значением `written_off` обязан содержать устойчивую пару
+  `(movement_id, movement_created_at)` и `effect_quantity=1`.
+- `is_shipped=true` без подтверждённой связи с существующим FBS movement нельзя
+  автоматически считать безопасным дублем или повторно списывать.
 
 ## Kit operations invariants
 

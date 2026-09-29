@@ -132,6 +132,8 @@
 - `GET /api/fbs-shipments/stats` - статистика по статусам.
 - `GET /api/fbs-shipments` - список записей журнала.
 - `GET /api/fbs-shipments/{shipment_id}` - детали записи с raw message и items.
+- `GET /api/fbs-shipments/{shipment_id}/task-results` - read-only результаты
+  task-level обработки по каждому вхождению СЗ, с фильтрами и агрегатами.
 - `POST /api/fbs-shipments/retry` - массовая переобработка validation_failed.
 - `POST /api/fbs-shipments/{shipment_id}/retry` - переобработка одной записи.
 

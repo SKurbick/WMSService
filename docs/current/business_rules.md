@@ -58,9 +58,19 @@
 - Уведомление approvers и логика `public.user_permissions`.
 - FIFO/FEFO рекомендации.
 - FBS consumer, RabbitMQ ACK/NACK, Pydantic validation, группировка по `product_id`, retry worker/backoff.
+- При повторной обработке `assembly_tasks`, прочитанный из PostgreSQL `jsonb`,
+  нормализуется из JSON-строки или готового массива до `list[str]` перед
+  объединением товарной группы. Формат возврата драйвера не должен менять
+  состав СЗ или переводить корректный `pending_retry` в `failed`.
 - HTTP FBS adapter сохраняет синтаксически корректный JSON до доменной валидации с `source=http_api`; невалидная схема фиксируется как `validation_failed`.
 - FBS product group атомарно блокирует items/СЗ, создаёт movement (и trigger inventory),
   отмечает СЗ отгруженными, связывает все items с movement и пересчитывает shipment status.
+- При `FBS_TASK_PROCESSING_MODE=task_level` подтверждённые и внутривходные дубли
+  не увеличивают movement quantity и не блокируют новые СЗ. `inconsistent` и
+  `not_found` не списываются автоматически, но также не блокируют новые СЗ группы.
+- Task-level movement quantity равно числу уникальных новых СЗ. Результат каждого
+  вхождения хранится в `wms.fbs_shipment_task_results`; физическим источником истины
+  остаётся `wms.movements`.
 
 ## Мягкие резервы товаров
 

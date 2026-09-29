@@ -180,3 +180,14 @@ Changed/physical/movement fields намеренно отсутствуют: ст
 - Валидный payload синхронно использует общий `handle_write_off_fbs`, включая
   группировку, транзакционную обработку product group, movements и retry.
 - DB constraint для `http_api` применяется владельцем БД вручную.
+
+## FBS task-level processing
+
+- Код поддерживает `FBS_TASK_PROCESSING_MODE=legacy|task_level`; значение по
+  умолчанию `legacy` сохраняет прежнее all-or-nothing поведение.
+- После миграции `20260929_add_fbs_task_level_processing.sql` режим `task_level`
+  списывает только уникальные новые СЗ и сохраняет детализацию результата.
+- Read-only `GET /api/fbs-shipments/{shipment_id}/task-results` возвращает текущие
+  результаты, агрегаты и устойчивые пары `(movement_id, movement_created_at)`.
+- Исторический backfill не выполняется; пустой результат для старого shipment не
+  означает, что он не обрабатывался.

@@ -20,6 +20,10 @@ class FbsShipmentItemResponse(BaseModel):
     status: str = Field(
         description="Статус позиции: new, success, failed, pending_retry, retry_exhausted"
     )
+    task_resolution_status: Optional[str] = Field(
+        None,
+        description=("Task-level итог позиции; null для legacy-обработки и исторических строк"),
+    )
     error_message: Optional[str] = Field(
         None, description="Текст ошибки, если обработка завершилась неудачей"
     )
@@ -92,6 +96,51 @@ class FbsShipmentStatsResponse(BaseModel):
 
     total: int = Field(description="Общее количество записей в журнале")
     by_status: Dict[str, int] = Field(description="Количество записей по каждому статусу")
+
+
+class FbsTaskResultItem(BaseModel):
+    result_id: int
+    shipment_id: int
+    item_id: int
+    occurrence_index: int
+    task_id: int
+    product_id: str
+    outcome: str
+    effect_quantity: int
+    movement_id: Optional[int] = None
+    movement_created_at: Optional[datetime] = None
+    existing_success_item_id: Optional[int] = None
+    existing_movement_id: Optional[int] = None
+    existing_movement_created_at: Optional[datetime] = None
+    is_shipped_before: Optional[bool] = None
+    reason: Optional[str] = None
+    attempt_count: int
+    first_processed_at: datetime
+    last_processed_at: datetime
+    last_error: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class FbsTaskResultsSummary(BaseModel):
+    total_tasks: int = 0
+    written_off: int = 0
+    duplicate_skipped: int = 0
+    inconsistent: int = 0
+    not_found: int = 0
+    pending_retry: int = 0
+    failed: int = 0
+    effect_quantity: int = 0
+    requires_reconciliation: bool = False
+
+
+class FbsTaskResultsResponse(BaseModel):
+    shipment_id: int
+    total: int
+    limit: int
+    offset: int
+    summary: FbsTaskResultsSummary
+    items: List[FbsTaskResultItem]
 
 
 class RetryRequest(BaseModel):

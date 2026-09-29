@@ -53,6 +53,9 @@ kiz_steps_tests.md
 /*-fbs2.txt
 /*-нехватает.txt
 /fbs2-*-retry-*.json
+/text.txt
+/text-write-off-payload.json
+/text-not-in-wms.txt
 
 # Локальная диагностика RabbitMQ, не относящаяся к реализации сервиса.
 /scripts/peek_stock_reservation_messages.py

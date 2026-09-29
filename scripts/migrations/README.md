@@ -12,6 +12,7 @@ Alembic и автоматический migration runner в проекте от�
 | 2 | `20260614_add_fbs_shipment_source.sql` | `fbs_shipments.source` и индексы |
 | 3 | `20260707_add_kit_operations.sql` | Source-поля movements, allow-list и kit operations |
 | 4 | `20260715_add_re_sorting_operations.sql` | Re-sorting tables, constraints, indexes и audit views |
+| 5 | `20260929_add_fbs_task_level_processing.sql` | Детализация результата FBS по СЗ и агрегированный task-resolution status |
 
 Порядок выше отражает хронологию и зависимости файлов репозитория, но не доказывает, что целевая БД начинает с состояния, совместимого с первым файлом. Перед применением нужно сравнить runtime schema с ожидаемыми объектами каждого SQL.
 
