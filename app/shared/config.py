@@ -1,7 +1,7 @@
 """Конфигурация приложения"""
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional
+from typing import Literal, Optional
 
 
 class Settings(BaseSettings):
@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     RESERVATION_CONSUMER_ENABLED: bool = True
     KIZ_IMPORT_CONSUMER_ENABLED: bool = False
     FBS_VALIDATE_ASSEMBLY_TASKS: bool = True
+    # legacy keeps the previous all-or-nothing behavior. task_level skips
+    # confirmed duplicates and writes off only newly claimed assembly tasks.
+    FBS_TASK_PROCESSING_MODE: Literal["legacy", "task_level"] = "legacy"
 
     # Локации
     FBS_LOCATION_CODE: str = "PUSHKINO-ФБС"

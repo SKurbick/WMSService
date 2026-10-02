@@ -29,8 +29,22 @@ SET
     error_message   = COALESCE($3, error_message),
     movement_id     = COALESCE($4, movement_id),
     retry_count     = COALESCE($5, retry_count),
-    next_retry_at   = COALESCE($6, next_retry_at)
+    next_retry_at   = COALESCE($6, next_retry_at),
+    updated_at      = now()
 WHERE item_id = $1
+"""
+
+UPDATE_ITEM_TASK_RESULT = """
+UPDATE wms.fbs_shipment_items
+SET status = $2,
+    task_resolution_status = $3,
+    error_message = $4,
+    movement_id = $5,
+    retry_count = COALESCE($6, retry_count),
+    next_retry_at = $7,
+    updated_at = now()
+WHERE item_id = $1
+RETURNING item_id
 """
 
 
@@ -44,7 +58,8 @@ RETURNING item_id
 """
 
 LOCK_ITEMS_FOR_PROCESSING = """
-SELECT item_id, shipment_id, status, movement_id
+SELECT item_id, shipment_id, product_id, quantity, author, assembly_tasks,
+       status, movement_id, retry_count, max_retries
 FROM wms.fbs_shipment_items
 WHERE item_id = ANY($1::bigint[])
 FOR UPDATE
@@ -59,10 +74,155 @@ WHERE task.task_id = ANY($1::text[])
   AND item.movement_id IS NOT NULL
 """
 
+LOCK_ASSEMBLY_TASKS = """
+SELECT task_id, is_shipped
+FROM public.assembly_task
+WHERE task_id = ANY($1::bigint[])
+ORDER BY task_id
+FOR UPDATE
+"""
+
+GET_CONFIRMED_TASK_LINKS = """
+WITH requested(task_id) AS (
+    SELECT unnest($1::text[])
+), legacy_candidates AS (
+    SELECT task.task_id,
+           item.item_id AS existing_success_item_id,
+           item.movement_id AS existing_movement_id,
+           min(movement.created_at) AS existing_movement_created_at
+    FROM wms.fbs_shipment_items AS item
+    CROSS JOIN LATERAL jsonb_array_elements_text(item.assembly_tasks) AS task(task_id)
+    JOIN requested ON requested.task_id = task.task_id
+    JOIN wms.movements AS movement
+      ON movement.movement_id = item.movement_id
+     AND movement.product_id = item.product_id
+     AND movement.movement_type = 'ship'
+    WHERE item.status = 'success'
+      AND item.product_id = $2
+      AND item.movement_id IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1
+          FROM wms.fbs_shipment_task_results AS item_result
+          WHERE item_result.item_id = item.item_id
+      )
+    GROUP BY task.task_id, item.item_id, item.movement_id
+    HAVING count(*) = 1
+), legacy_links AS (
+    SELECT DISTINCT ON (task.task_id)
+           task.*
+    FROM legacy_candidates AS task
+    ORDER BY task.task_id, task.existing_movement_created_at DESC,
+             task.existing_success_item_id DESC
+), task_links AS (
+    SELECT DISTINCT ON (result.task_id::text)
+           result.task_id::text AS task_id,
+           result.item_id AS existing_success_item_id,
+           result.movement_id AS existing_movement_id,
+           result.movement_created_at AS existing_movement_created_at
+    FROM wms.fbs_shipment_task_results AS result
+    JOIN requested ON requested.task_id = result.task_id::text
+    JOIN wms.movements AS movement
+      ON movement.movement_id = result.movement_id
+     AND movement.created_at = result.movement_created_at
+     AND movement.product_id = result.product_id
+     AND movement.movement_type = 'ship'
+    WHERE result.outcome = 'written_off'
+      AND result.product_id = $2
+    ORDER BY result.task_id::text, result.updated_at DESC
+)
+SELECT * FROM task_links
+UNION ALL
+SELECT legacy_links.*
+FROM legacy_links
+WHERE NOT EXISTS (
+    SELECT 1 FROM task_links WHERE task_links.task_id = legacy_links.task_id
+)
+"""
+
+GET_WRITTEN_TASK_OCCURRENCES = """
+SELECT item_id, occurrence_index, task_id, movement_id, movement_created_at,
+       is_shipped_before, reason
+FROM wms.fbs_shipment_task_results
+WHERE item_id = ANY($1::bigint[])
+  AND outcome = 'written_off'
+"""
+
+UPSERT_TASK_RESULT = """
+INSERT INTO wms.fbs_shipment_task_results (
+    shipment_id, item_id, occurrence_index, task_id, product_id, outcome,
+    effect_quantity, movement_id, movement_created_at,
+    existing_success_item_id, existing_movement_id,
+    existing_movement_created_at, is_shipped_before, reason, details,
+    attempt_count, first_processed_at, last_processed_at, last_error
+)
+VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9,
+    $10, $11, $12, $13, $14, $15::jsonb,
+    1, now(), now(), $16
+)
+ON CONFLICT (item_id, occurrence_index) DO UPDATE SET
+    task_id = EXCLUDED.task_id,
+    product_id = EXCLUDED.product_id,
+    outcome = EXCLUDED.outcome,
+    effect_quantity = EXCLUDED.effect_quantity,
+    movement_id = EXCLUDED.movement_id,
+    movement_created_at = EXCLUDED.movement_created_at,
+    existing_success_item_id = EXCLUDED.existing_success_item_id,
+    existing_movement_id = EXCLUDED.existing_movement_id,
+    existing_movement_created_at = EXCLUDED.existing_movement_created_at,
+    is_shipped_before = EXCLUDED.is_shipped_before,
+    reason = EXCLUDED.reason,
+    details = EXCLUDED.details,
+    attempt_count = wms.fbs_shipment_task_results.attempt_count + 1,
+    last_processed_at = now(),
+    last_error = EXCLUDED.last_error,
+    updated_at = now()
+RETURNING result_id
+"""
+
+GET_TASK_RESULTS = """
+SELECT result_id, shipment_id, item_id, occurrence_index, task_id, product_id,
+       outcome, effect_quantity, movement_id, movement_created_at,
+       existing_success_item_id, existing_movement_id,
+       existing_movement_created_at, is_shipped_before, reason,
+       attempt_count, first_processed_at, last_processed_at, last_error,
+       created_at, updated_at
+FROM wms.fbs_shipment_task_results
+WHERE shipment_id = $1
+  AND ($2::varchar IS NULL OR product_id = $2)
+  AND ($3::varchar IS NULL OR outcome = $3)
+  AND ($4::bigint IS NULL OR task_id = $4)
+ORDER BY item_id, occurrence_index
+LIMIT $5 OFFSET $6
+"""
+
+COUNT_TASK_RESULTS = """
+SELECT count(*)::int
+FROM wms.fbs_shipment_task_results
+WHERE shipment_id = $1
+  AND ($2::varchar IS NULL OR product_id = $2)
+  AND ($3::varchar IS NULL OR outcome = $3)
+  AND ($4::bigint IS NULL OR task_id = $4)
+"""
+
+GET_TASK_RESULTS_SUMMARY = """
+SELECT count(*)::int AS total_tasks,
+       count(*) FILTER (WHERE outcome = 'written_off')::int AS written_off,
+       count(*) FILTER (WHERE outcome IN ('duplicate_skipped', 'duplicate_in_payload'))::int AS duplicate_skipped,
+       count(*) FILTER (WHERE outcome = 'inconsistent')::int AS inconsistent,
+       count(*) FILTER (WHERE outcome = 'not_found')::int AS not_found,
+       count(*) FILTER (WHERE outcome = 'pending_retry')::int AS pending_retry,
+       count(*) FILTER (WHERE outcome = 'failed')::int AS failed,
+       COALESCE(sum(effect_quantity), 0)::int AS effect_quantity
+FROM wms.fbs_shipment_task_results
+WHERE shipment_id = $1
+"""
+
 GET_ITEM_BY_ID = """
 SELECT item_id, shipment_id, product_id, quantity, author, supply_id, account,
        assembly_tasks, warehouse_id, delivery_type, wb_warehouse, shipment_date,
-       status, error_message, retry_count, max_retries, next_retry_at, movement_id,
+       status, task_resolution_status, error_message, retry_count, max_retries,
+       next_retry_at, movement_id,
        created_at, updated_at
 FROM wms.fbs_shipment_items WHERE item_id = $1
 """
@@ -95,7 +255,8 @@ WHERE shipment_id = $1
 
 GET_ITEMS_BY_SHIPMENT_ID = """
 SELECT item_id, product_id, quantity, author, supply_id, account, assembly_tasks,
-       status, error_message, retry_count, movement_id, created_at, updated_at
+       status, task_resolution_status, error_message, retry_count, movement_id,
+       created_at, updated_at
 FROM wms.fbs_shipment_items
 WHERE shipment_id = $1
 ORDER BY item_id
@@ -239,6 +400,30 @@ class FbsShipmentRepository:
             next_retry_at,
         )
 
+    async def update_item_task_result(
+        self,
+        conn: Connection,
+        *,
+        item_id: int,
+        status: str,
+        task_resolution_status: str,
+        error_message: Optional[str],
+        movement_id: Optional[int],
+        retry_count: Optional[int] = None,
+        next_retry_at: Optional[datetime] = None,
+    ) -> bool:
+        row = await conn.fetchrow(
+            UPDATE_ITEM_TASK_RESULT,
+            item_id,
+            status,
+            task_resolution_status,
+            error_message,
+            movement_id,
+            retry_count,
+            next_retry_at,
+        )
+        return row is not None
+
     async def mark_items_success_in_transaction(
         self,
         conn: Connection,
@@ -250,9 +435,7 @@ class FbsShipmentRepository:
         rows = await conn.fetch(MARK_ITEMS_SUCCESS, movement_id, list(item_ids), retry_count)
         return [row["item_id"] for row in rows]
 
-    async def lock_items_for_processing(
-        self, conn: Connection, *, item_ids: Sequence[int]
-    ) -> list:
+    async def lock_items_for_processing(self, conn: Connection, *, item_ids: Sequence[int]) -> list:
         """Блокирует FBS items до конца внешней product-group транзакции."""
         return await conn.fetch(LOCK_ITEMS_FOR_PROCESSING, list(item_ids))
 
@@ -261,6 +444,70 @@ class FbsShipmentRepository:
     ) -> set[str]:
         rows = await conn.fetch(GET_SUCCESS_LINKED_ASSEMBLY_TASKS, list(assembly_tasks))
         return {str(row["task_id"]) for row in rows}
+
+    async def lock_assembly_tasks(
+        self, conn: Connection, *, assembly_tasks: Sequence[str]
+    ) -> dict[str, bool]:
+        task_ids = sorted({int(task_id) for task_id in assembly_tasks})
+        rows = await conn.fetch(LOCK_ASSEMBLY_TASKS, task_ids)
+        return {str(row["task_id"]): row["is_shipped"] for row in rows}
+
+    async def get_confirmed_task_links(
+        self,
+        conn: Connection,
+        *,
+        assembly_tasks: Sequence[str],
+        product_id: str,
+    ) -> dict[str, dict]:
+        rows = await conn.fetch(
+            GET_CONFIRMED_TASK_LINKS,
+            list({str(task_id) for task_id in assembly_tasks}),
+            product_id,
+        )
+        return {str(row["task_id"]): dict(row) for row in rows}
+
+    async def get_written_task_occurrences(
+        self, conn: Connection, *, item_ids: Sequence[int]
+    ) -> dict[tuple[int, int], dict]:
+        rows = await conn.fetch(GET_WRITTEN_TASK_OCCURRENCES, list(item_ids))
+        return {(row["item_id"], row["occurrence_index"]): dict(row) for row in rows}
+
+    async def mark_assembly_tasks_shipped(
+        self, conn: Connection, *, assembly_tasks: Sequence[str]
+    ) -> set[str]:
+        task_ids = sorted({int(task_id) for task_id in assembly_tasks})
+        rows = await conn.fetch(
+            """
+            UPDATE public.assembly_task
+            SET is_shipped = TRUE
+            WHERE task_id = ANY($1::bigint[]) AND is_shipped = FALSE
+            RETURNING task_id
+            """,
+            task_ids,
+        )
+        return {str(row["task_id"]) for row in rows}
+
+    async def upsert_task_results(self, conn: Connection, *, results: Sequence[dict]) -> None:
+        for result in results:
+            await conn.fetchrow(
+                UPSERT_TASK_RESULT,
+                result["shipment_id"],
+                result["item_id"],
+                result["occurrence_index"],
+                int(result["task_id"]),
+                result["product_id"],
+                result["outcome"],
+                result.get("effect_quantity", 0),
+                result.get("movement_id"),
+                result.get("movement_created_at"),
+                result.get("existing_success_item_id"),
+                result.get("existing_movement_id"),
+                result.get("existing_movement_created_at"),
+                result.get("is_shipped_before"),
+                result.get("reason"),
+                json.dumps(result.get("details", {}), ensure_ascii=False),
+                result.get("last_error"),
+            )
 
     async def get_item_by_id(self, conn: Connection, item_id: int):
         return await conn.fetchrow(GET_ITEM_BY_ID, item_id)
@@ -301,6 +548,30 @@ class FbsShipmentRepository:
     async def get_items_by_shipment_id(self, conn: Connection, shipment_id: int) -> list:
         """Все items конкретного shipment."""
         return await conn.fetch(GET_ITEMS_BY_SHIPMENT_ID, shipment_id)
+
+    async def get_task_results(
+        self,
+        conn: Connection,
+        *,
+        shipment_id: int,
+        product_id: Optional[str] = None,
+        outcome: Optional[str] = None,
+        task_id: Optional[int] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> tuple[list, int, object]:
+        rows = await conn.fetch(
+            GET_TASK_RESULTS,
+            shipment_id,
+            product_id,
+            outcome,
+            task_id,
+            limit,
+            offset,
+        )
+        total = await conn.fetchval(COUNT_TASK_RESULTS, shipment_id, product_id, outcome, task_id)
+        summary = await conn.fetchrow(GET_TASK_RESULTS_SUMMARY, shipment_id)
+        return rows, total, summary
 
     async def get_shipments_stats(self, conn: Connection, source: Optional[str] = None) -> list:
         """GROUP BY status — один запрос."""

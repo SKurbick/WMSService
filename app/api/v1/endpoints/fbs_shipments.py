@@ -16,6 +16,9 @@ from app.core.schemas.fbs_shipment import (
     FbsShipmentDetailResponse,
     FbsShipmentItemResponse,
     FbsShipmentStatsResponse,
+    FbsTaskResultItem,
+    FbsTaskResultsResponse,
+    FbsTaskResultsSummary,
     RetryRequest,
     RetryResponse,
     RetryResultItem,
@@ -25,6 +28,7 @@ from app.handlers.write_off_fbs_handler import (
     _calc_next_retry_at,
     _process_shipment_group,
     handle_write_off_fbs,
+    record_task_level_attempt_failure,
 )
 from app.infrastructure.database.repositories.fbs_shipment_repository import FbsShipmentRepository
 from app.infrastructure.database.repositories.location_repository import LocationRepository
@@ -33,12 +37,22 @@ from app.core.services.movement_service import MovementService
 from app.core.enums import FbsShipmentSource
 from app.core.exceptions import AssemblyTasksAlreadyProcessedError
 from app.infrastructure.database.connection import get_db_pool
+from app.shared.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ФБС-отгрузки"])
 
 _VALID_STATUSES = {"processing", "completed", "partially_completed", "failed", "validation_failed"}
+_VALID_TASK_OUTCOMES = {
+    "written_off",
+    "duplicate_skipped",
+    "duplicate_in_payload",
+    "inconsistent",
+    "not_found",
+    "pending_retry",
+    "failed",
+}
 
 _HTTP_FBS_REQUEST_SCHEMA = {
     "type": "array",
@@ -204,10 +218,7 @@ _HTTP_FBS_VALIDATION_EXAMPLES = {
         "value": {
             "detail": {
                 "shipment_id": 127,
-                "error": (
-                    "quantity (2) должно быть равно количеству "
-                    "assembly_tasks (1)"
-                ),
+                "error": ("quantity (2) должно быть равно количеству " "assembly_tasks (1)"),
             }
         },
     },
@@ -514,6 +525,7 @@ async def retry_shipment_item(item_id: int, pool: Pool = Depends(get_db_pool)):
                     shipment_repo=repo,
                     item_ids=[item_id],
                     retry_count=item["retry_count"] + 1,
+                    expected_statuses={item["status"]},
                 )
     except AssemblyTasksAlreadyProcessedError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
@@ -522,20 +534,47 @@ async def retry_shipment_item(item_id: int, pool: Pool = Depends(get_db_pool)):
         status = "retry_exhausted" if retry_count >= item["max_retries"] else "pending_retry"
         next_retry_at = None if status == "retry_exhausted" else _calc_next_retry_at(retry_count)
         async with pool.acquire() as conn:
-            await repo.update_item_status(
-                conn,
-                item_id=item_id,
-                status=status,
-                error_message=str(e),
-                retry_count=retry_count,
-                next_retry_at=next_retry_at,
-            )
+            if settings.FBS_TASK_PROCESSING_MODE == "task_level":
+                async with conn.transaction():
+                    await record_task_level_attempt_failure(
+                        conn,
+                        product_id=item["product_id"],
+                        item_ids=[item_id],
+                        shipment_repo=repo,
+                        outcome="failed" if status == "retry_exhausted" else "pending_retry",
+                        error_message=str(e),
+                        retry_count=retry_count,
+                        next_retry_at=next_retry_at,
+                        item_status_override=(
+                            "retry_exhausted" if status == "retry_exhausted" else None
+                        ),
+                    )
+            else:
+                await repo.update_item_status(
+                    conn,
+                    item_id=item_id,
+                    status=status,
+                    error_message=str(e),
+                    retry_count=retry_count,
+                    next_retry_at=next_retry_at,
+                )
     except Exception as e:
         logger.error(f"Ошибка ручного retry item_id={item_id}: {e}", exc_info=True)
         async with pool.acquire() as conn:
-            await repo.update_item_status(
-                conn, item_id=item_id, status="failed", error_message=str(e)
-            )
+            if settings.FBS_TASK_PROCESSING_MODE == "task_level":
+                async with conn.transaction():
+                    await record_task_level_attempt_failure(
+                        conn,
+                        product_id=item["product_id"],
+                        item_ids=[item_id],
+                        shipment_repo=repo,
+                        outcome="failed",
+                        error_message=str(e),
+                    )
+            else:
+                await repo.update_item_status(
+                    conn, item_id=item_id, status="failed", error_message=str(e)
+                )
 
     async with pool.acquire() as conn:
         await repo.update_shipment_status(conn, item["shipment_id"])
@@ -543,6 +582,59 @@ async def retry_shipment_item(item_id: int, pool: Pool = Depends(get_db_pool)):
         item_rows = await repo.get_items_by_shipment_id(conn, item["shipment_id"])
     return FbsShipmentDetailResponse(
         **dict(shipment), items=[FbsShipmentItemResponse(**dict(row)) for row in item_rows]
+    )
+
+
+@router.get(
+    "/{shipment_id}/task-results",
+    response_model=FbsTaskResultsResponse,
+    summary="Результаты FBS-обработки по сборочным заданиям",
+    description=(
+        "Read-only детализация task-level обработки. Пустой список для старых "
+        "shipment означает, что детализация ещё не записывалась."
+    ),
+)
+async def get_shipment_task_results(
+    shipment_id: int,
+    product_id: Optional[str] = Query(None),
+    outcome: Optional[str] = Query(None),
+    task_id: Optional[int] = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    pool: Pool = Depends(get_db_pool),
+):
+    if outcome is not None and outcome not in _VALID_TASK_OUTCOMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Недопустимый outcome. Допустимые: {sorted(_VALID_TASK_OUTCOMES)}",
+        )
+    repo = FbsShipmentRepository()
+    async with pool.acquire() as conn:
+        if await repo.get_shipment_by_id(conn, shipment_id) is None:
+            raise HTTPException(status_code=404, detail="Shipment не найден")
+        rows, total, summary_row = await repo.get_task_results(
+            conn,
+            shipment_id=shipment_id,
+            product_id=product_id,
+            outcome=outcome,
+            task_id=task_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    summary_data = dict(summary_row)
+    summary_data["requires_reconciliation"] = bool(
+        summary_data.get("inconsistent")
+        or summary_data.get("not_found")
+        or summary_data.get("failed")
+    )
+    return FbsTaskResultsResponse(
+        shipment_id=shipment_id,
+        total=total,
+        limit=limit,
+        offset=offset,
+        summary=FbsTaskResultsSummary(**summary_data),
+        items=[FbsTaskResultItem(**dict(row)) for row in rows],
     )
 
 
@@ -660,9 +752,7 @@ async def retry_shipments(
             continue
 
         try:
-            await handle_write_off_fbs(
-                items, pool, raw_message=parsed_raw, shipment_id=shipment_id
-            )
+            await handle_write_off_fbs(items, pool, raw_message=parsed_raw, shipment_id=shipment_id)
             processed += 1
             async with pool.acquire() as conn:
                 record = await repo.get_shipment_by_id(conn, shipment_id)
@@ -749,9 +839,7 @@ async def retry_shipment(
         )
 
     try:
-        await handle_write_off_fbs(
-            items, pool, raw_message=parsed_raw, shipment_id=shipment_id
-        )
+        await handle_write_off_fbs(items, pool, raw_message=parsed_raw, shipment_id=shipment_id)
     except Exception as e:
         return RetryResultItem(
             shipment_id=shipment_id,

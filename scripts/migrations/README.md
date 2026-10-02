@@ -20,6 +20,7 @@ Alembic и автоматический migration runner в проекте от�
 | 10 | `20260928_kiz_receipt_b21_registered.sql` | Lifecycle `registered` и backfill безопасных receipt-import KIZ |
 | 11 | `20261001_kiz_activation_preflight.sql` | Read-only проверка B2.1/C1 schema и loose holder integrity |
 | 12 | `20261001_add_kiz_activation.sql` | Idempotent activation operations, event `activated` и authorized `registered -> active` |
+| 13 | `20260929_add_fbs_task_level_processing.sql` | Детализация результата FBS по СЗ и агрегированный task-resolution status |
 
 Порядок выше отражает хронологию и зависимости файлов репозитория, но не доказывает, что целевая БД начинает с состояния, совместимого с первым файлом. Перед применением нужно сравнить runtime schema с ожидаемыми объектами каждого SQL.
 

@@ -181,7 +181,6 @@ Changed/physical/movement fields намеренно отсутствуют: ст
   группировку, транзакционную обработку product group, movements и retry.
 - DB constraint для `http_api` применяется владельцем БД вручную.
 
-
 ## KIZ import raw inbox
 
 Подготовлен выключенный по умолчанию RabbitMQ consumer очереди `orders.kiz.imported`.
@@ -211,3 +210,14 @@ active loose-локации. Переход `registered -> active` назнач�
 создаёт event `activated`, но не создаёт movement и не меняет inventory. Batch атомарен,
 capacity считается отдельно по product, operation/result идемпотентны по client
 `idempotency_key`. Activation в container и automatic activation не реализованы.
+
+## FBS task-level processing
+
+- Код поддерживает `FBS_TASK_PROCESSING_MODE=legacy|task_level`; значение по
+  умолчанию `legacy` сохраняет прежнее all-or-nothing поведение.
+- После миграции `20260929_add_fbs_task_level_processing.sql` режим `task_level`
+  списывает только уникальные новые СЗ и сохраняет детализацию результата.
+- Read-only `GET /api/fbs-shipments/{shipment_id}/task-results` возвращает текущие
+  результаты, агрегаты и устойчивые пары `(movement_id, movement_created_at)`.
+- Исторический backfill не выполняется; пустой результат для старого shipment не
+  означает, что он не обрабатывался.

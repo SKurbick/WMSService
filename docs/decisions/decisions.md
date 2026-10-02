@@ -328,7 +328,6 @@ items и assembly tasks, создаётся movement, обновляются ite
 Location validation также использует этот `conn`. Ошибка на любом шаге откатывает всю
 product group. Existing orphan movements автоматически не восстанавливаются.
 
-
 ## 2026-09-23 - KIZ import начинается с raw inbox
 
 - Статус решения: `active`
@@ -397,3 +396,53 @@ Activation не создаёт второй operation ledger: используе
 Registered остаётся known identity без physical holder; active означает физически
 идентифицированную unit с holder. Container/automatic activation и новые transfer/shipment
 flows в решение не входят.
+
+## 2026-09-29 - Task-level обработка смешанных FBS payload
+
+- Статус решения: `active` в feature branch, rollout через feature setting
+- Связанные endpoints: `GET /api/fbs-shipments/{shipment_id}/task-results`
+- Связанные миграции: `20260929_add_fbs_task_level_processing.sql`
+- Superseded: нет
+
+Контекст: текущая атомарная проверка всей product group отклоняет новые СЗ, если
+вместе с ними пришло хотя бы одно ранее отгруженное СЗ. Это защищает от двойного
+списания, но создает потенциальный пропуск физического списания новых СЗ.
+
+Предложено классифицировать каждое СЗ внутри заблокированной product group:
+
+- новое СЗ списывается текущим movement;
+- подтвержденный дубль с существующим success item и movement пропускается;
+- `is_shipped=true` без подтвержденного movement изолируется как `inconsistent`;
+- отсутствующее СЗ фиксируется как `not_found`.
+
+Дубли и аномалии не должны блокировать атомарное списание новых СЗ. Результат
+каждого вхождения СЗ хранится в `wms.fbs_shipment_task_results`; физическим
+источником истины остается `wms.movements`.
+
+Обратная совместимость обеспечивается неизменным входным payload, additive
+read-only endpoint и режимами `legacy`, `task_level`. Значение по умолчанию —
+`legacy`; включение `task_level` требует предварительного применения миграции.
+Для failed item legacy `movement_id` не заполняется, а связь частичного
+физического эффекта публикуется через task results.
+
+Подробности:
+
+- `docs/proposals/fbs_task_results_read_model.md`;
+- `docs/proposals/fbs_task_level_processing_spec.md`.
+
+## 2026-09-29 - Нормализация assembly_tasks в FBS retry worker
+
+- Статус решения: `active`
+- Связанные endpoints: ручной retry FBS item использует тот же формат СЗ
+- Связанные миграции: —
+- Superseded: нет
+
+`asyncpg` без пользовательского JSON codec может возвращать PostgreSQL `jsonb`
+как JSON-строку, хотя первичный payload представлен Python-массивом. Retry worker
+обязан нормализовать каждое сохранённое `assembly_tasks` до `list[str]` перед
+`extend`; прямое объединение строки посимвольно запрещено.
+
+Выбран локальный FBS-нормализатор, принимающий строку, list или tuple. Глобальный
+JSON codec пула не меняется, чтобы не изменить типы данных во всех остальных
+репозиториях сервиса. Решение одинаково действует в режимах `legacy` и
+`task_level` и не требует миграции БД.

@@ -50,6 +50,11 @@
 - [`database/production_schema_audit_2026-08-08.md`](database/production_schema_audit_2026-08-08.md) — подтверждённое состояние production на дату аудита.
 - [`../scripts/migrations/README.md`](../scripts/migrations/README.md) — порядок применения миграций.
 
+## Активные предложения
+
+- [`proposals/fbs_task_results_read_model.md`](proposals/fbs_task_results_read_model.md) — клиентская read-only модель результата FBS по каждому СЗ.
+- [`proposals/fbs_task_level_processing_spec.md`](proposals/fbs_task_level_processing_spec.md) — ТЗ на task-level обработку смешанных FBS payload с обратной совместимостью.
+
 ## Статусы документов
 
 - `CURRENT` — сопровождаемое описание текущей реализации.

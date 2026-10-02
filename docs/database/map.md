@@ -88,7 +88,15 @@
 
 ### `wms.fbs_shipment_items`
 
-Позиции FBS и retry: `item_id`, `shipment_id`, `product_id`, `quantity`, `author`, `supply_id`, `account`, `assembly_tasks`, `warehouse_id`, `delivery_type`, `wb_warehouse`, `shipment_date`, `status`, `error_message`, `retry_count`, `max_retries`, `next_retry_at`, `movement_id`, timestamps. PK; FK `shipment_id -> fbs_shipments ON DELETE CASCADE`; check `status` in `new/success/failed/pending_retry/retry_exhausted`; defaults `status='new'`, `retry_count=0`, `max_retries=5`. FK `movement_id -> movements` отсутствует.
+Позиции FBS и retry: `item_id`, `shipment_id`, `product_id`, `quantity`, `author`, `supply_id`, `account`, `assembly_tasks`, `warehouse_id`, `delivery_type`, `wb_warehouse`, `shipment_date`, `status`, nullable `task_resolution_status`, `error_message`, `retry_count`, `max_retries`, `next_retry_at`, `movement_id`, timestamps. PK; FK `shipment_id -> fbs_shipments ON DELETE CASCADE`; check `status` in `new/success/failed/pending_retry/retry_exhausted`; defaults `status='new'`, `retry_count=0`, `max_retries=5`. FK `movement_id -> movements` отсутствует.
+
+### `wms.fbs_shipment_task_results`
+
+Текущий итог обработки каждого вхождения СЗ в FBS item: outcome, физический
+effect, составные ссылки на новое/существующее movement, диагностика и счётчик
+попыток. PK `result_id`; unique `(item_id, occurrence_index)`; FK к shipment и
+item с `ON DELETE CASCADE`. FK к `wms.movements` отсутствуют из-за partitioned
+identity; ссылки хранятся парами `(movement_id, movement_created_at)`.
 
 ### `wms.receipt_items`
 

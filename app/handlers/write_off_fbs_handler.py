@@ -1,5 +1,6 @@
 """Handler для обработки списания из ФБС зоны"""
 
+import json
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Sequence
@@ -98,7 +99,7 @@ async def validate_assembly_tasks(
     logger.info(f"Сборочные задания помечены как отгруженные: {sorted(task_ids)}")
 
 
-async def _process_shipment_group(
+async def _process_shipment_group_legacy(
     conn: Connection,
     product_id: str,
     total_quantity: int,
@@ -178,6 +179,388 @@ async def _process_shipment_group(
         )
     await shipment_repo.update_shipment_status(conn, shipment_ids.pop())
     return movement_id
+
+
+def normalize_stored_assembly_tasks(value) -> list[str]:
+    """Decode assembly_tasks read from jsonb and validate task identifiers."""
+    if isinstance(value, str):
+        value = json.loads(value)
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("assembly_tasks должен быть JSON-массивом")
+    result = []
+    for task_id in value:
+        int(task_id)
+        result.append(str(task_id))
+    return result
+
+
+async def _classify_task_occurrences(
+    conn: Connection,
+    *,
+    product_id: str,
+    locked_items: Sequence,
+    shipment_repo: FbsShipmentRepository,
+) -> tuple[list[dict], list[str]]:
+    """Classify every payload occurrence while assembly-task rows are locked."""
+    occurrences: list[dict] = []
+    all_tasks: list[str] = []
+    shipment_id = locked_items[0]["shipment_id"]
+
+    for row in sorted(locked_items, key=lambda item: item["item_id"]):
+        if row["product_id"] != product_id:
+            raise FbsShipmentItemsUpdateError(
+                f"Item {row['item_id']} имеет product_id={row['product_id']}, "
+                f"ожидался {product_id}"
+            )
+        tasks = normalize_stored_assembly_tasks(row["assembly_tasks"])
+        for occurrence_index, task_id in enumerate(tasks):
+            occurrences.append(
+                {
+                    "shipment_id": shipment_id,
+                    "item_id": row["item_id"],
+                    "occurrence_index": occurrence_index,
+                    "task_id": task_id,
+                    "product_id": product_id,
+                    "effect_quantity": 0,
+                    "details": {},
+                }
+            )
+            all_tasks.append(task_id)
+
+    states = await shipment_repo.lock_assembly_tasks(conn, assembly_tasks=all_tasks)
+    confirmed_links = await shipment_repo.get_confirmed_task_links(
+        conn, assembly_tasks=all_tasks, product_id=product_id
+    )
+    written_occurrences = await shipment_repo.get_written_task_occurrences(
+        conn, item_ids=[row["item_id"] for row in locked_items]
+    )
+
+    owners: dict[str, dict] = {}
+    new_tasks: list[str] = []
+    for result in occurrences:
+        task_id = result["task_id"]
+        result["is_shipped_before"] = states.get(task_id)
+        occurrence_key = (result["item_id"], result["occurrence_index"])
+        if occurrence_key in written_occurrences:
+            previous = written_occurrences[occurrence_key]
+            owners.setdefault(task_id, result)
+            result.update(
+                outcome="written_off",
+                effect_quantity=1,
+                movement_id=previous["movement_id"],
+                movement_created_at=previous["movement_created_at"],
+                is_shipped_before=previous["is_shipped_before"],
+                reason=previous["reason"],
+                details={"preserved_from_previous_attempt": True},
+            )
+            continue
+        if task_id in owners:
+            owner = owners[task_id]
+            result.update(
+                outcome="duplicate_in_payload",
+                reason="Повтор СЗ внутри текущей товарной группы; физический эффект учтён один раз",
+                details={
+                    "owner_item_id": owner["item_id"],
+                    "owner_occurrence_index": owner["occurrence_index"],
+                },
+            )
+            continue
+
+        owners[task_id] = result
+        if task_id not in states:
+            result.update(outcome="not_found", reason="СЗ не найдено в public.assembly_task")
+        elif not states[task_id]:
+            result.update(outcome="new", reason="Новое СЗ подготовлено к списанию")
+            new_tasks.append(task_id)
+        elif task_id in confirmed_links:
+            link = confirmed_links[task_id]
+            result.update(
+                outcome="duplicate_skipped",
+                reason="СЗ ранее подтверждённо списано; повторный эффект пропущен",
+                existing_success_item_id=link["existing_success_item_id"],
+                existing_movement_id=link["existing_movement_id"],
+                existing_movement_created_at=link["existing_movement_created_at"],
+            )
+        else:
+            result.update(
+                outcome="inconsistent",
+                reason=(
+                    "СЗ отмечено отгруженным, но подтверждённая связь с FBS movement не найдена"
+                ),
+            )
+
+    return occurrences, new_tasks
+
+
+def _item_task_state(results: Sequence[dict]) -> tuple[str, str, Optional[str]]:
+    outcomes = {result["outcome"] for result in results}
+    has_written = "written_off" in outcomes
+    has_duplicate = bool(outcomes & {"duplicate_skipped", "duplicate_in_payload"})
+    anomalies = outcomes & {"inconsistent", "not_found", "failed"}
+
+    if "pending_retry" in outcomes:
+        return "pending_retry", "pending_retry", "Новые СЗ ожидают повторного списания"
+    if has_written and anomalies:
+        return (
+            "failed",
+            "partially_completed",
+            "Новые СЗ списаны, но часть СЗ требует сверки: " + ", ".join(sorted(anomalies)),
+        )
+    if has_written:
+        resolution = "completed_with_duplicates" if has_duplicate else "completed"
+        return "success", resolution, None
+    if outcomes and outcomes <= {"duplicate_skipped", "duplicate_in_payload"}:
+        return (
+            "failed",
+            "duplicate_only",
+            "Нового списания нет: все СЗ являются подтверждёнными или внутривходными дублями",
+        )
+    return "failed", "failed", "СЗ не списаны: " + ", ".join(sorted(outcomes))
+
+
+async def _save_task_level_item_states(
+    conn: Connection,
+    *,
+    locked_items: Sequence,
+    results: Sequence[dict],
+    shipment_repo: FbsShipmentRepository,
+    movement_id: Optional[int],
+    retry_count: Optional[int],
+    next_retry_at: Optional[datetime] = None,
+    item_status_override: Optional[str] = None,
+) -> None:
+    by_item: dict[int, list[dict]] = {}
+    for result in results:
+        by_item.setdefault(result["item_id"], []).append(result)
+
+    for row in locked_items:
+        item_results = by_item.get(row["item_id"], [])
+        status, resolution, error = _item_task_state(item_results)
+        if item_status_override is not None:
+            status = item_status_override
+        # Preserve the legacy contract: movement_id is exposed only by a
+        # successful item. Partial physical effects remain fully linked in the
+        # task-result rows through (movement_id, movement_created_at).
+        item_movement_id = None
+        if status == "success":
+            item_movement_id = movement_id
+            if item_movement_id is None:
+                written_results = [
+                    result
+                    for result in item_results
+                    if result["outcome"] == "written_off" and result.get("movement_id")
+                ]
+                if written_results:
+                    latest_written = max(
+                        written_results,
+                        key=lambda result: result.get("movement_created_at")
+                        or datetime.min.replace(tzinfo=timezone.utc),
+                    )
+                    item_movement_id = latest_written["movement_id"]
+        updated = await shipment_repo.update_item_task_result(
+            conn,
+            item_id=row["item_id"],
+            status=status,
+            task_resolution_status=resolution,
+            error_message=error,
+            movement_id=item_movement_id,
+            retry_count=retry_count,
+            next_retry_at=next_retry_at if status == "pending_retry" else None,
+        )
+        if not updated:
+            raise FbsShipmentItemsUpdateError(
+                f"Не удалось обновить task-level итог item_id={row['item_id']}"
+            )
+
+
+async def _process_shipment_group_task_level(
+    conn: Connection,
+    *,
+    product_id: str,
+    total_quantity: int,
+    author: str,
+    movement_service: MovementService,
+    shipment_repo: FbsShipmentRepository,
+    item_ids: Sequence[int],
+    retry_count: Optional[int],
+    expected_statuses: Optional[set[str]],
+) -> Optional[int]:
+    locked_items = await shipment_repo.lock_items_for_processing(conn, item_ids=item_ids)
+    if {row["item_id"] for row in locked_items} != set(item_ids):
+        raise FbsShipmentItemsUpdateError(
+            f"Не удалось заблокировать все FBS items: expected={sorted(item_ids)}"
+        )
+    shipment_ids = {row["shipment_id"] for row in locked_items}
+    if len(shipment_ids) != 1:
+        raise FbsShipmentItemsUpdateError("FBS items принадлежат разным shipments")
+    if expected_statuses is not None and any(
+        row["status"] not in expected_statuses for row in locked_items
+    ):
+        logger.info(
+            "Task-level FBS attempt skipped after row lock: item status changed | "
+            "item_ids=%s | expected_statuses=%s | actual_statuses=%s",
+            sorted(item_ids),
+            sorted(expected_statuses),
+            sorted({row["status"] for row in locked_items}),
+        )
+        movement_ids = {row["movement_id"] for row in locked_items if row["movement_id"]}
+        return movement_ids.pop() if len(movement_ids) == 1 else None
+
+    results, new_tasks = await _classify_task_occurrences(
+        conn,
+        product_id=product_id,
+        locked_items=locked_items,
+        shipment_repo=shipment_repo,
+    )
+    claimed = (
+        await shipment_repo.mark_assembly_tasks_shipped(conn, assembly_tasks=new_tasks)
+        if new_tasks
+        else set()
+    )
+    if claimed != set(new_tasks):
+        raise AssemblyTasksAlreadyProcessedError(
+            f"Не удалось атомарно захватить новые СЗ: expected={sorted(new_tasks)}, "
+            f"updated={sorted(claimed)}"
+        )
+
+    movement_id: Optional[int] = None
+    movement_created_at: Optional[datetime] = None
+    if new_tasks:
+        movement = MovementCreate(
+            movement_type=MovementType.SHIP,
+            product_id=product_id,
+            quantity=len(new_tasks),
+            user_name=author,
+            from_location_code=settings.FBS_LOCATION_CODE,
+            reason=f"Списание из ФБС зоны. Новые сборочные задания: {new_tasks}",
+        )
+        created = await movement_service.create_movement_in_transaction(conn, [movement])
+        movement_id = created[0].movement_id
+        movement_created_at = created[0].created_at
+
+    for result in results:
+        if result["outcome"] == "new":
+            result.update(
+                outcome="written_off",
+                effect_quantity=1,
+                movement_id=movement_id,
+                movement_created_at=movement_created_at,
+                reason="СЗ списано текущим movement",
+            )
+
+    await shipment_repo.upsert_task_results(conn, results=results)
+    await _save_task_level_item_states(
+        conn,
+        locked_items=locked_items,
+        results=results,
+        shipment_repo=shipment_repo,
+        movement_id=movement_id,
+        retry_count=retry_count,
+    )
+    shipment_id = shipment_ids.pop()
+    await shipment_repo.update_shipment_status(conn, shipment_id)
+    logger.info(
+        "Task-level FBS group processed | shipment_id=%s | product_id=%s | "
+        "incoming_tasks=%s | new_tasks=%s | duplicate_tasks=%s | "
+        "inconsistent_tasks=%s | not_found_tasks=%s | movement_id=%s | "
+        "declared_quantity=%s",
+        shipment_id,
+        product_id,
+        len(results),
+        len(new_tasks),
+        sum(r["outcome"] in {"duplicate_skipped", "duplicate_in_payload"} for r in results),
+        sum(r["outcome"] == "inconsistent" for r in results),
+        sum(r["outcome"] == "not_found" for r in results),
+        movement_id,
+        total_quantity,
+    )
+    return movement_id
+
+
+async def _process_shipment_group(
+    conn: Connection,
+    product_id: str,
+    total_quantity: int,
+    all_assembly_tasks: List[str],
+    author: str,
+    movement_service: MovementService,
+    shipment_repo: FbsShipmentRepository,
+    item_ids: Sequence[int],
+    retry_count: Optional[int] = None,
+    expected_statuses: Optional[set[str]] = None,
+) -> Optional[int]:
+    if settings.FBS_TASK_PROCESSING_MODE == "task_level" and settings.FBS_VALIDATE_ASSEMBLY_TASKS:
+        return await _process_shipment_group_task_level(
+            conn,
+            product_id=product_id,
+            total_quantity=total_quantity,
+            author=author,
+            movement_service=movement_service,
+            shipment_repo=shipment_repo,
+            item_ids=item_ids,
+            retry_count=retry_count,
+            expected_statuses=expected_statuses,
+        )
+    return await _process_shipment_group_legacy(
+        conn=conn,
+        product_id=product_id,
+        total_quantity=total_quantity,
+        all_assembly_tasks=all_assembly_tasks,
+        author=author,
+        movement_service=movement_service,
+        shipment_repo=shipment_repo,
+        item_ids=item_ids,
+        retry_count=retry_count,
+    )
+
+
+async def record_task_level_attempt_failure(
+    conn: Connection,
+    *,
+    product_id: str,
+    item_ids: Sequence[int],
+    shipment_repo: FbsShipmentRepository,
+    outcome: str,
+    error_message: str,
+    retry_count: Optional[int] = None,
+    next_retry_at: Optional[datetime] = None,
+    item_status_override: Optional[str] = None,
+) -> None:
+    """Persist a rolled-back task-level attempt in a fresh short transaction."""
+    if outcome not in {"pending_retry", "failed"}:
+        raise ValueError(f"Недопустимый outcome ошибки: {outcome}")
+    locked_items = await shipment_repo.lock_items_for_processing(conn, item_ids=item_ids)
+    if {row["item_id"] for row in locked_items} != set(item_ids):
+        raise FbsShipmentItemsUpdateError("Не удалось заблокировать items для записи ошибки")
+    results, _ = await _classify_task_occurrences(
+        conn,
+        product_id=product_id,
+        locked_items=locked_items,
+        shipment_repo=shipment_repo,
+    )
+    for result in results:
+        if result["outcome"] == "new":
+            result.update(
+                outcome=outcome,
+                reason=(
+                    "Списание отложено до retry"
+                    if outcome == "pending_retry"
+                    else "Списание завершилось ошибкой"
+                ),
+                last_error=error_message,
+            )
+    await shipment_repo.upsert_task_results(conn, results=results)
+    await _save_task_level_item_states(
+        conn,
+        locked_items=locked_items,
+        results=results,
+        shipment_repo=shipment_repo,
+        movement_id=None,
+        retry_count=retry_count,
+        next_retry_at=next_retry_at,
+        item_status_override=item_status_override,
+    )
+    await shipment_repo.update_shipment_status(conn, locked_items[0]["shipment_id"])
 
 
 def _group_items(
@@ -299,15 +682,28 @@ async def handle_write_off_fbs(
                 f"next_retry_at={next_retry_at.isoformat()} | error={e}"
             )
             async with pool.acquire() as conn:
-                for item_id in related_item_ids:
-                    await shipment_repo.update_item_status(
-                        conn,
-                        item_id=item_id,
-                        status="pending_retry",
-                        error_message=str(e),
-                        retry_count=retry_count,
-                        next_retry_at=next_retry_at,
-                    )
+                if settings.FBS_TASK_PROCESSING_MODE == "task_level":
+                    async with conn.transaction():
+                        await record_task_level_attempt_failure(
+                            conn,
+                            product_id=group.product_id,
+                            item_ids=related_item_ids,
+                            shipment_repo=shipment_repo,
+                            outcome="pending_retry",
+                            error_message=str(e),
+                            retry_count=retry_count,
+                            next_retry_at=next_retry_at,
+                        )
+                else:
+                    for item_id in related_item_ids:
+                        await shipment_repo.update_item_status(
+                            conn,
+                            item_id=item_id,
+                            status="pending_retry",
+                            error_message=str(e),
+                            retry_count=retry_count,
+                            next_retry_at=next_retry_at,
+                        )
 
         except Exception as e:
             logger.error(
@@ -315,13 +711,24 @@ async def handle_write_off_fbs(
                 exc_info=True,
             )
             async with pool.acquire() as conn:
-                for item_id in related_item_ids:
-                    await shipment_repo.update_item_status(
-                        conn,
-                        item_id=item_id,
-                        status="failed",
-                        error_message=str(e),
-                    )
+                if settings.FBS_TASK_PROCESSING_MODE == "task_level":
+                    async with conn.transaction():
+                        await record_task_level_attempt_failure(
+                            conn,
+                            product_id=group.product_id,
+                            item_ids=related_item_ids,
+                            shipment_repo=shipment_repo,
+                            outcome="failed",
+                            error_message=str(e),
+                        )
+                else:
+                    for item_id in related_item_ids:
+                        await shipment_repo.update_item_status(
+                            conn,
+                            item_id=item_id,
+                            status="failed",
+                            error_message=str(e),
+                        )
 
     # --- Итог: пересчитать статус shipment ---
     async with pool.acquire() as conn:
