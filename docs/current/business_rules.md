@@ -152,3 +152,13 @@
 - `wms.kiz_import_message_kiz` хранит immutable provenance и допускает несколько messages на один KIZ.
 - Replay applied message возвращает `new_kiz_count=0`, а linked current KIZ учитывает как existing.
 - Consumer завершает только B1 save/ACK и никогда автоматически не запускает B2.
+
+## KIZ activation
+
+- Activation принимает existing KIZ codes, active `location_code`, `user_name` и client `idempotency_key`; product определяется из KIZ.
+- Допустимый переход — holder-less `registered -> active` с loose `location_id`; container activation не поддерживается.
+- Activation не создаёт movement и не меняет physical inventory; unit переходит из unidentified в identified.
+- Для каждого product число new active KIZ не превышает exact available loose unidentified quantity без batch/container.
+- Batch all-or-nothing; unknown, terminal, contained или active в другой location KIZ отклоняет всю операцию.
+- Active KIZ в той же location является no-op; same idempotency intent возвращает saved result, different intent даёт conflict.
+- Duplicate `kiz_codes` отклоняются validation error и не дедуплицируются.

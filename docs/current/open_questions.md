@@ -38,4 +38,5 @@ issue tracker не назначены.
 | TEST-02 | open | Добавить ли regression-тест полной/частичной распаковки после выбора модели CNT-01? | QA + WMS owner | Блокируется решением CNT-01 |
 | KIZ-01 | open | Какое поле фактически и стабильно присылает producer: `supply.order_guid` или `supply.supply_guid`? | Integration owner | KIZ import R1 raw inbox; подтвердить по stage-сообщениям до следующих фаз |
 | KIZ-02 | answered | Receipt import не ищет текущую physical unit: B2.1 создаёт `registered` KIZ без holder и резерва. | Product + WMS owner | Решение 2026-09-28; `wms_kiz_receipt_b21_registered_no_reservation.md` |
-| KIZ-03 | open | Какая операция и проверки должны выполнять `registered -> active` и назначать physical holder? | Product + WMS owner | Намеренно вне scope B2.1 |
+| KIZ-03 | answered | Явный `POST /api/kiz/activate` подтверждает scan, проверяет exact loose capacity и атомарно назначает active location holder без movement. | Product + WMS owner | Решение 2026-10-01; `wms_kiz_activation_registered_to_active.md` |
+| KIZ-04 | open | Как должны выполняться activation непосредственно в container и последующие transfer/shipment active KIZ? | Product + WMS owner | Намеренно вне loose-only activation scope |

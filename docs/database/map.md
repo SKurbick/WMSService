@@ -161,4 +161,19 @@ Snapshot поступлений из 1С: `receipt_item_id`, `guid`, `product_id
 `wms.kiz_import_message_kiz` имеет PK `(message_id, kiz_id)`, FK на inbox/KIZ,
 `was_created` и immutable trigger. Один KIZ может быть связан с несколькими duplicate
 messages. `wms.kiz.origin_type` поддерживает `warehouse_assignment` и `receipt_import`;
-partial index `idx_kiz_active_receipt_origin` ускоряет receipt capacity check.
+partial index `idx_kiz_current_receipt_origin` ускоряет current receipt identity check.
+
+## KIZ activation
+
+Activation расширяет существующий KIZ operation ledger: `operation_type=activate`,
+`source_system=api`, client key хранится как `external_operation_id`, canonical hash —
+как `request_fingerprint`, operator — как `author`, replay response — в `result_payload`.
+`wms.kiz_operation_items.external_line_id` хранит KIZ code, `movement_ref=NULL`.
+`wms.kiz_activation_authorizations` связывает operation/KIZ/product/location с
+`txid_current()` только для разрешённого перехода lifecycle.
+
+`guard_kiz_identity()` разрешает `registered -> active` только при activation
+operation/item и authorization той же transaction и target location. Existing
+`idx_kiz_active_scope` покрывает capacity count; `uq_kiz_code` покрывает code lookup.
+Event `activated` имеет `from_status=registered`, `to_status=active`, loose location и
+`movement_ref=NULL`.

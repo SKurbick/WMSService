@@ -219,4 +219,11 @@ Legacy revisions читаются из `public.supply_to_sellers_warehouse`, cur
 - `GET /api/kiz-import/integrity` — read-only проверка receipt quantity, registered holder/origin, orphan receipt-origin KIZ и message↔KIZ links.
 
 KIZ card/list/history API в текущем сервисе нет. Process endpoint не реализует
-`registered -> active` и не подставляет receipt location как current holder.
+physical holder и не подставляет receipt location как current holder.
+
+# KIZ operations
+
+- `POST /api/kiz/activate` — атомарно активирует registered KIZ в active loose location; request содержит `kiz_codes`, `location_code`, `user_name`, `idempotency_key`.
+
+Endpoint не создаёт movements, не поддерживает container activation и возвращает
+saved result при replay того же idempotency intent.

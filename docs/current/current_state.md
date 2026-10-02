@@ -202,5 +202,12 @@ Changed/physical/movement fields намеренно отсутствуют: ст
 Обработка атомарна и идемпотентна для same message, duplicate inbox rows и additive
 replay. Terminal KIZ не реактивируется. Physical quantity, receipt snapshot и movements
 не меняются. Registered KIZ не участвует в `identified/unidentified` и не
-резервирует loose stock. Автоматический apply из RabbitMQ consumer и переход
-`registered -> active` не реализованы.
+резервирует loose stock. Автоматический apply из RabbitMQ consumer не реализован.
+
+## KIZ activation
+
+`POST /api/kiz/activate` явно подтверждает физически отсканированные registered KIZ в
+active loose-локации. Переход `registered -> active` назначает `location_id`,
+создаёт event `activated`, но не создаёт movement и не меняет inventory. Batch атомарен,
+capacity считается отдельно по product, operation/result идемпотентны по client
+`idempotency_key`. Activation в container и automatic activation не реализованы.

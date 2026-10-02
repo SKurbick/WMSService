@@ -256,3 +256,11 @@ Registration записывается событием `registered`; expected re
 `wms.kiz_import_messages` хранит raw delivery и B2 processing state. Связь message с
 созданными либо idempotent-existing KIZ хранится append-only в
 `wms.kiz_import_message_kiz`; она является provenance, а не quantity ledger.
+
+Activation использует общий `wms.kiz_operations`: `operation_type=activate`,
+`source_system=api`, client key в `external_operation_id`, canonical hash в
+`request_fingerprint`, user в `author`, saved result в `result_payload`.
+`wms.kiz_operation_items.external_line_id` хранит KIZ code без movement link.
+Отдельная `wms.kiz_activation_authorizations` даёт transaction-scoped разрешение DB
+guard и не является quantity ledger. Event `activated` фиксирует `registered -> active`,
+loose holder и operation ID в metadata.

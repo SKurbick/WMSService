@@ -18,6 +18,8 @@ Alembic и автоматический migration runner в проекте от�
 | 8 | `20260924_add_kiz_import_b2.sql` | Processing state, receipt origin и immutable message↔KIZ provenance |
 | 9 | `20260928_kiz_receipt_b21_preflight.sql` | Read-only проверка безопасности existing B2 receipt-import KIZ |
 | 10 | `20260928_kiz_receipt_b21_registered.sql` | Lifecycle `registered` и backfill безопасных receipt-import KIZ |
+| 11 | `20261001_kiz_activation_preflight.sql` | Read-only проверка B2.1/C1 schema и loose holder integrity |
+| 12 | `20261001_add_kiz_activation.sql` | Idempotent activation operations, event `activated` и authorized `registered -> active` |
 
 Порядок выше отражает хронологию и зависимости файлов репозитория, но не доказывает, что целевая БД начинает с состояния, совместимого с первым файлом. Перед применением нужно сравнить runtime schema с ожидаемыми объектами каждого SQL.
 
@@ -31,6 +33,7 @@ Alembic и автоматический migration runner в проекте от�
 - B2 migration применяется только после B1 и до выкладки кода с process endpoint.
 - B2.1 preflight выполняется после B2; B2.1 migration не применяется, если preflight нашёл unsafe active receipt-import KIZ.
 - B2.1 migration конвертирует только safe legacy B2 rows; её нужно применить до выкладки B2.1-кода.
+- Activation preflight/migration выполняются после B2.1 и до выкладки `/api/kiz/activate`; migration расширяет существующий KIZ operation ledger типом `activate`, добавляет transaction authorization и не изменяет existing registered rows.
 - Rollback-скрипты в репозитории не найдены.
 - Для `wms.movements` должна существовать партиция, охватывающая дату выполнения операций.
 

@@ -44,6 +44,12 @@ kiz_steps_tests.md
 /wms_stage*.md
 /ТЗ_ KIZ Stage *.md
 /wms_kiz_receipt_*.md
+/wms_kiz_activation_*.md
+/wms_fbs_kiz_*.md
+
+# Временные текстовые выгрузки и ручные payload'ы в корне.
+/text*.txt
+/text*.json
 
 # Локальные входные списки и сгенерированные аналитические отчёты.
 /sz_fix.txt

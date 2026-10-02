@@ -36,6 +36,7 @@ from app.core.exceptions import (
     KizImportBusinessError,
     KizImportConcurrentConflictError,
     KizConflictError,
+    KizActivationNotFoundError,
 )
 import logging
 
@@ -306,6 +307,15 @@ def add_exception_handlers(app: FastAPI):
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content={"detail": str(exc), "error_code": "KIZ_CONFLICT"},
+        )
+
+    @app.exception_handler(KizActivationNotFoundError)
+    async def kiz_activation_not_found_handler(
+        request: Request, exc: KizActivationNotFoundError
+    ):
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": str(exc), "error_code": exc.error_code},
         )
 
     @app.exception_handler(RequestValidationError)

@@ -377,3 +377,23 @@ Receipt import создаёт `registered` KIZ без location/container holder.
 
 Переход `registered -> active`, holder assignment и автоматический apply из consumer
 в решение не входят.
+
+## 2026-10-01 - KIZ activation является явным scan confirmation без movement
+
+- Статус решения: `active`
+- Связанные endpoints: `POST /api/kiz/activate`
+- Связанные миграции: `20261001_kiz_activation_preflight.sql`, `20261001_add_kiz_activation.sql`
+- Superseded: нет
+
+Оператор передаёт KIZ codes, loose location, user и idempotency key. Product и receipt
+origin остаются свойствами KIZ. Atomic transaction блокирует KIZ/inventory,
+сериализует capacity по `(location, product)`, создаёт operation authorization,
+переводит holder-less registered KIZ в active и пишет `activated` без movement.
+
+Activation не создаёт второй operation ledger: используется существующая модель
+`source_system/external_operation_id/request_fingerprint/author/result_payload`, а
+`kiz_operation_items.external_line_id` хранит KIZ code с `movement_ref=NULL`.
+
+Registered остаётся known identity без physical holder; active означает физически
+идентифицированную unit с holder. Container/automatic activation и новые transfer/shipment
+flows в решение не входят.

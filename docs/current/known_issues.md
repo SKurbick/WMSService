@@ -153,12 +153,11 @@
 
 Unit/SQL-contract тесты не заменяют integration verification на PostgreSQL с фактическими movement triggers и partitions. Перед production rollout требуется применить миграцию на stage и прогнать atomicity/concurrency scenarios на реальной БД.
 
-## KIZ receipt registration: activation не определена
+## KIZ activation: container и последующие lifecycle operations вне scope
 
-- Triage: `accepted-limitation`, open question KIZ-03
-- Verified: 2026-09-28 по B2.1 service/API scope
+- Triage: `accepted-limitation`, open question KIZ-04
+- Verified: 2026-10-01 по activation service/API scope
 
-B2.1 регистрирует receipt KIZ без physical holder. Переход
-`registered -> active`, сканирование/assignment и KIZ card/list/history API в текущем
-scope не реализованы. До отдельного решения registered KIZ не представляет
-текущую физическую единицу.
+Явная loose activation `registered -> active` реализована. Activation напрямую в
+container, automatic activation, KIZ card/list/history API и новые transfer/shipment
+flows для active KIZ в текущем scope не добавлены.

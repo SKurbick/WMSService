@@ -31,6 +31,9 @@ from app.infrastructure.database.repositories.receipt_history_repository import 
     ReceiptHistoryRepository,
 )
 from app.infrastructure.database.repositories.kiz_import_repository import KizImportRepository
+from app.infrastructure.database.repositories.kiz_activation_repository import (
+    KizActivationRepository,
+)
 
 # Services
 from app.core.services.location_service import LocationService
@@ -48,6 +51,7 @@ from app.core.services.inventory_history_service import InventoryHistoryService
 from app.core.services.operations_history_service import OperationsHistoryService
 from app.core.services.receipt_history_service import ReceiptHistoryService
 from app.core.services.kiz_import_service import KizImportService
+from app.core.services.kiz_activation_service import KizActivationService
 
 
 # === Repositories ===
@@ -91,6 +95,12 @@ def get_receipt_history_repository(pool: Pool = Depends(get_db_pool)) -> Receipt
 
 def get_kiz_import_repository(pool: Pool = Depends(get_db_pool)) -> KizImportRepository:
     return KizImportRepository(pool)
+
+
+def get_kiz_activation_repository(
+    pool: Pool = Depends(get_db_pool),
+) -> KizActivationRepository:
+    return KizActivationRepository(pool)
 
 
 def get_report_repository(pool: Pool = Depends(get_db_pool)) -> ReportRepository:
@@ -160,6 +170,12 @@ def get_kiz_import_service(
     repository: KizImportRepository = Depends(get_kiz_import_repository),
 ) -> KizImportService:
     return KizImportService(repository)
+
+
+def get_kiz_activation_service(
+    repository: KizActivationRepository = Depends(get_kiz_activation_repository),
+) -> KizActivationService:
+    return KizActivationService(repository)
 
 
 def get_report_service(

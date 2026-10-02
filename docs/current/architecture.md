@@ -154,3 +154,16 @@ provenance `wms.kiz_import_message_kiz`; movements, inventory и receipt_items �
 Registration не проверяет unidentified physical capacity. Receipt quantity limit считает
 current registered + active receipt identities до insert и после него. Replay applied message
 пересчитывает counters по immutable links и возвращает `new=0`.
+
+## KIZ activation
+
+Activation использует endpoint/schema/service/repository/query boundary и одну asyncpg
+transaction. Сначала сериализуется запись общего KIZ operation ledger, затем KIZ rows блокируются
+по sorted codes. Для каждого `(location, product)` берутся advisory lock и exact loose
+inventory row lock; capacity считается по active KIZ. Operation items с KIZ code и
+отдельные `kiz_activation_authorizations` создаются до KIZ update; authorization
+служит transaction-scoped разрешением для identity guard.
+
+После `registered -> active` записывается immutable `activated` event без movement
+link. Operation завершается saved response JSON в той же transaction. Rollback отменяет
+весь batch. Existing movement DB guard продолжает защищать active KIZ.

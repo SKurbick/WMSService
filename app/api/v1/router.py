@@ -16,6 +16,7 @@ from app.api.v1.endpoints import (
     inventory_history,
     operations_history,
     receipt_history,
+    kiz,
     kiz_import,
 )
 
@@ -37,4 +38,5 @@ api_router.include_router(inventory_history.router)
 api_router.include_router(operations_history.router)
 api_router.include_router(receipt_history.router)
 
+api_router.include_router(kiz.router)
 api_router.include_router(kiz_import.router)

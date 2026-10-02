@@ -111,3 +111,12 @@ Completed операция имеет две разные роли и одина
 - B2 не создаёт movements и не изменяет inventory/receipt_items quantity.
 - Один message применяется атомарно; provenance links immutable и не являются quantity ledger.
 - Replay terminal KIZ не меняет lifecycle; conflicting origin/product отклоняет весь message.
+
+## KIZ activation
+
+- Activation меняет только `registered` без holder на `active` с exact loose `location_id`; identity/origin не меняются.
+- Переход разрешён DB guard только transaction с `activate` operation/item и activation authorization.
+- После activation `active loose KIZ <= available loose physical` для каждого `(product_id, location_id)`.
+- Operation batch атомарен и не создаёт `wms.movements`; physical quantity не меняется.
+- Один `(source_system=api, operation_type=activate, external_operation_id=idempotency_key)` соответствует одному canonical intent и saved result.
+- Event `activated` имеет `registered -> active`, location, no container и `movement_ref=NULL`.
