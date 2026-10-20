@@ -15,6 +15,7 @@ class KizImportMessageListItem(BaseModel):
     parse_status: str
     order_guid: str | None = None
     supply_number: str | None = None
+    organization: str | None = None
     exchange_name: str | None = None
     routing_key: str | None = None
     wild_group_count: int
@@ -53,6 +54,7 @@ class KizImportProcessResult(BaseModel):
     business_status: str
     order_guid: str
     supply_number: str | None = None
+    organization: str | None = None
     new_kiz_count: int
     existing_kiz_count: int
     terminal_existing_count: int
@@ -94,8 +96,10 @@ class KizInvalidMessageLink(BaseModel):
     message_id: int
     kiz_id: int
     message_order_guid: str | None = None
+    message_organization: str | None = None
     origin_type: str
     origin_reference: str | None = None
+    kiz_organization: str | None = None
 
 
 class KizImportIntegrityResponse(BaseModel):

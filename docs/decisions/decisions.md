@@ -446,3 +446,22 @@ read-only endpoint и режимами `legacy`, `task_level`. Значение 
 JSON codec пула не меняется, чтобы не изменить типы данных во всех остальных
 репозиториях сервиса. Решение одинаково действует в режимах `legacy` и
 `task_level` и не требует миграции БД.
+## 2026-10-02 — FBS KIZ Stage 1 использует СЗ как unit key
+
+Решено не вводить внешний `event_id`, canonical message hash и
+`fbs_shipment_product_groups`. Existing `assembly_task` + canonical
+`fbs_kiz_bindings` обеспечивают binding conflicts и replay, а per-occurrence
+`fbs_shipment_task_results.movement_ref` представляет multi-source shipment.
+Один movement создаётся на один фактический source внутри product transaction.
+
+## 2026-10-05 — Optional organization в receipt-import KIZ
+
+- Статус решения: `active`
+- Связанные endpoints: `/api/kiz-import/messages`, `/api/kiz-import/messages/{message_id}`, `/api/kiz-import/messages/{message_id}/process`
+- Связанные миграции: `20261005_kiz_organization_preflight.sql`, `20261005_add_kiz_organization.sql`
+- Superseded: нет
+
+`supply.organization` хранится без enum как nullable text: отдельно в raw inbox и как
+immutable identity attribute нового receipt-import KIZ. Отсутствие поля сохраняет
+legacy flow. Existing KIZ с `NULL` не backfill-ится автоматически; разные непустые
+organization для одного KIZ являются controlled conflict.

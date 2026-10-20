@@ -23,6 +23,7 @@ class KizImportIngestionResult:
     parse_status: str
     order_guid: str | None
     supply_number: str | None
+    organization: str | None
     wild_group_count: int
     mark_code_count: int
     used_supply_guid_alias: bool
@@ -32,6 +33,7 @@ class KizImportIngestionResult:
 class KizImportBusinessRequest:
     order_guid: str
     supply_number: str | None
+    organization: str | None
     codes_by_product: dict[str, list[str]]
 
 
@@ -90,6 +92,7 @@ class KizImportService:
         parse_status = "received" if parse_error is None else "invalid_json"
         order_guid = None
         supply_number = None
+        organization = None
         used_supply_guid_alias = False
         wild_group_count = 0
         mark_code_count = 0
@@ -104,6 +107,9 @@ class KizImportService:
                     used_supply_guid_alias = True
                 if supply.get("supply_number") is not None:
                     supply_number = str(supply["supply_number"])
+                source_organization = supply.get("organization")
+                if isinstance(source_organization, str) and source_organization.strip():
+                    organization = source_organization.strip()
 
             wild_groups = raw_payload.get("wild_groups")
             if isinstance(wild_groups, list):
@@ -121,6 +127,7 @@ class KizImportService:
             parse_error=parse_error,
             order_guid=order_guid,
             supply_number=supply_number,
+            organization=organization,
             wild_group_count=wild_group_count,
             mark_code_count=mark_code_count,
             exchange_name=exchange_name,
@@ -134,6 +141,7 @@ class KizImportService:
             parse_status=parse_status,
             order_guid=order_guid,
             supply_number=supply_number,
+            organization=organization,
             wild_group_count=wild_group_count,
             mark_code_count=mark_code_count,
             used_supply_guid_alias=used_supply_guid_alias,
@@ -311,9 +319,18 @@ class KizImportService:
         supply_number = supply.get("supply_number")
         if supply_number is not None:
             supply_number = str(supply_number)
+        organization = supply.get("organization")
+        if organization is not None:
+            if not isinstance(organization, str) or not organization.strip():
+                raise KizImportBusinessError(
+                    "supply.organization должен быть непустой строкой",
+                    error_code="INVALID_ORGANIZATION",
+                )
+            organization = organization.strip()
         return KizImportBusinessRequest(
             order_guid=resolved_guid,
             supply_number=supply_number,
+            organization=organization,
             codes_by_product=codes_by_product,
         )
 
@@ -401,7 +418,12 @@ class KizImportService:
                 if current is None:
                     new_codes.append(code)
                     continue
-                self._validate_existing_kiz(current, product_id, request.order_guid)
+                self._validate_existing_kiz(
+                    current,
+                    product_id,
+                    request.order_guid,
+                    request.organization,
+                )
                 target = (
                     existing_current
                     if current["lifecycle_status"] in {"registered", "active"}
@@ -426,6 +448,7 @@ class KizImportService:
             "source": self.SOURCE,
             "order_guid": request.order_guid,
             "supply_number": request.supply_number,
+            "organization": request.organization,
             "kiz_import_message_id": message_id,
             "receipt_location_code": receipt_location_code,
         }
@@ -437,12 +460,18 @@ class KizImportService:
                     kiz_code=code,
                     product_id=product_id,
                     order_guid=request.order_guid,
+                    organization=request.organization,
                     author=self.AUTHOR,
                     metadata=metadata,
                 )
                 if created is None:
                     current = await self.repository.lock_kiz_by_code(connection, code)
-                    self._validate_existing_kiz(current, product_id, request.order_guid)
+                    self._validate_existing_kiz(
+                        current,
+                        product_id,
+                        request.order_guid,
+                        request.organization,
+                    )
                     target = (
                         existing_current
                         if current["lifecycle_status"] in {"registered", "active"}
@@ -515,6 +544,7 @@ class KizImportService:
             "business_status": "applied",
             "order_guid": request.order_guid,
             "supply_number": request.supply_number,
+            "organization": request.organization,
             "new_kiz_count": sum(len(rows) for rows in created_by_product.values()),
             "existing_kiz_count": sum(len(rows) for rows in existing_current.values()),
             "terminal_existing_count": sum(len(rows) for rows in existing_terminal.values()),
@@ -522,7 +552,12 @@ class KizImportService:
         }
 
     @staticmethod
-    def _validate_existing_kiz(row, product_id: str, order_guid: str) -> None:
+    def _validate_existing_kiz(
+        row,
+        product_id: str,
+        order_guid: str,
+        organization: str | None,
+    ) -> None:
         if row is None or (
             row["product_id"] != product_id
             or row["origin_type"] != "receipt_import"
@@ -532,4 +567,13 @@ class KizImportService:
             raise KizImportBusinessError(
                 f"KIZ {code} уже принадлежит другому origin/product",
                 error_code="KIZ_OWNERSHIP_CONFLICT",
+            )
+        if (
+            organization is not None
+            and row["organization"] is not None
+            and row["organization"] != organization
+        ):
+            raise KizImportBusinessError(
+                f"KIZ {row['kiz_code']} уже принадлежит другой организации",
+                error_code="KIZ_ORGANIZATION_CONFLICT",
             )

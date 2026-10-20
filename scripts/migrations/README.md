@@ -21,6 +21,12 @@ Alembic и автоматический migration runner в проекте от�
 | 11 | `20261001_kiz_activation_preflight.sql` | Read-only проверка B2.1/C1 schema и loose holder integrity |
 | 12 | `20261001_add_kiz_activation.sql` | Idempotent activation operations, event `activated` и authorized `registered -> active` |
 | 13 | `20260929_add_fbs_task_level_processing.sql` | Детализация результата FBS по СЗ и агрегированный task-resolution status |
+| 14 | `20261002_fbs_kiz_stage1_preflight.sql` | Read-only проверка FBS task results, movement registry и KIZ-зависимостей |
+| 15 | `20261002_add_fbs_kiz_stage1.sql` | Канонические СЗ↔КИЗ bindings и physical source/movement identity в task results |
+| 16 | `20261002_extend_kiz_fbs_shipment.sql` | Controlled shipment для `registered` и loose `active` КИЗ |
+| 17 | `20261005_kiz_organization_preflight.sql` | Read-only проверка optional `supply.organization` и конфликтов provenance |
+| 18 | `20261005_add_kiz_organization.sql` | Nullable organization в KIZ inbox/KIZ, inbox backfill и immutable guard |
+| 19 | `20261005_fbs_stage1_backward_compat_hotfix.sql` | Разрешает legacy written-off task results после раннего применения Stage 1 schema |
 
 Порядок выше отражает хронологию и зависимости файлов репозитория, но не доказывает, что целевая БД начинает с состояния, совместимого с первым файлом. Перед применением нужно сравнить runtime schema с ожидаемыми объектами каждого SQL.
 
@@ -35,6 +41,9 @@ Alembic и автоматический migration runner в проекте от�
 - B2.1 preflight выполняется после B2; B2.1 migration не применяется, если preflight нашёл unsafe active receipt-import KIZ.
 - B2.1 migration конвертирует только safe legacy B2 rows; её нужно применить до выкладки B2.1-кода.
 - Activation preflight/migration выполняются после B2.1 и до выкладки `/api/kiz/activate`; migration расширяет существующий KIZ operation ledger типом `activate`, добавляет transaction authorization и не изменяет existing registered rows.
+- FBS KIZ Stage 1 применяется после FBS task-level и KIZ activation migrations: сначала preflight, затем additive schema, затем lifecycle protocol. Код Stage 1 нельзя запускать до успешного применения обоих write-SQL.
+- KIZ organization migration применяется после B2.1; сначала выполнить preflight. Она не backfill-ит existing `wms.kiz`, но извлекает валидное значение из уже сохранённого raw inbox.
+- Если FBS Stage 1 schema применена до выкладки Stage 1-кода, сразу выполнить backward-compat hotfix: старая версия пишет новые source-поля как `NULL`.
 - Rollback-скрипты в репозитории не найдены.
 - Для `wms.movements` должна существовать партиция, охватывающая дату выполнения операций.
 

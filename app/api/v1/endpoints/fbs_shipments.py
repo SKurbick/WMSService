@@ -27,6 +27,7 @@ from app.core.schemas.write_off_fbs import WriteOffAccordingToFBS
 from app.handlers.write_off_fbs_handler import (
     _calc_next_retry_at,
     _process_shipment_group,
+    format_fbs_processing_error,
     handle_write_off_fbs,
     record_task_level_attempt_failure,
 )
@@ -35,7 +36,7 @@ from app.infrastructure.database.repositories.location_repository import Locatio
 from app.infrastructure.database.repositories.movement_repository import MovementRepository
 from app.core.services.movement_service import MovementService
 from app.core.enums import FbsShipmentSource
-from app.core.exceptions import AssemblyTasksAlreadyProcessedError
+from app.core.exceptions import AssemblyTasksAlreadyProcessedError, FbsKizProcessingError
 from app.infrastructure.database.connection import get_db_pool
 from app.shared.config import settings
 
@@ -529,10 +530,24 @@ async def retry_shipment_item(item_id: int, pool: Pool = Depends(get_db_pool)):
                 )
     except AssemblyTasksAlreadyProcessedError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    except asyncpg.exceptions.CheckViolationError as e:
+    except (
+        asyncpg.exceptions.CheckViolationError,
+        asyncpg.exceptions.SerializationError,
+        asyncpg.exceptions.DeadlockDetectedError,
+        FbsKizProcessingError,
+    ) as e:
         retry_count = item["retry_count"] + 1
-        status = "retry_exhausted" if retry_count >= item["max_retries"] else "pending_retry"
+        retryable = not isinstance(e, FbsKizProcessingError) or e.retryable
+        status = (
+            "retry_exhausted"
+            if retryable and retry_count >= item["max_retries"]
+            else "pending_retry"
+            if retryable
+            else "failed"
+        )
         next_retry_at = None if status == "retry_exhausted" else _calc_next_retry_at(retry_count)
+        if not retryable:
+            next_retry_at = None
         async with pool.acquire() as conn:
             if settings.FBS_TASK_PROCESSING_MODE == "task_level":
                 async with conn.transaction():
@@ -541,12 +556,12 @@ async def retry_shipment_item(item_id: int, pool: Pool = Depends(get_db_pool)):
                         product_id=item["product_id"],
                         item_ids=[item_id],
                         shipment_repo=repo,
-                        outcome="failed" if status == "retry_exhausted" else "pending_retry",
-                        error_message=str(e),
+                        outcome="failed" if status in {"retry_exhausted", "failed"} else "pending_retry",
+                        error_message=format_fbs_processing_error(e),
                         retry_count=retry_count,
                         next_retry_at=next_retry_at,
                         item_status_override=(
-                            "retry_exhausted" if status == "retry_exhausted" else None
+                            status if status in {"retry_exhausted", "failed"} else None
                         ),
                     )
             else:
@@ -554,7 +569,7 @@ async def retry_shipment_item(item_id: int, pool: Pool = Depends(get_db_pool)):
                     conn,
                     item_id=item_id,
                     status=status,
-                    error_message=str(e),
+                    error_message=format_fbs_processing_error(e),
                     retry_count=retry_count,
                     next_retry_at=next_retry_at,
                 )

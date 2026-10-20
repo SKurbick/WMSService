@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app import consumer
 from app.api.v1.endpoints import kiz_import as endpoint
-from app.core.exceptions import KizConflictError
+from app.core.exceptions import KizConflictError, KizImportBusinessError
 from app.core.services.kiz_import_service import KizImportService
 from app.infrastructure.database.queries import kiz_import as queries
 from app.middleware.error_handler import add_exception_handlers
@@ -64,7 +64,8 @@ def test_kiz_guard_conflict_is_mapped_to_http_409():
 async def test_valid_payload_is_saved_raw_with_diagnostics_and_special_symbols():
     repository = RecordingRepository()
     raw_body = (
-        '{"supply":{"order_guid":"order-1","supply_number":"SUP-1"},'
+        '{"supply":{"order_guid":"order-1","supply_number":"SUP-1",'
+        '"organization":"  Вектор  "},'
         '"wild_groups":[{"wild":"testwild","mark_codes":["dgfhgdgfg!\\"NAk",'
         '"dfhjjdfhjdh%zbvf"]},{"wild":"testwild2","mark_codes":["K3"]}]}'
     )
@@ -79,6 +80,8 @@ async def test_valid_payload_is_saved_raw_with_diagnostics_and_special_symbols()
     ]
     assert result.order_guid == "order-1"
     assert result.supply_number == "SUP-1"
+    assert result.organization == "Вектор"
+    assert saved["organization"] == "Вектор"
     assert result.wild_group_count == 2
     assert result.mark_code_count == 3
     assert result.parse_status == "received"
@@ -96,6 +99,24 @@ async def test_supply_guid_alias_preserves_raw_and_reports_mismatch():
     assert repository.rows[0]["raw_payload"] == {"supply": {"supply_guid": "legacy-guid"}}
     assert result.order_guid == "legacy-guid"
     assert result.used_supply_guid_alias is True
+    assert result.organization is None
+
+
+@pytest.mark.parametrize("organization", ["", "   ", 42, ["Вектор"]])
+def test_invalid_optional_organization_is_rejected_during_business_apply(organization):
+    service = KizImportService(RecordingRepository())
+    message = {
+        "parse_status": "received",
+        "raw_payload": {
+            "supply": {"order_guid": "order-1", "organization": organization},
+            "wild_groups": [],
+        },
+    }
+
+    with pytest.raises(KizImportBusinessError) as caught:
+        service._canonicalize(message)
+
+    assert caught.value.error_code == "INVALID_ORGANIZATION"
 
 
 @pytest.mark.asyncio

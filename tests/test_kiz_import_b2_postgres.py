@@ -39,6 +39,12 @@ async def pool():
         await connection.execute(
             (ROOT / "scripts/migrations/20260928_kiz_receipt_b21_registered.sql").read_text()
         )
+        await connection.execute(
+            (ROOT / "scripts/migrations/20261005_kiz_organization_preflight.sql").read_text()
+        )
+        await connection.execute(
+            (ROOT / "scripts/migrations/20261005_add_kiz_organization.sql").read_text()
+        )
     finally:
         await connection.close()
 
@@ -107,9 +113,18 @@ async def prepare_receipt(pool, quantities, *, order_guid="B2-ORDER-001"):
     return location_id
 
 
-async def ingest_message(pool, groups, *, order_guid="B2-ORDER-001"):
+async def ingest_message(
+    pool,
+    groups,
+    *,
+    order_guid="B2-ORDER-001",
+    organization=None,
+):
+    supply = {"order_guid": order_guid, "supply_number": "B2-SUP-001"}
+    if organization is not None:
+        supply["organization"] = organization
     payload = {
-        "supply": {"order_guid": order_guid, "supply_number": "B2-SUP-001"},
+        "supply": supply,
         "wild_groups": groups,
     }
     result = await KizImportService(KizImportRepository(pool)).ingest(
@@ -144,6 +159,7 @@ async def test_positive_mixed_and_multi_wild_has_no_physical_side_effects(pool):
             {"wild": "testwild", "mark_codes": ["K1", 'dgfhgdgfg!"NAk', "K3"]},
             {"wild": "testwild2", "mark_codes": ["K4", "K5"]},
         ],
+        organization="Вектор",
     )
 
     result = await KizImportService(KizImportRepository(pool)).process_message(
@@ -168,6 +184,12 @@ async def test_positive_mixed_and_multi_wild_has_no_physical_side_effects(pool):
             == 10
         )
         rows = await connection.fetch("SELECT * FROM wms.kiz ORDER BY kiz_code")
+        assert all(row["organization"] == "Вектор" for row in rows)
+        with pytest.raises(asyncpg.PostgresError) as caught:
+            await connection.execute(
+                "UPDATE wms.kiz SET organization='Старт' WHERE kiz_code='K1'"
+            )
+        assert caught.value.sqlstate == "P7501"
         assert all(row["origin_type"] == "receipt_import" for row in rows)
         assert all(row["origin_reference"] == "B2-ORDER-001" for row in rows)
         assert all(row["lifecycle_status"] == "registered" for row in rows)
@@ -182,6 +204,52 @@ async def test_positive_mixed_and_multi_wild_has_no_physical_side_effects(pool):
             json.loads(row["metadata"])["receipt_location_code"] == "PUSHKINO-ПРИЁМКА"
             for row in events
         )
+        assert all(json.loads(row["metadata"])["organization"] == "Вектор" for row in events)
+
+
+@pytest.mark.asyncio
+async def test_organization_is_optional_for_legacy_payload(pool):
+    await prepare_receipt(pool, {"testwild": 1})
+    message_id = await ingest_message(
+        pool,
+        [{"wild": "testwild", "mark_codes": ["LEGACY-K1"]}],
+    )
+
+    result = await KizImportService(KizImportRepository(pool)).process_message(
+        message_id, "PUSHKINO-ПРИЁМКА"
+    )
+
+    assert result["organization"] is None
+    async with pool.acquire() as connection:
+        assert await connection.fetchval(
+            "SELECT organization FROM wms.kiz WHERE kiz_code='LEGACY-K1'"
+        ) is None
+
+
+@pytest.mark.asyncio
+async def test_existing_kiz_with_different_organization_is_rejected(pool):
+    await prepare_receipt(pool, {"testwild": 2})
+    first_id = await ingest_message(
+        pool,
+        [{"wild": "testwild", "mark_codes": ["ORG-K1"]}],
+        organization="Вектор",
+    )
+    service = KizImportService(KizImportRepository(pool))
+    await service.process_message(first_id, "PUSHKINO-ПРИЁМКА")
+    conflicting_id = await ingest_message(
+        pool,
+        [{"wild": "testwild", "mark_codes": ["ORG-K1"]}],
+        organization="Старт",
+    )
+
+    with pytest.raises(KizImportBusinessError) as caught:
+        await service.process_message(conflicting_id, "PUSHKINO-ПРИЁМКА")
+
+    assert caught.value.error_code == "KIZ_ORGANIZATION_CONFLICT"
+    async with pool.acquire() as connection:
+        assert await connection.fetchval(
+            "SELECT organization FROM wms.kiz WHERE kiz_code='ORG-K1'"
+        ) == "Вектор"
 
 
 @pytest.mark.asyncio

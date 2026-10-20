@@ -47,6 +47,7 @@ class KizImportRepository:
                     values["parse_error"],
                     values["order_guid"],
                     values["supply_number"],
+                    values["organization"],
                     values["wild_group_count"],
                     values["mark_code_count"],
                     values["exchange_name"],
@@ -136,6 +137,7 @@ class KizImportRepository:
         kiz_code: str,
         product_id: str,
         order_guid: str,
+        organization: str | None,
         author: str,
         metadata: dict[str, Any],
     ):
@@ -144,6 +146,7 @@ class KizImportRepository:
             kiz_code,
             product_id,
             order_guid,
+            organization,
             author,
             json.dumps(metadata, ensure_ascii=False),
         )

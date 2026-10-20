@@ -167,3 +167,15 @@ inventory row lock; capacity считается по active KIZ. Operation items
 После `registered -> active` записывается immutable `activated` event без movement
 link. Operation завершается saved response JSON в той же transaction. Rollback отменяет
 весь batch. Existing movement DB guard продолжает защищать active KIZ.
+## FBS KIZ Stage 1
+
+Граница идемпотентности — `assembly_task`, а не RabbitMQ message. Durable intent
+СЗ↔КИЗ хранится в `wms.fbs_kiz_bindings`; повторные delivery создают новый
+per-occurrence result, но не новый physical effect. Product transaction блокирует
+СЗ, bindings, KIZ и source inventory в каноническом порядке. Источники группируются
+по location, поэтому одна product group может атомарно создать несколько movements.
+Каждый task result хранит свой `movement_ref`.
+
+KIZ lifecycle меняется только через controlled operation protocol. Shipment
+разрешает `registered -> shipped` из FBS zone и loose `active -> shipped` из текущего
+holder. Container-held KIZ в этот protocol не входит.

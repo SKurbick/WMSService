@@ -273,10 +273,12 @@ async def _process_kiz_import_message(message, *, queue_name: str) -> None:
         )
     kiz_import_logger.info(
         "KIZ import message сохранено | message_id=%s | order_guid=%s | "
-        "supply_number=%s | wild_group_count=%s | mark_code_count=%s | parse_status=%s",
+        "supply_number=%s | organization=%s | wild_group_count=%s | "
+        "mark_code_count=%s | parse_status=%s",
         result.message_id,
         result.order_guid,
         result.supply_number,
+        result.organization,
         result.wild_group_count,
         result.mark_code_count,
         result.parse_status,

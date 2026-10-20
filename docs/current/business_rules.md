@@ -158,6 +158,9 @@
 - Один code во входном сообщении допустим только один раз; строки не нормализуются.
 - Existing registered/active KIZ того же product/receipt является idempotent; terminal не реактивируется.
 - Existing KIZ другого product/origin отклоняет всё сообщение.
+- `supply.organization` optional; непустое значение сохраняется в inbox и новых KIZ, отсутствие сохраняет legacy `NULL`.
+- Existing KIZ с другой непустой organization отклоняет всё сообщение; legacy KIZ с `organization=NULL` не переписывается автоматически.
+- После создания `wms.kiz.organization` неизменяема.
 - Message применяется атомарно; business conflict сохраняет `rejected`, system/DB error откатывается.
 - `wms.kiz_import_message_kiz` хранит immutable provenance и допускает несколько messages на один KIZ.
 - Replay applied message возвращает `new_kiz_count=0`, а linked current KIZ учитывает как existing.
@@ -172,3 +175,13 @@
 - Batch all-or-nothing; unknown, terminal, contained или active в другой location KIZ отклоняет всю операцию.
 - Active KIZ в той же location является no-op; same idempotency intent возвращает saved result, different intent даёт conflict.
 - Duplicate `kiz_codes` отклоняются validation error и не дедуплицируются.
+## FBS shipment с КИЗ — Stage 1
+
+- `assembly_tasks` сохраняет прежний контракт; `kiz_bindings` optional и additive.
+- Одна СЗ может быть канонически связана максимум с одним КИЗ, один КИЗ — максимум с одной СЗ.
+- Повтор same СЗ + same КИЗ не создаёт movement/event; смена КИЗ или СЗ является conflict.
+- Unit без КИЗ и unit с `registered` КИЗ используют FBS zone как physical source.
+- Loose `active` КИЗ использует фактический текущий holder как physical source.
+- `registered` КИЗ не активируется автоматически; успешный FBS shipment переводит его сразу в `shipped`.
+- Active container KIZ не списывается в Stage 1 и завершается controlled error без physical effect.
+- Mixed-source product group атомарна: shortage/conflict любого source откатывает всю группу.

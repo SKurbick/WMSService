@@ -89,7 +89,11 @@ WITH requested(task_id) AS (
     SELECT task.task_id,
            item.item_id AS existing_success_item_id,
            item.movement_id AS existing_movement_id,
-           min(movement.created_at) AS existing_movement_created_at
+           min(movement.created_at) AS existing_movement_created_at,
+           NULL::bigint AS existing_movement_ref,
+           NULL::varchar AS source_kind,
+           movement.from_location_id AS source_location_id,
+           NULL::bigint AS source_container_id
     FROM wms.fbs_shipment_items AS item
     CROSS JOIN LATERAL jsonb_array_elements_text(item.assembly_tasks) AS task(task_id)
     JOIN requested ON requested.task_id = task.task_id
@@ -105,7 +109,7 @@ WITH requested(task_id) AS (
           FROM wms.fbs_shipment_task_results AS item_result
           WHERE item_result.item_id = item.item_id
       )
-    GROUP BY task.task_id, item.item_id, item.movement_id
+    GROUP BY task.task_id, item.item_id, item.movement_id, movement.from_location_id
     HAVING count(*) = 1
 ), legacy_links AS (
     SELECT DISTINCT ON (task.task_id)
@@ -118,7 +122,11 @@ WITH requested(task_id) AS (
            result.task_id::text AS task_id,
            result.item_id AS existing_success_item_id,
            result.movement_id AS existing_movement_id,
-           result.movement_created_at AS existing_movement_created_at
+           result.movement_created_at AS existing_movement_created_at,
+           result.movement_ref AS existing_movement_ref,
+           result.source_kind,
+           result.source_location_id,
+           result.source_container_id
     FROM wms.fbs_shipment_task_results AS result
     JOIN requested ON requested.task_id = result.task_id::text
     JOIN wms.movements AS movement
@@ -141,7 +149,8 @@ WHERE NOT EXISTS (
 
 GET_WRITTEN_TASK_OCCURRENCES = """
 SELECT item_id, occurrence_index, task_id, movement_id, movement_created_at,
-       is_shipped_before, reason
+       movement_ref, kiz_binding_id, source_kind, source_location_id,
+       source_container_id, is_shipped_before, reason
 FROM wms.fbs_shipment_task_results
 WHERE item_id = ANY($1::bigint[])
   AND outcome = 'written_off'
@@ -153,12 +162,13 @@ INSERT INTO wms.fbs_shipment_task_results (
     effect_quantity, movement_id, movement_created_at,
     existing_success_item_id, existing_movement_id,
     existing_movement_created_at, is_shipped_before, reason, details,
-    attempt_count, first_processed_at, last_processed_at, last_error
+    attempt_count, first_processed_at, last_processed_at, last_error,
+    kiz_binding_id, movement_ref, source_kind, source_location_id, source_container_id
 )
 VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9,
     $10, $11, $12, $13, $14, $15::jsonb,
-    1, now(), now(), $16
+    1, now(), now(), $16, $17, $18, $19, $20, $21
 )
 ON CONFLICT (item_id, occurrence_index) DO UPDATE SET
     task_id = EXCLUDED.task_id,
@@ -176,23 +186,37 @@ ON CONFLICT (item_id, occurrence_index) DO UPDATE SET
     attempt_count = wms.fbs_shipment_task_results.attempt_count + 1,
     last_processed_at = now(),
     last_error = EXCLUDED.last_error,
+    kiz_binding_id = EXCLUDED.kiz_binding_id,
+    movement_ref = EXCLUDED.movement_ref,
+    source_kind = EXCLUDED.source_kind,
+    source_location_id = EXCLUDED.source_location_id,
+    source_container_id = EXCLUDED.source_container_id,
     updated_at = now()
 RETURNING result_id
 """
 
 GET_TASK_RESULTS = """
-SELECT result_id, shipment_id, item_id, occurrence_index, task_id, product_id,
-       outcome, effect_quantity, movement_id, movement_created_at,
-       existing_success_item_id, existing_movement_id,
-       existing_movement_created_at, is_shipped_before, reason,
-       attempt_count, first_processed_at, last_processed_at, last_error,
-       created_at, updated_at
-FROM wms.fbs_shipment_task_results
-WHERE shipment_id = $1
-  AND ($2::varchar IS NULL OR product_id = $2)
-  AND ($3::varchar IS NULL OR outcome = $3)
-  AND ($4::bigint IS NULL OR task_id = $4)
-ORDER BY item_id, occurrence_index
+SELECT result.result_id, result.shipment_id, result.item_id,
+       result.occurrence_index, result.task_id, result.product_id,
+       result.outcome, result.effect_quantity, result.movement_id,
+       result.movement_created_at, result.existing_success_item_id,
+       result.existing_movement_id, result.existing_movement_created_at,
+       result.is_shipped_before, result.reason, result.attempt_count,
+       result.first_processed_at, result.last_processed_at, result.last_error,
+       result.kiz_binding_id, binding.kiz_code, result.movement_ref,
+       result.source_kind, result.source_location_id,
+       location.location_code AS source_location_code, result.source_container_id,
+       result.created_at, result.updated_at
+FROM wms.fbs_shipment_task_results AS result
+LEFT JOIN wms.fbs_kiz_bindings AS binding
+  ON binding.binding_id = result.kiz_binding_id
+LEFT JOIN wms.locations AS location
+  ON location.location_id = result.source_location_id
+WHERE result.shipment_id = $1
+  AND ($2::varchar IS NULL OR result.product_id = $2)
+  AND ($3::varchar IS NULL OR result.outcome = $3)
+  AND ($4::bigint IS NULL OR result.task_id = $4)
+ORDER BY result.item_id, result.occurrence_index
 LIMIT $5 OFFSET $6
 """
 
@@ -507,7 +531,35 @@ class FbsShipmentRepository:
                 result.get("reason"),
                 json.dumps(result.get("details", {}), ensure_ascii=False),
                 result.get("last_error"),
+                result.get("kiz_binding_id"),
+                result.get("movement_ref"),
+                result.get("source_kind"),
+                result.get("source_location_id"),
+                result.get("source_container_id"),
             )
+
+    async def has_kiz_bindings(self, conn: Connection, *, assembly_tasks: Sequence[str]) -> bool:
+        return await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM wms.fbs_kiz_bindings
+                WHERE task_id = ANY($1::bigint[])
+            )
+            """,
+            [int(task_id) for task_id in assembly_tasks],
+        )
+
+    async def get_movement_ref(
+        self, conn: Connection, *, movement_id: int, movement_created_at: datetime
+    ) -> Optional[int]:
+        return await conn.fetchval(
+            """
+            SELECT movement_ref FROM wms.movement_registry
+            WHERE movement_id = $1 AND movement_created_at = $2
+            """,
+            movement_id,
+            movement_created_at,
+        )
 
     async def get_item_by_id(self, conn: Connection, item_id: int):
         return await conn.fetchrow(GET_ITEM_BY_ID, item_id)

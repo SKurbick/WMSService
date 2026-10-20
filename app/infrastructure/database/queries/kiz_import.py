@@ -2,19 +2,19 @@
 
 INSERT_MESSAGE = """
 INSERT INTO wms.kiz_import_messages (
-    raw_body, raw_payload, parse_status, parse_error, order_guid, supply_number,
+    raw_body, raw_payload, parse_status, parse_error, order_guid, supply_number, organization,
     wild_group_count, mark_code_count, exchange_name, routing_key,
     rabbit_message_id, correlation_id, headers
 )
 VALUES (
-    $1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb
+    $1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb
 )
 RETURNING *;
 """
 
 LIST_MESSAGES = """
 SELECT
-    message_id, received_at, parse_status, order_guid, supply_number,
+    message_id, received_at, parse_status, order_guid, supply_number, organization,
     exchange_name, routing_key, wild_group_count, mark_code_count,
     business_status, processed_at, business_error_code, business_error_message,
     business_result
@@ -26,7 +26,7 @@ LIMIT $1 OFFSET $2;
 GET_MESSAGE = """
 SELECT
     message_id, received_at, raw_body, raw_payload, parse_status, parse_error,
-    order_guid, supply_number, wild_group_count, mark_code_count, exchange_name,
+    order_guid, supply_number, organization, wild_group_count, mark_code_count, exchange_name,
     routing_key, rabbit_message_id, correlation_id, headers, created_at,
     business_status, processed_at, business_error_code, business_error_message,
     business_result
@@ -96,7 +96,7 @@ FOR UPDATE;
 LOCK_EXISTING_CODES = """
 SELECT
     kiz_id, kiz_code, product_id, location_id, container_id,
-    lifecycle_status, origin_type, origin_reference
+    lifecycle_status, origin_type, origin_reference, organization
 FROM wms.kiz
 WHERE kiz_code = ANY($1::text[])
 ORDER BY kiz_code, kiz_id
@@ -128,19 +128,19 @@ FOR UPDATE;
 INSERT_KIZ = """
 INSERT INTO wms.kiz (
     kiz_code, product_id, location_id, container_id, lifecycle_status,
-    origin_type, origin_reference, created_by, metadata
+    origin_type, origin_reference, organization, created_by, metadata
 )
-VALUES ($1, $2, NULL, NULL, 'registered', 'receipt_import', $3, $4, $5::jsonb)
+VALUES ($1, $2, NULL, NULL, 'registered', 'receipt_import', $3, $4, $5, $6::jsonb)
 ON CONFLICT (kiz_code) DO NOTHING
 RETURNING
     kiz_id, kiz_code, product_id, location_id, container_id,
-    lifecycle_status, origin_type, origin_reference;
+    lifecycle_status, origin_type, origin_reference, organization;
 """
 
 LOCK_KIZ_BY_CODE = """
 SELECT
     kiz_id, kiz_code, product_id, location_id, container_id,
-    lifecycle_status, origin_type, origin_reference
+    lifecycle_status, origin_type, origin_reference, organization
 FROM wms.kiz
 WHERE kiz_code = $1
 FOR UPDATE;
@@ -249,12 +249,17 @@ SELECT
     link.message_id,
     link.kiz_id,
     message.order_guid AS message_order_guid,
+    message.organization AS message_organization,
     k.origin_type,
-    k.origin_reference
+    k.origin_reference,
+    k.organization AS kiz_organization
 FROM wms.kiz_import_message_kiz link
 JOIN wms.kiz_import_messages message USING (message_id)
 JOIN wms.kiz k USING (kiz_id)
 WHERE k.origin_type <> 'receipt_import'
    OR message.order_guid IS DISTINCT FROM k.origin_reference
+   OR message.organization IS NOT NULL
+      AND k.organization IS NOT NULL
+      AND message.organization IS DISTINCT FROM k.organization
 ORDER BY link.message_id, link.kiz_id;
 """

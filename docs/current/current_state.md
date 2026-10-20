@@ -187,6 +187,8 @@ Changed/physical/movement fields намеренно отсутствуют: ст
 Он сохраняет raw payload, parsed JSON, диагностические счётчики и RabbitMQ metadata в
 `wms.kiz_import_messages`. Malformed JSON также сохраняется и ACK-ается после commit;
 ошибка записи БД приводит к NACK/requeue. Доступны read-only endpoints списка и detail.
+Optional `supply.organization` нормализуется в диагностическую колонку `organization`;
+raw payload остаётся неизменным.
 Создание КИЗ и любые изменения movements, inventory или receipt flow не выполняются.
 Перед включением consumer требуется применить датированную additive migration на stage.
 
@@ -197,6 +199,8 @@ Changed/physical/movement fields намеренно отсутствуют: ст
 `registered` с `origin_type=receipt_import` и `origin_reference=order_guid`, но без
 текущего physical holder. Receipt location сохраняется только в metadata
 события `registered`. Partial coverage разрешён.
+Если в сообщении передана `supply.organization`, она сохраняется как immutable
+nullable identity attribute в `wms.kiz`; legacy payload и KIZ сохраняют `NULL`.
 
 Обработка атомарна и идемпотентна для same message, duplicate inbox rows и additive
 replay. Terminal KIZ не реактивируется. Physical quantity, receipt snapshot и movements
@@ -221,3 +225,16 @@ capacity считается отдельно по product, operation/result ид
   результаты, агрегаты и устойчивые пары `(movement_id, movement_created_at)`.
 - Исторический backfill не выполняется; пустой результат для старого shipment не
   означает, что он не обрабатывался.
+## FBS KIZ Stage 1 (2026-10-02)
+
+FBS task-level flow принимает optional `kiz_bindings` без изменения `assembly_tasks`.
+Каноническая идемпотентность остаётся на уровне СЗ: `wms.fbs_kiz_bindings` хранит
+единственную связь СЗ↔КИЗ, а `wms.fbs_shipment_task_results` — результат каждого
+occurrence, его physical source и `movement_ref`. Отдельные `event_id`, canonical
+message hash и product-group table не используются.
+
+No-KIZ и `registered` units списываются из FBS zone. Loose `active` KIZ списывается
+из фактического holder location. Mixed product group создаёт по одному movement на
+каждый physical source, а task result связывает конкретную СЗ с нужным movement.
+Active container KIZ возвращает controlled
+`KIZ_CONTAINER_SHIPMENT_UNSUPPORTED` и оставлен для Stage 2.

@@ -161,3 +161,8 @@ Unit/SQL-contract тесты не заменяют integration verification на
 Явная loose activation `registered -> active` реализована. Activation напрямую в
 container, automatic activation, KIZ card/list/history API и новые transfer/shipment
 flows для active KIZ в текущем scope не добавлены.
+## FBS KIZ Stage 1
+
+- Active KIZ внутри container намеренно не поддерживается: возвращается `KIZ_CONTAINER_SHIPMENT_UNSUPPORTED`; container shipment относится к Stage 2.
+- Для работы Stage 1 обязательны обе write-migrations от `20261002`; deploy кода раньше schema migration несовместим.
+- Первоначальный `chk_fbs_task_result_written_off_source` запрещал старому коду писать legacy `written_off` rows после schema-first deploy. `20261005_fbs_stage1_backward_compat_hotfix.sql` разрешает только две согласованные формы: все source-поля `NULL` для legacy либо полностью заполненная Stage 1 identity.

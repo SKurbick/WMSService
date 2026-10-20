@@ -222,6 +222,8 @@ Legacy revisions читаются из `public.supply_to_sellers_warehouse`, cur
 
 KIZ card/list/history API в текущем сервисе нет. Process endpoint не реализует
 physical holder и не подставляет receipt location как current holder.
+List/detail и результат process additive содержат nullable `organization`, извлечённую
+из `supply.organization`.
 
 # KIZ operations
 
@@ -229,3 +231,17 @@ physical holder и не подставляет receipt location как current h
 
 Endpoint не создаёт movements, не поддерживает container activation и возвращает
 saved result при replay того же idempotency intent.
+## FBS KIZ Stage 1
+
+FBS ingestion payload поддерживает optional:
+
+```json
+"kiz_bindings": [
+  {"assembly_task": "10001", "kiz_code": "KIZ-001"}
+]
+```
+
+`GET /api/fbs-shipments/{shipment_id}/task-results` additive возвращает
+`kiz_binding_id`, `kiz_code`, `movement_ref`, `source_kind`,
+`source_location_id`, `source_location_code`, `source_container_id`. Legacy rows и
+payload без КИЗ сохраняют прежний контракт; новые поля nullable.

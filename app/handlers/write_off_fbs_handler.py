@@ -16,7 +16,10 @@ from app.core.exceptions import (
     AssemblyTasksAlreadyProcessedError,
     FbsShipmentItemsUpdateError,
     InconsistentFbsShipmentError,
+    FbsKizProcessingError,
 )
+from app.core.services.fbs_kiz_shipment_service import FbsKizShipmentService
+from app.infrastructure.database.repositories.fbs_kiz_repository import FbsKizRepository
 from app.infrastructure.database.repositories.movement_repository import MovementRepository
 from app.infrastructure.database.repositories.location_repository import LocationRepository
 from app.infrastructure.database.repositories.fbs_shipment_repository import FbsShipmentRepository
@@ -51,6 +54,20 @@ def _calc_next_retry_at(retry_count: int) -> datetime:
     """Экспоненциальный backoff, максимум 30 минут."""
     minutes = min(_RETRY_BASE_MINUTES * (2**retry_count), _RETRY_MAX_MINUTES)
     return datetime.now(timezone.utc) + timedelta(minutes=minutes)
+
+
+def format_fbs_processing_error(error: Exception) -> str:
+    if isinstance(error, FbsKizProcessingError):
+        return f"{error.error_code}: {error}"
+    if isinstance(
+        error,
+        (
+            asyncpg.exceptions.SerializationError,
+            asyncpg.exceptions.DeadlockDetectedError,
+        ),
+    ):
+        return f"CONCURRENT_WRITE_CONFLICT: {error}"
+    return str(error)
 
 
 async def validate_assembly_tasks(
@@ -249,6 +266,11 @@ async def _classify_task_occurrences(
                 effect_quantity=1,
                 movement_id=previous["movement_id"],
                 movement_created_at=previous["movement_created_at"],
+                movement_ref=previous.get("movement_ref"),
+                kiz_binding_id=previous.get("kiz_binding_id"),
+                source_kind=previous.get("source_kind"),
+                source_location_id=previous.get("source_location_id"),
+                source_container_id=previous.get("source_container_id"),
                 is_shipped_before=previous["is_shipped_before"],
                 reason=previous["reason"],
                 details={"preserved_from_previous_attempt": True},
@@ -280,6 +302,10 @@ async def _classify_task_occurrences(
                 existing_success_item_id=link["existing_success_item_id"],
                 existing_movement_id=link["existing_movement_id"],
                 existing_movement_created_at=link["existing_movement_created_at"],
+                movement_ref=link.get("existing_movement_ref"),
+                source_kind=link.get("source_kind"),
+                source_location_id=link.get("source_location_id"),
+                source_container_id=link.get("source_container_id"),
             )
         else:
             result.update(
@@ -328,6 +354,7 @@ async def _save_task_level_item_states(
     retry_count: Optional[int],
     next_retry_at: Optional[datetime] = None,
     item_status_override: Optional[str] = None,
+    multi_source: bool = False,
 ) -> None:
     by_item: dict[int, list[dict]] = {}
     for result in results:
@@ -344,7 +371,7 @@ async def _save_task_level_item_states(
         item_movement_id = None
         if status == "success":
             item_movement_id = movement_id
-            if item_movement_id is None:
+            if item_movement_id is None and not multi_source:
                 written_results = [
                     result
                     for result in item_results
@@ -384,6 +411,8 @@ async def _process_shipment_group_task_level(
     item_ids: Sequence[int],
     retry_count: Optional[int],
     expected_statuses: Optional[set[str]],
+    binding_errors: Optional[dict[str, FbsKizProcessingError]] = None,
+    has_payload_kiz_bindings: bool = False,
 ) -> Optional[int]:
     locked_items = await shipment_repo.lock_items_for_processing(conn, item_ids=item_ids)
     if {row["item_id"] for row in locked_items} != set(item_ids):
@@ -412,20 +441,38 @@ async def _process_shipment_group_task_level(
         locked_items=locked_items,
         shipment_repo=shipment_repo,
     )
-    claimed = (
-        await shipment_repo.mark_assembly_tasks_shipped(conn, assembly_tasks=new_tasks)
-        if new_tasks
-        else set()
-    )
-    if claimed != set(new_tasks):
-        raise AssemblyTasksAlreadyProcessedError(
-            f"Не удалось атомарно захватить новые СЗ: expected={sorted(new_tasks)}, "
-            f"updated={sorted(claimed)}"
-        )
-
+    all_result_tasks = [result["task_id"] for result in results]
+    if hasattr(shipment_repo, "has_kiz_bindings") and await shipment_repo.has_kiz_bindings(
+        conn, assembly_tasks=all_result_tasks
+    ):
+        occurrence_bindings = await FbsKizRepository().lock_bindings(conn, all_result_tasks)
+        for result in results:
+            binding = occurrence_bindings.get(result["task_id"])
+            if binding is not None:
+                result["kiz_binding_id"] = binding["binding_id"]
     movement_id: Optional[int] = None
     movement_created_at: Optional[datetime] = None
-    if new_tasks:
+    movements: list[dict] = []
+    has_persisted_bindings = False
+    if new_tasks and hasattr(shipment_repo, "has_kiz_bindings"):
+        has_persisted_bindings = await shipment_repo.has_kiz_bindings(
+            conn, assembly_tasks=new_tasks
+        )
+    if new_tasks and (has_payload_kiz_bindings or has_persisted_bindings or binding_errors):
+        movements = await FbsKizShipmentService(FbsKizRepository()).process(
+            conn,
+            shipment_id=next(iter(shipment_ids)),
+            product_id=product_id,
+            author=author,
+            fbs_location_code=settings.FBS_LOCATION_CODE,
+            results=results,
+            new_tasks=new_tasks,
+            binding_errors=binding_errors,
+        )
+        if len(movements) == 1:
+            movement_id = movements[0]["movement_id"]
+            movement_created_at = movements[0]["created_at"]
+    elif new_tasks:
         movement = MovementCreate(
             movement_type=MovementType.SHIP,
             product_id=product_id,
@@ -437,16 +484,39 @@ async def _process_shipment_group_task_level(
         created = await movement_service.create_movement_in_transaction(conn, [movement])
         movement_id = created[0].movement_id
         movement_created_at = created[0].created_at
+        movement_ref = None
+        if hasattr(shipment_repo, "get_movement_ref"):
+            movement_ref = await shipment_repo.get_movement_ref(
+                conn,
+                movement_id=movement_id,
+                movement_created_at=movement_created_at,
+            )
 
-    for result in results:
-        if result["outcome"] == "new":
+        for result in results:
+            if result["outcome"] != "new":
+                continue
             result.update(
                 outcome="written_off",
                 effect_quantity=1,
                 movement_id=movement_id,
                 movement_created_at=movement_created_at,
+                movement_ref=movement_ref,
+                source_kind="fbs_zone",
+                source_location_id=getattr(created[0], "from_location_id", None),
+                source_container_id=None,
                 reason="СЗ списано текущим movement",
             )
+
+    claimed = (
+        await shipment_repo.mark_assembly_tasks_shipped(conn, assembly_tasks=new_tasks)
+        if new_tasks
+        else set()
+    )
+    if claimed != set(new_tasks):
+        raise AssemblyTasksAlreadyProcessedError(
+            f"Не удалось атомарно захватить новые СЗ: expected={sorted(new_tasks)}, "
+            f"updated={sorted(claimed)}"
+        )
 
     await shipment_repo.upsert_task_results(conn, results=results)
     await _save_task_level_item_states(
@@ -456,6 +526,7 @@ async def _process_shipment_group_task_level(
         shipment_repo=shipment_repo,
         movement_id=movement_id,
         retry_count=retry_count,
+        multi_source=len(movements) > 1,
     )
     shipment_id = shipment_ids.pop()
     await shipment_repo.update_shipment_status(conn, shipment_id)
@@ -488,6 +559,8 @@ async def _process_shipment_group(
     item_ids: Sequence[int],
     retry_count: Optional[int] = None,
     expected_statuses: Optional[set[str]] = None,
+    binding_errors: Optional[dict[str, FbsKizProcessingError]] = None,
+    has_payload_kiz_bindings: bool = False,
 ) -> Optional[int]:
     if settings.FBS_TASK_PROCESSING_MODE == "task_level" and settings.FBS_VALIDATE_ASSEMBLY_TASKS:
         return await _process_shipment_group_task_level(
@@ -500,6 +573,8 @@ async def _process_shipment_group(
             item_ids=item_ids,
             retry_count=retry_count,
             expected_statuses=expected_statuses,
+            binding_errors=binding_errors,
+            has_payload_kiz_bindings=has_payload_kiz_bindings,
         )
     return await _process_shipment_group_legacy(
         conn=conn,
@@ -538,7 +613,16 @@ async def record_task_level_attempt_failure(
         locked_items=locked_items,
         shipment_repo=shipment_repo,
     )
+    result_tasks = [result["task_id"] for result in results]
+    bindings = {}
+    if hasattr(shipment_repo, "has_kiz_bindings") and await shipment_repo.has_kiz_bindings(
+        conn, assembly_tasks=result_tasks
+    ):
+        bindings = await FbsKizRepository().lock_bindings(conn, result_tasks)
     for result in results:
+        binding = bindings.get(result["task_id"])
+        if binding is not None:
+            result["kiz_binding_id"] = binding["binding_id"]
         if result["outcome"] == "new":
             result.update(
                 outcome=outcome,
@@ -580,6 +664,7 @@ def _group_items(
                 update={
                     "quantity": acc.quantity + item.quantity,
                     "assembly_tasks": acc.assembly_tasks + item.assembly_tasks,
+                    "kiz_bindings": (acc.kiz_bindings or []) + (item.kiz_bindings or []),
                 }
             )
     return list(grouped.values())
@@ -618,6 +703,7 @@ async def handle_write_off_fbs(
     movement_repo = MovementRepository(pool)
     location_repo = LocationRepository(pool)
     movement_service = MovementService(movement_repo, location_repo)
+    fbs_kiz_repo = FbsKizRepository()
 
     grouped_items = _group_items(items)
 
@@ -641,6 +727,14 @@ async def handle_write_off_fbs(
                 conn,
                 shipment_id=shipment_id,
                 items=_items_to_dicts(items),
+            )
+            binding_errors = await fbs_kiz_repo.persist_bindings(
+                conn,
+                shipment_id=shipment_id,
+                item_bindings=[
+                    (item_id, item.product_id, item.kiz_bindings or [])
+                    for item, item_id in zip(items, item_ids)
+                ],
             )
 
     logger.info(f"Shipment items созданы | shipment_id={shipment_id} | items={len(item_ids)}")
@@ -667,6 +761,12 @@ async def handle_write_off_fbs(
                         movement_service=movement_service,
                         shipment_repo=shipment_repo,
                         item_ids=related_item_ids,
+                        binding_errors={
+                            task_id: error
+                            for task_id, error in binding_errors.items()
+                            if task_id in set(group.assembly_tasks)
+                        },
+                        has_payload_kiz_bindings=bool(group.kiz_bindings),
                     )
 
             logger.info(
@@ -674,12 +774,36 @@ async def handle_write_off_fbs(
                 f"qty={group.quantity} | movement_id={movement_id}"
             )
 
-        except asyncpg.exceptions.CheckViolationError as e:
+        except (
+            asyncpg.exceptions.CheckViolationError,
+            asyncpg.exceptions.SerializationError,
+            asyncpg.exceptions.DeadlockDetectedError,
+            FbsKizProcessingError,
+        ) as e:
+            if isinstance(e, FbsKizProcessingError) and not e.retryable:
+                logger.error(
+                    "Permanent FBS KIZ error | product_id=%s | code=%s | error=%s",
+                    group.product_id,
+                    e.error_code,
+                    e,
+                )
+                async with pool.acquire() as conn:
+                    async with conn.transaction():
+                        await record_task_level_attempt_failure(
+                            conn,
+                            product_id=group.product_id,
+                            item_ids=related_item_ids,
+                            shipment_repo=shipment_repo,
+                            outcome="failed",
+                            error_message=f"{e.error_code}: {e}",
+                        )
+                continue
             retry_count = 0  # первая попытка
             next_retry_at = _calc_next_retry_at(retry_count)
+            error_message = format_fbs_processing_error(e)
             logger.warning(
-                f"Недостаток остатка | product_id={group.product_id} | "
-                f"next_retry_at={next_retry_at.isoformat()} | error={e}"
+                f"Retryable FBS error | product_id={group.product_id} | "
+                f"next_retry_at={next_retry_at.isoformat()} | error={error_message}"
             )
             async with pool.acquire() as conn:
                 if settings.FBS_TASK_PROCESSING_MODE == "task_level":
@@ -690,7 +814,7 @@ async def handle_write_off_fbs(
                             item_ids=related_item_ids,
                             shipment_repo=shipment_repo,
                             outcome="pending_retry",
-                            error_message=str(e),
+                            error_message=error_message,
                             retry_count=retry_count,
                             next_retry_at=next_retry_at,
                         )
@@ -700,7 +824,7 @@ async def handle_write_off_fbs(
                             conn,
                             item_id=item_id,
                             status="pending_retry",
-                            error_message=str(e),
+                            error_message=error_message,
                             retry_count=retry_count,
                             next_retry_at=next_retry_at,
                         )

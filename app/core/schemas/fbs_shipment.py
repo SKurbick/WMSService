@@ -118,6 +118,13 @@ class FbsTaskResultItem(BaseModel):
     first_processed_at: datetime
     last_processed_at: datetime
     last_error: Optional[str] = None
+    kiz_binding_id: Optional[int] = None
+    kiz_code: Optional[str] = None
+    movement_ref: Optional[int] = None
+    source_kind: Optional[str] = None
+    source_location_id: Optional[int] = None
+    source_location_code: Optional[str] = None
+    source_container_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 

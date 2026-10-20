@@ -46,6 +46,7 @@ kiz_steps_tests.md
 /wms_kiz_receipt_*.md
 /wms_kiz_activation_*.md
 /wms_fbs_kiz_*.md
+/kiz_progress_audit_for_codex.md
 
 # Временные текстовые выгрузки и ручные payload'ы в корне.
 /text*.txt

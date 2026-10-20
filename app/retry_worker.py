@@ -7,6 +7,8 @@ from typing import List
 
 import asyncpg.exceptions
 
+from app.core.exceptions import FbsKizProcessingError
+
 from app.infrastructure.database.connection import get_db_pool
 from app.infrastructure.database.repositories.fbs_shipment_repository import FbsShipmentRepository
 from app.infrastructure.database.repositories.movement_repository import MovementRepository
@@ -15,6 +17,7 @@ from app.core.services.movement_service import MovementService
 from app.handlers.write_off_fbs_handler import (
     _calc_next_retry_at,
     _process_shipment_group,
+    format_fbs_processing_error,
     normalize_stored_assembly_tasks,
     record_task_level_attempt_failure,
 )
@@ -95,7 +98,26 @@ async def process_pending_retries(pool) -> None:
                     f"movement_id={movement_id} | попытка={new_retry_count}"
                 )
 
-            except asyncpg.exceptions.CheckViolationError as e:
+            except (
+                asyncpg.exceptions.CheckViolationError,
+                asyncpg.exceptions.SerializationError,
+                asyncpg.exceptions.DeadlockDetectedError,
+                FbsKizProcessingError,
+            ) as e:
+                retryable = not isinstance(e, FbsKizProcessingError) or e.retryable
+                if not retryable:
+                    async with pool.acquire() as conn:
+                        async with conn.transaction():
+                            await record_task_level_attempt_failure(
+                                conn,
+                                product_id=product_id,
+                                item_ids=item_ids,
+                                shipment_repo=shipment_repo,
+                                outcome="failed",
+                                error_message=f"{e.error_code}: {e}",
+                                retry_count=new_retry_count,
+                            )
+                    continue
                 if new_retry_count >= max_retries:
                     logger.error(
                         f"Retry исчерпаны | shipment_id={shipment_id} | "
@@ -110,7 +132,7 @@ async def process_pending_retries(pool) -> None:
                                     item_ids=item_ids,
                                     shipment_repo=shipment_repo,
                                     outcome="failed",
-                                    error_message="Исчерпаны попытки. Недостаточно остатка.",
+                                    error_message=format_fbs_processing_error(e),
                                     retry_count=new_retry_count,
                                     item_status_override="retry_exhausted",
                                 )
@@ -120,7 +142,7 @@ async def process_pending_retries(pool) -> None:
                                     conn,
                                     item_id=item_id,
                                     status="retry_exhausted",
-                                    error_message="Исчерпаны попытки. Недостаточно остатка.",
+                                    error_message=format_fbs_processing_error(e),
                                     retry_count=new_retry_count,
                                 )
                 else:
@@ -139,7 +161,7 @@ async def process_pending_retries(pool) -> None:
                                     item_ids=item_ids,
                                     shipment_repo=shipment_repo,
                                     outcome="pending_retry",
-                                    error_message=str(e),
+                                    error_message=format_fbs_processing_error(e),
                                     retry_count=new_retry_count,
                                     next_retry_at=next_retry_at,
                                 )
@@ -149,7 +171,7 @@ async def process_pending_retries(pool) -> None:
                                     conn,
                                     item_id=item_id,
                                     status="pending_retry",
-                                    error_message=str(e),
+                                    error_message=format_fbs_processing_error(e),
                                     retry_count=new_retry_count,
                                     next_retry_at=next_retry_at,
                                 )

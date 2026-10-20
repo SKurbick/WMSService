@@ -164,12 +164,15 @@ Snapshot поступлений из 1С: `receipt_item_id`, `guid`, `product_id
 ## KIZ import B1/B2
 
 `wms.kiz_import_messages` хранит raw body/payload, RabbitMQ metadata, диагностические
-поля и B2 state `pending/applied/rejected`, result либо deterministic business error.
+поля, включая nullable `organization`, и B2 state `pending/applied/rejected`, result
+либо deterministic business error.
 
 `wms.kiz_import_message_kiz` имеет PK `(message_id, kiz_id)`, FK на inbox/KIZ,
 `was_created` и immutable trigger. Один KIZ может быть связан с несколькими duplicate
 messages. `wms.kiz.origin_type` поддерживает `warehouse_assignment` и `receipt_import`;
 partial index `idx_kiz_current_receipt_origin` ускоряет current receipt identity check.
+`wms.kiz.organization` — nullable immutable значение `supply.organization`; старые
+KIZ остаются с `NULL`. Непустые значения индексируются `idx_kiz_organization`.
 
 ## KIZ activation
 
@@ -185,3 +188,14 @@ operation/item и authorization той же transaction и target location. Exis
 `idx_kiz_active_scope` покрывает capacity count; `uq_kiz_code` покрывает code lookup.
 Event `activated` имеет `from_status=registered`, `to_status=active`, loose location и
 `movement_ref=NULL`.
+## `wms.fbs_kiz_bindings`
+
+Канонический immutable registry СЗ↔КИЗ для FBS Stage 1. Содержит `binding_id`,
+unique `task_id`, unique `kiz_code`, nullable unique `kiz_id`, `product_id`, pointers
+на первый shipment/item, `state` и timestamps. Unknown KIZ сохраняется как durable
+intent без автоматического создания `wms.kiz`.
+
+`wms.fbs_shipment_task_results` дополнена nullable полями `kiz_binding_id`,
+`movement_ref`, `source_kind`, `source_location_id`, `source_container_id`.
+`movement_ref` является связью конкретной СЗ с physical movement; для Stage 1
+`source_container_id` всегда `NULL`.

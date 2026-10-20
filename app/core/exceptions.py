@@ -142,6 +142,13 @@ class InconsistentFbsShipmentError(DomainException):
     pass
 
 
+class FbsKizProcessingError(DomainException):
+    def __init__(self, message: str, *, error_code: str, retryable: bool = False):
+        super().__init__(message)
+        self.error_code = error_code
+        self.retryable = retryable
+
+
 # === Products ===
 
 

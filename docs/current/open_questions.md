@@ -43,3 +43,6 @@ issue tracker не назначены.
 | KIZ-02 | answered | Receipt import не ищет текущую physical unit: B2.1 создаёт `registered` KIZ без holder и резерва. | Product + WMS owner | Решение 2026-09-28; `wms_kiz_receipt_b21_registered_no_reservation.md` |
 | KIZ-03 | answered | Явный `POST /api/kiz/activate` подтверждает scan, проверяет exact loose capacity и атомарно назначает active location holder без movement. | Product + WMS owner | Решение 2026-10-01; `wms_kiz_activation_registered_to_active.md` |
 | KIZ-04 | open | Как должны выполняться activation непосредственно в container и последующие transfer/shipment active KIZ? | Product + WMS owner | Намеренно вне loose-only activation scope |
+## FBS KIZ Stage 2
+
+- Требует отдельного решения physical source/provenance для shipment active container KIZ; Stage 1 этот сценарий не реализует и не ослабляет существующие container guards.
