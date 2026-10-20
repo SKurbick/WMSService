@@ -1,4 +1,6 @@
-"""OpenAPI text and example for the read-only KIZ history endpoint."""
+"""Русское описание и пример единой истории КИЗ."""
+
+from app.api.v1.openapi_kiz import SERVER_ERROR_RESPONSE, VALIDATION_RESPONSE
 
 HISTORY_EXAMPLE = {
     "kiz_code": "KIZ-001",
@@ -46,18 +48,21 @@ HISTORY_EXAMPLE = {
 
 OPERATION = {
     "summary": "Получить полную историю конкретного КИЗ",
-    "description": """Возвращает текущую карточку и хронологическую timeline без нового ledger.
+    "description": """Возвращает текущую карточку current_state и полную хронологию timeline
+из событий жизненного цикла и связанных физических движений. Код передаётся query-параметром,
+поэтому для кодов со слешами этот маршрут удобнее карточки с кодом в URL. Регистр значим.
 
-Lifecycle/identity события (`assigned`, `marked_as_error`, `deactivated`) читаются из
-`wms.kiz_events`. Physical transfer/ship читаются только по цепочке
-`wms.kiz_movement_links → wms.movement_registry → wms.movements`, без эвристик по
-reason или metadata. `shipped` event с тем же `movement_ref`, что и linked ship
-movement, объединяется в одну запись `ship`; lifecycle-поля при этом сохраняются.
+События assigned, marked_as_error, deactivated читаются из журнала КИЗ. Движения
+находятся только по явным связям КИЗ с movement_ref. Событие shipped объединяется
+со связанным движением ship в одну запись с сохранением полей жизненного цикла.
+Операции контейнера объединяют физические части в одно событие: movement_refs
+содержит все связанные ссылки, container_* — исторические сведения о контейнере.
 
-Warehouse assignment не создаёт artificial receive movement. Поле `quantity` — полное
-количество movement, а не количество конкретного КИЗ: linked KIZ представляет одну
-identified unit внутри него. История shipped KIZ доступна при текущей location `null`.
-Запрос read-only и не изменяет projection или журналы.""",
+Назначение КИЗ не создаёт приходного движения. quantity — полное количество
+связанного движения, а конкретный КИЗ представляет одну единицу внутри него.
+История отгруженного КИЗ доступна и при текущей location_id=null.
+Ответ читается в одном согласованном снимке, без пагинации и изменения данных.
+Нарушенная связь с физическим движением вызывает ошибку сервера, а не выдуманную запись.""",
     "responses": {
         200: {
             "description": "Текущая карточка и единая хронология КИЗ.",
@@ -74,5 +79,7 @@ identified unit внутри него. История shipped KIZ доступн
                 }
             },
         },
+        422: VALIDATION_RESPONSE,
+        500: SERVER_ERROR_RESPONSE,
     },
 }

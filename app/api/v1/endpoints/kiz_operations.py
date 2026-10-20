@@ -1,8 +1,13 @@
-"""Explicit idempotent KIZ-aware physical operations."""
+"""API атомарных перемещений и отгрузок с явно выбранными КИЗ."""
 
 from fastapi import APIRouter, Body, Depends
 
 from app.api.v1.dependencies import get_kiz_ship_service, get_kiz_transfer_service
+from app.api.v1.openapi_kiz import (
+    OPERATION_CONFLICT_RESPONSE,
+    SERVER_ERROR_RESPONSE,
+    VALIDATION_RESPONSE,
+)
 from app.core.schemas.kiz_operations import (
     KizShipRequest,
     KizShipResponse,
@@ -139,25 +144,47 @@ SHIP_RESPONSE_EXAMPLE = {
 
 
 @router.post(
-    "/transfer", response_model=KizTransferResponse, status_code=201,
+    "/transfer",
+    response_model=KizTransferResponse,
+    status_code=201,
     summary="Явно переместить товар и выбранные КИЗ",
     description=(
-        "Атомарно переносит доступный россыпной остаток между точными адресами, "
-        "перемещает явно перечисленные active КИЗ и поддерживает точный replay. "
-        "Для выполнения примера заранее создайте physical stock testwild на исходном "
-        "адресе и назначьте перечисленные КИЗ через /api/kiz/assign."
+        "Атомарно переносит доступную россыпь между разными точными адресами без партии и "
+        "контейнера. Товар и адреса должны существовать; дочерние адреса не учитываются. "
+        "Каждый выбранный КИЗ должен быть active, принадлежать товару и находиться "
+        "непосредственно на исходном адресе. КИЗ внутри контейнера этим запросом не перемещается.\n\n"
+        "quantity — полное целое количество строки, включая выбранные КИЗ. Разница между "
+        "quantity и числом kiz_codes расходуется из неидентифицированного остатка. "
+        "Пустой kiz_codes допустим: тогда весь расход неидентифицированный. КИЗ автоматически "
+        "не выбираются. Например, quantity=5 и два КИЗ перемещают две идентифицированные "
+        "и три неидентифицированные единицы.\n\n"
+        "На каждую строку создаётся movement с movement_ref, выбранным КИЗ назначается "
+        "целевой адрес, состояние active сохраняется. Любая ошибка откатывает все строки, "
+        "движения и изменения КИЗ. Один КИЗ нельзя указать дважды, external_line_id должны "
+        "быть уникальны.\n\n"
+        "Ключ повтора: source_system + тип операции transfer + external_operation_id. "
+        "Те же строки и КИЗ с тем же ключом возвращают сохранённый результат без новых "
+        "движений; порядок строк и кодов не важен. Изменение товара, адресов, количества, "
+        "кодов или external_line_id с тем же ключом даёт 409 KIZ_IDEMPOTENCY_CONFLICT. "
+        "Автор записывается при первом выполнении и не меняет физический смысл повтора."
     ),
     responses={
         201: {
-            "description": "Transfer выполнен либо возвращён сохранённый exact replay.",
+            "description": "Перемещение выполнено либо возвращён сохранённый результат повторной команды.",
             "content": {"application/json": {"example": TRANSFER_RESPONSE_EXAMPLE}},
-        }
+        },
+        404: {
+            "description": "Товар или локация не найдены: PRODUCT_NOT_FOUND или LOCATION_NOT_FOUND. Неизвестный выбранный КИЗ вызывает 409."
+        },
+        409: OPERATION_CONFLICT_RESPONSE,
+        422: VALIDATION_RESPONSE,
+        500: SERVER_ERROR_RESPONSE,
     },
 )
 async def transfer(
     data: KizTransferRequest = Body(
         ...,
-        description="Идемпотентная команда explicit KIZ transfer.",
+        description="Команда перемещения с ключом повтора и непустым массивом строк.",
         openapi_examples=TRANSFER_REQUEST_EXAMPLES,
     ),
     service: KizTransferService = Depends(get_kiz_transfer_service),
@@ -166,25 +193,44 @@ async def transfer(
 
 
 @router.post(
-    "/ship", response_model=KizShipResponse, status_code=201,
+    "/ship",
+    response_model=KizShipResponse,
+    status_code=201,
     summary="Явно отгрузить товар и выбранные КИЗ",
     description=(
-        "Атомарно списывает доступный россыпной остаток с точного адреса, "
-        "переводит явно перечисленные active КИЗ в shipped и поддерживает точный replay. "
-        "Для выполнения примера заранее создайте physical stock testwild на исходном "
-        "адресе и назначьте перечисленные КИЗ через /api/kiz/assign."
+        "Атомарно списывает доступную россыпь с точных исходных адресов без партии и "
+        "контейнера. Товары и адреса должны существовать. Выбранные КИЗ должны быть active, "
+        "принадлежать указанному товару и находиться непосредственно на исходном адресе.\n\n"
+        "quantity — полное целое количество, включая явно выбранные kiz_codes. "
+        "Разница списывается из неидентифицированного остатка; пустой массив кодов разрешён. "
+        "Автоматического выбора КИЗ нет. КИЗ в контейнере этим запросом не отгружаются.\n\n"
+        "На строку создаётся расходное движение ship с movement_ref. Выбранные КИЗ переходят "
+        "в shipped, их location_id/container_id очищаются, сохраняются ссылки на движения "
+        "и события shipped. Остальные КИЗ остаются на месте. Ошибка любой строки откатывает "
+        "всю команду, включая физический расход и события.\n\n"
+        "Ключ повтора: source_system + тип операции ship + external_operation_id. "
+        "Те же строки с тем же ключом возвращают сохранённый результат без повторного "
+        "списания; порядок строк и кодов не важен. Изменение товара, адресов, количества, "
+        "кодов или external_line_id при том же ключе вызывает 409 KIZ_IDEMPOTENCY_CONFLICT. "
+        "Изменение автора само по себе не создаёт новую физическую операцию."
     ),
     responses={
         201: {
-            "description": "Shipment выполнен либо возвращён сохранённый exact replay.",
+            "description": "Отгрузка выполнена либо возвращён сохранённый результат повторной команды.",
             "content": {"application/json": {"example": SHIP_RESPONSE_EXAMPLE}},
-        }
+        },
+        404: {
+            "description": "Товар или локация не найдены: PRODUCT_NOT_FOUND или LOCATION_NOT_FOUND. Неизвестный выбранный КИЗ вызывает 409."
+        },
+        409: OPERATION_CONFLICT_RESPONSE,
+        422: VALIDATION_RESPONSE,
+        500: SERVER_ERROR_RESPONSE,
     },
 )
 async def ship(
     data: KizShipRequest = Body(
         ...,
-        description="Идемпотентная команда explicit KIZ shipment.",
+        description="Команда отгрузки с ключом повтора и непустым массивом строк.",
         openapi_examples=SHIP_REQUEST_EXAMPLES,
     ),
     service: KizShipService = Depends(get_kiz_ship_service),

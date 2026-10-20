@@ -59,19 +59,19 @@ def test_request_examples_match_real_models():
     KizTerminalRequest.model_validate(TERMINAL)
     KizIntegrityViolation.model_validate(INTEGRITY_EXAMPLE)
     schema = app.openapi()
-    transfer_examples = schema["paths"]["/api/kiz-operations/transfer"]["post"][
-        "requestBody"
-    ]["content"]["application/json"]["examples"]
+    transfer_examples = schema["paths"]["/api/kiz-operations/transfer"]["post"]["requestBody"][
+        "content"
+    ]["application/json"]["examples"]
     for item in transfer_examples.values():
         KizTransferRequest.model_validate(item["value"])
-    ship_examples = schema["paths"]["/api/kiz-operations/ship"]["post"][
-        "requestBody"
-    ]["content"]["application/json"]["examples"]
+    ship_examples = schema["paths"]["/api/kiz-operations/ship"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["examples"]
     for item in ship_examples.values():
         KizShipRequest.model_validate(item["value"])
-    fill_examples = schema["paths"]["/api/container-operations/fill"]["post"][
-        "requestBody"
-    ]["content"]["application/json"]["examples"]
+    fill_examples = schema["paths"]["/api/container-operations/fill"]["post"]["requestBody"][
+        "content"
+    ]["application/json"]["examples"]
     for item in fill_examples.values():
         ContainerFillRequest.model_validate(item["value"])
     for item in schema["paths"]["/api/movements"]["post"]["requestBody"]["content"][
@@ -106,3 +106,36 @@ def test_conflicts_and_swagger_settings_are_published():
     assert conflict["examples"]["kiz"]["value"]["error_code"] == "KIZ_CONFLICT"
     assert "filter" in TestClient(app).get("/docs").text
     assert app.swagger_ui_parameters["filter"] is True
+
+
+def test_kiz_endpoints_document_errors_and_current_holder_semantics():
+    schema = app.openapi()
+    for path, methods in schema["paths"].items():
+        if not path.startswith("/api/kiz"):
+            continue
+        for operation in methods.values():
+            assert {"404", "422", "500"} <= operation["responses"].keys(), path
+            for response in operation["responses"].values():
+                assert re.search("[А-Яа-я]", response["description"]), path
+
+    summary = schema["paths"]["/api/kiz/stock-summary"]["get"]["description"]
+    assert all(value in summary for value in ("container_id", "container_qr_code", "ровно один"))
+    assignment = schema["paths"]["/api/kiz/assign"]["post"]["description"]
+    assert "/api/kiz-operations/transfer" in assignment
+    assert "/api/kiz-operations/ship" in assignment
+    for operation_type in ("transfer", "ship"):
+        operation = schema["paths"][f"/api/kiz-operations/{operation_type}"]["post"]
+        assert "KIZ_IDEMPOTENCY_CONFLICT" in operation["description"]
+        assert "KIZ_IDEMPOTENCY_CONFLICT" in operation["responses"]["409"]["description"]
+
+
+def test_kiz_documentation_matches_branch_routes_without_import_or_activation():
+    paths = app.openapi()["paths"]
+    assert "/api/kiz/activate" not in paths
+    assert not any(path.startswith("/api/kiz-import") for path in paths)
+    assert {
+        "/api/kiz",
+        "/api/kiz-history",
+        "/api/kiz-operations/transfer",
+        "/api/kiz-operations/ship",
+    } <= paths.keys()

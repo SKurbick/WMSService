@@ -1,4 +1,4 @@
-"""KIZ v1: exact locations, no physical movement API."""
+"""API реестра, назначения, остатков и закрытия КИЗ."""
 from fastapi import APIRouter, Depends, Query, Path, Body
 from app.api.v1.dependencies import get_kiz_service
 from app.core.schemas.kiz import (

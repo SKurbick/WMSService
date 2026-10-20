@@ -96,15 +96,15 @@ class KizState(BaseModel):
         description="Идентификатор существующего товара (SKU) из public.products.id."
     )
     location_id: int | None = Field(
-        description="Текущая точная локация; null у КИЗ, покинувшего склад в состоянии shipped."
+        description="Прямая локация хранения россыпи; null для КИЗ в контейнере и для отгруженного КИЗ (shipped)."
     )
     location_code: str | None = Field(
-        description="Код direct loose holder; null для contained и shipped КИЗ."
+        description="Код прямой локации хранения россыпи; null для КИЗ в контейнере и отгруженного КИЗ."
     )
-    container_id: int | None = Field(default=None, description="Прямой holder-контейнер.")
-    container_qr_code: str | None = Field(default=None, description="QR прямого holder-контейнера.")
-    container_location_id: int | None = Field(default=None, description="Текущая локация holder-контейнера.")
-    container_location_code: str | None = Field(default=None, description="Код текущей локации holder-контейнера.")
+    container_id: int | None = Field(default=None, description="Идентификатор контейнера, в котором хранится КИЗ; null при хранении россыпью или после отгрузки.")
+    container_qr_code: str | None = Field(default=None, description="QR-код контейнера хранения КИЗ.")
+    container_location_id: int | None = Field(default=None, description="Идентификатор текущей локации контейнера хранения КИЗ.")
+    container_location_code: str | None = Field(default=None, description="Код текущей локации контейнера хранения КИЗ.")
     lifecycle_status: Lifecycle = Field(
         description="Состояние: active, error, deactivated или shipped. Shipped означает, что единица покинула склад."
     )
@@ -136,7 +136,7 @@ class KizStockSummary(BaseModel):
         description="Идентификатор существующего товара (SKU) из public.products.id."
     )
     location_id: int | None = Field(
-        description="Прямая loose-локация; null для container scope."
+        description="Прямая локация россыпи; null при запросе остатка конкретного контейнера."
     )
     location_code: str | None = Field(
         description="Код прямой loose-локации; null для container scope."
@@ -146,10 +146,10 @@ class KizStockSummary(BaseModel):
     container_location_id: int | None = Field(default=None, description="ID текущей локации holder-контейнера.")
     container_location_code: str | None = Field(default=None, description="Код текущей локации holder-контейнера.")
     physical_quantity: Decimal = Field(
-        description="Физическое количество: только available, без партии и контейнера на точном адресе. В JSON — десятичная строка."
+        description="Физический доступный остаток без партии: россыпь на точном адресе либо содержимое выбранного контейнера. В JSON — десятичная строка."
     )
     identified_quantity: int = Field(
-        description="Число активных КИЗ на этом адресе для товара. Один активный КИЗ соответствует одной единице."
+        description="Число active КИЗ товара в выбранной локации россыпи либо контейнере. Один КИЗ соответствует одной единице."
     )
     unidentified_quantity: Decimal = Field(
         description="physical_quantity минус identified_quantity. В JSON — десятичная строка; при нарушении учёта может быть отрицательной."
@@ -179,12 +179,12 @@ class KizEvent(BaseModel):
         description="Идентификатор существующего товара (SKU) из public.products.id."
     )
     location_id: int | None = Field(
-        description="Прямая loose-локация holder; null для contained lifecycle events."
+        description="Прямая локация КИЗ на момент события; null для события КИЗ внутри контейнера."
     )
     container_id: int | None = Field(default=None, description="Снимок прямого holder-контейнера.")
     movement_ref: int | None = Field(
         default=None,
-        description="Ссылка на physical movement; обязательна для shipped и null для событий KIZ v1."
+        description="Стабильная ссылка на физическое движение; обязательна для shipped, null для назначения и закрытия без движения."
     )
     author: str = Field(
         description="Автор операции: логин оператора или имя вызывающей системы. Не подтверждает права доступа."
