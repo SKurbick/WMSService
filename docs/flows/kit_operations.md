@@ -82,7 +82,8 @@ Retry/idempotency key не реализован. Повторный одинак
 - `batch_number IS NULL`;
 - `container_code IS NULL`.
 
-Если нужный расходный остаток есть только в контейнере, endpoint возвращает HTTP 409 с detail `Kit operation supports only loose stock in MVP`.
+Если нужный расходный остаток есть только в контейнере, endpoint возвращает HTTP 409:
+в MVP kit operation поддерживает только россыпной остаток.
 
 Не реализовано в MVP:
 

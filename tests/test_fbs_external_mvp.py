@@ -396,6 +396,9 @@ class FakeRetryShipmentRepository:
         self.errors = []
         self.get_calls = 0
 
+    async def get_items_by_shipment_id(self, conn, shipment_id):
+        return [{"error_message": None}]
+
     async def get_shipment_by_id(self, conn, shipment_id):
         self.get_calls += 1
         if self.get_calls == 1:
@@ -465,6 +468,9 @@ async def test_single_retry_parse_error_does_not_call_handle(monkeypatch):
 
 
 class FakeMassRetryShipmentRepository:
+    async def get_items_by_shipment_id(self, conn, shipment_id):
+        return [{"error_message": None}]
+
     def __init__(self, raw_message):
         self.raw_message = raw_message
         self.errors = []
@@ -683,3 +689,33 @@ async def test_item_retry_invalid_assembly_tasks_does_not_call_process_and_marks
     assert repo.status_updates[0]["item_id"] == 101247
     assert repo.status_updates[0]["status"] == "failed"
     assert "assembly_tasks содержит нечисловые значения" in repo.status_updates[0]["error_message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mass", [False, True])
+@pytest.mark.parametrize("code", ["KIZ_CONFLICT", "CONCURRENT_WRITE_CONFLICT"])
+async def test_shipment_retries_return_409_with_saved_conflict(monkeypatch, mass, code):
+    raw = [_valid_fbs_raw_item()]
+    repository_class = FakeMassRetryShipmentRepository if mass else FakeRetryShipmentRepository
+    repo = repository_class(raw)
+
+    async def get_items(conn, shipment_id):
+        return [{"error_message": code + ": conflict"}]
+
+    async def handle(*args, **kwargs):
+        return 23023
+
+    monkeypatch.setattr(repo, "get_items_by_shipment_id", get_items)
+    monkeypatch.setattr(endpoint, "FbsShipmentRepository", lambda: repo)
+    monkeypatch.setattr(endpoint, "handle_write_off_fbs", handle)
+    if mass:
+        response = await endpoint.retry_shipments(
+            body=endpoint.RetryRequest(shipment_ids=[23023]), pool=FakeEndpointPool()
+        )
+    else:
+        response = await endpoint.retry_shipment(23023, pool=FakeEndpointPool())
+    assert response.status_code == 409
+    payload = json.loads(response.body)
+    result = payload["results"][0] if mass else payload
+    assert result["shipment_id"] == 23023
+    assert result["error"] == code + ": conflict"

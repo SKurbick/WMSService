@@ -12,6 +12,8 @@ class RecalculateInventoryRequest(BaseModel):
     product_id: Optional[str] = Field(None, description="ID товара (опционально, если None - все)")
     from_date: Optional[date] = Field(None, description="Временно запрещено: разрешен только полный пересчет available")
 
+    model_config = {"json_schema_extra": {"examples": [{"product_id": "wild1825", "from_date": None}, {}]}}
+
 
 class RecalculateInventoryResponse(BaseModel):
     """Результат пересчёта остатков"""
@@ -93,6 +95,30 @@ class AuditSummaryResponse(BaseModel):
     )
     orphan_location_parent_count: int = Field(
         ..., description="Locations с parent_location_id без соответствующего parent"
+    )
+    active_contents_without_inventory_count: int = Field(
+        ..., description="Active container contents без exact contained inventory"
+    )
+    contained_inventory_without_contents_count: int = Field(
+        ..., description="Contained available inventory без active contents"
+    )
+    container_quantity_mismatch_count: int = Field(
+        ..., description="Несовпадение quantity contents и contained inventory"
+    )
+    container_location_mismatch_count: int = Field(
+        ..., description="Contained inventory не в текущей location контейнера"
+    )
+    unsupported_container_inventory_status_count: int = Field(
+        ..., description="Container inventory со status, отличным от available"
+    )
+    empty_container_with_contents_count: int = Field(
+        ..., description="Empty containers с active contents"
+    )
+    nonempty_container_without_contents_count: int = Field(
+        ..., description="Open/sealed containers без active contents"
+    )
+    invalid_container_movement_provenance_count: int = Field(
+        ..., description="Container movements вне полного container_operation provenance"
     )
 
     class Config:

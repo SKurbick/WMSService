@@ -4,7 +4,12 @@ from typing import List, Optional
 from datetime import date
 from asyncpg import Pool, Record
 from app.infrastructure.database.queries import system as queries
-from app.core.exceptions import NegativeCalculatedInventoryError
+from app.core.exceptions import (
+    ContainerInventoryIntegrityError,
+    NegativeCalculatedInventoryError,
+)
+from app.core.kiz_errors import KizConflictError
+from app.infrastructure.database.queries.kiz import INTEGRITY as KIZ_INTEGRITY
 
 
 def _format_negative_inventory_rows(rows: List[Record]) -> str:
@@ -46,12 +51,26 @@ class SystemRepository:
 
         Выполняет транзакцию:
         1. Проверяет, что пересчет available из movements не дает отрицательных остатков
-        2. Удаляет только available записи inventory
-        3. Пересчитывает available остатки из movements
+        2. Проверяет target projection против active КИЗ
+        3. UPSERT available projection, удаляет obsolete rows, проверяет KIZ integrity
         4. Возвращает статистику available остатков
         """
         async with self.pool.acquire() as conn:
-            async with conn.transaction():
+            async with conn.transaction(isolation="read_committed"):
+                # Freeze ledger writers before projection. EXCLUSIVE inventory lock also
+                # blocks SELECT FOR UPDATE in assignment/terminal until maintenance commits.
+                # A conflicting legacy lock order may deadlock: rollback maps to HTTP 409.
+                await conn.execute("LOCK TABLE wms.movements IN SHARE MODE")
+                await conn.execute("LOCK TABLE wms.inventory IN EXCLUSIVE MODE")
+                container_conflicts = await conn.fetch(
+                    queries.CHECK_CONTAINER_PROJECTION, product_id
+                )
+                if container_conflicts:
+                    raise ContainerInventoryIntegrityError(
+                        "Container projection invariant нарушен до пересчета inventory",
+                        diagnostics=[dict(row) for row in container_conflicts],
+                    )
+
                 negative_rows = await conn.fetch(
                     queries.CHECK_NEGATIVE_CALCULATED_INVENTORY, product_id
                 )
@@ -62,8 +81,29 @@ class SystemRepository:
                         f"{details}"
                     )
 
-                await conn.execute(queries.DELETE_AVAILABLE_INVENTORY, product_id)
+                kiz_conflicts = await conn.fetch(queries.CHECK_CALCULATED_KIZ, product_id)
+                if kiz_conflicts:
+                    raise KizConflictError(
+                        "Пересчет уменьшит физический остаток ниже active КИЗ",
+                        diagnostics=[dict(row) for row in kiz_conflicts],
+                    )
                 await conn.execute(queries.RECALCULATE_INVENTORY, product_id)
+                await conn.execute(queries.DELETE_AVAILABLE_INVENTORY, product_id)
+                final_conflicts = await conn.fetch(KIZ_INTEGRITY, product_id)
+                if final_conflicts:
+                    raise KizConflictError(
+                        "Нарушение KIZ integrity после пересчета",
+                        diagnostics=[dict(row) for row in final_conflicts],
+                    )
+
+                final_container_conflicts = await conn.fetch(
+                    queries.CHECK_CONTAINER_PROJECTION, product_id
+                )
+                if final_container_conflicts:
+                    raise ContainerInventoryIntegrityError(
+                        "Container projection invariant нарушен после пересчета inventory",
+                        diagnostics=[dict(row) for row in final_container_conflicts],
+                    )
 
                 result = await conn.fetchrow(queries.GET_INVENTORY_STATS, product_id)
                 return result

@@ -1,8 +1,14 @@
-"""API raw inbox и controlled B2 apply импорта КИЗ."""
+"""API журнала сообщений и регистрации КИЗ поступлений."""
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from app.api.v1.dependencies import get_kiz_import_service
+from app.api.v1.openapi_kiz_import import (
+    DETAIL_DOCUMENTATION,
+    INTEGRITY_DOCUMENTATION,
+    LIST_DOCUMENTATION,
+    PROCESS_DOCUMENTATION,
+)
 from app.core.schemas.kiz_import import (
     KizImportIntegrityResponse,
     KizImportMessageDetail,
@@ -12,13 +18,13 @@ from app.core.schemas.kiz_import import (
 from app.core.services.kiz_import_service import KizImportService
 from app.shared.config import settings
 
-router = APIRouter(prefix="/kiz-import", tags=["KIZ Import"])
+router = APIRouter(prefix="/kiz-import", tags=["Импорт КИЗ"])
 
 
 @router.get(
     "/integrity",
     response_model=KizImportIntegrityResponse,
-    summary="Проверить receipt-origin инварианты KIZ import",
+    **INTEGRITY_DOCUMENTATION,
 )
 async def get_kiz_import_integrity(
     service: KizImportService = Depends(get_kiz_import_service),
@@ -29,11 +35,22 @@ async def get_kiz_import_integrity(
 @router.get(
     "/messages",
     response_model=list[KizImportMessageListItem],
-    summary="Получить raw сообщения импорта КИЗ",
+    **LIST_DOCUMENTATION,
 )
 async def list_kiz_import_messages(
-    limit: int = Query(100, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    limit: int = Query(
+        100,
+        ge=1,
+        le=200,
+        description="Количество сообщений на странице: от 1 до 200.",
+        examples=[100],
+    ),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="Количество пропускаемых сообщений, начиная с самых новых.",
+        examples=[0],
+    ),
     service: KizImportService = Depends(get_kiz_import_service),
 ) -> list[KizImportMessageListItem]:
     return await service.list_messages(limit, offset)
@@ -42,14 +59,15 @@ async def list_kiz_import_messages(
 @router.post(
     "/messages/{message_id}/process",
     response_model=KizImportProcessResult,
-    summary="Применить сохранённое сообщение к существующему поступлению",
-    description=(
-        "Регистрирует receipt KIZ без physical holder и резервирования остатков. "
-        "Не создаёт movements, inventory или receipt_items и не вызывается consumer-ом автоматически."
-    ),
+    **PROCESS_DOCUMENTATION,
 )
 async def process_kiz_import_message(
-    message_id: int = Path(..., ge=1),
+    message_id: int = Path(
+        ...,
+        ge=1,
+        description="Идентификатор сообщения из журнала импорта КИЗ; целое число от 1.",
+        examples=[123],
+    ),
     service: KizImportService = Depends(get_kiz_import_service),
 ) -> KizImportProcessResult:
     return await service.process_message(
@@ -61,10 +79,15 @@ async def process_kiz_import_message(
 @router.get(
     "/messages/{message_id}",
     response_model=KizImportMessageDetail,
-    summary="Получить raw сообщение импорта КИЗ",
+    **DETAIL_DOCUMENTATION,
 )
 async def get_kiz_import_message(
-    message_id: int = Path(..., ge=1),
+    message_id: int = Path(
+        ...,
+        ge=1,
+        description="Идентификатор сохранённой доставки сообщения; целое число от 1.",
+        examples=[123],
+    ),
     service: KizImportService = Depends(get_kiz_import_service),
 ) -> KizImportMessageDetail:
     message = await service.get_message(message_id)

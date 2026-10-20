@@ -78,7 +78,6 @@ class ContainerStatus(str, Enum):
     EMPTY = "empty"  # Пустой
     SEALED = "sealed"  # Запечатан
     OPEN = "open"  # Вскрыт
-    IN_TRANSIT = "in_transit"  # В пути
     BLOCKED = "blocked"  # Заблокирован
 
 

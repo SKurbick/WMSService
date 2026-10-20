@@ -52,26 +52,6 @@ class ContainerRepository:
             result = await conn.fetchrow(queries.GET_CONTAINER_BY_ID, container_id)
             return result
 
-    async def update_location(self, container_id: int, location_code: str) -> Optional[Record]:
-        """Обновить локацию контейнера"""
-        async with self.pool.acquire() as conn:
-            result = await conn.fetchrow(
-                queries.UPDATE_CONTAINER_LOCATION, container_id, location_code
-            )
-            return result
-
-    async def unpack(self, qr_code: str, product_id: str, quantity: int) -> Optional[Record]:
-        """
-        Вскрыть контейнер и извлечь товар
-
-        Вызывает PostgreSQL функцию wms.unpack_from_container()
-        """
-        async with self.pool.acquire() as conn:
-            result = await conn.fetchrow(
-                queries.UNPACK_FROM_CONTAINER, qr_code, product_id, quantity
-            )
-            return result
-
     async def update_status(self, container_id: int, status: str) -> Optional[Record]:
         """Обновить статус контейнера"""
         async with self.pool.acquire() as conn:

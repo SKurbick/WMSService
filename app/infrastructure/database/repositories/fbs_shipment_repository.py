@@ -29,7 +29,10 @@ SET
     error_message   = COALESCE($3, error_message),
     movement_id     = COALESCE($4, movement_id),
     retry_count     = COALESCE($5, retry_count),
-    next_retry_at   = COALESCE($6, next_retry_at),
+    next_retry_at   = CASE
+        WHEN $2::varchar IN ('success', 'failed', 'retry_exhausted') THEN NULL
+        ELSE COALESCE($6, next_retry_at)
+    END,
     updated_at      = now()
 WHERE item_id = $1
 """
@@ -353,6 +356,19 @@ WHERE shipment_id = $1
 
 
 class FbsShipmentRepository:
+    async def record_write_conflict(
+        self, conn, item_ids, error_code, error_message, retry_count, next_retry_at
+    ):
+        """Record a rolled-back group failure without overwriting concurrent success."""
+        await conn.execute(
+            RECORD_WRITE_CONFLICT,
+            list(item_ids),
+            error_code,
+            error_message,
+            retry_count,
+            next_retry_at,
+        )
+
     """Репозиторий для журнала отгрузок ФБС.
 
     Все методы принимают conn (asyncpg Connection), а не pool —
@@ -661,3 +677,18 @@ class FbsShipmentRepository:
             ORDER BY next_retry_at ASC
         """
         )
+
+
+RECORD_WRITE_CONFLICT = """
+UPDATE wms.fbs_shipment_items
+SET status = CASE
+        WHEN $2 = 'KIZ_CONFLICT' THEN 'failed'
+        WHEN $4 >= max_retries THEN 'retry_exhausted'
+        ELSE 'pending_retry' END,
+    error_message = $2 || ': ' || $3,
+    retry_count = $4,
+    next_retry_at = CASE
+        WHEN $2 = 'KIZ_CONFLICT' OR $4 >= max_retries THEN NULL
+        ELSE $5::timestamptz END
+WHERE item_id = ANY($1::bigint[]) AND status <> 'success'
+"""

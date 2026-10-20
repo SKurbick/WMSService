@@ -11,6 +11,7 @@ from app.core.schemas.movement import (
 )
 from app.core.services.movement_service import MovementService
 from app.api.v1.dependencies import get_movement_service
+from app.api.v1.openapi_kiz import CONFLICT_RESPONSE, success
 
 router = APIRouter(prefix="/movements", tags=["Движения"])
 
@@ -23,7 +24,7 @@ MOVEMENT_TYPES_DESCRIPTION = """
 - `transfer` — перемещение товара между локациями. Используйте `from_location_code` + `to_location_code`.
 - `pick` — отбор товара. Обычно используется с `from_location_code`, если операция должна уменьшить остаток в локации отбора.
 - `ship` — отгрузка/списание товара со склада. Используйте `from_location_code`. Уменьшает остаток.
-- `unpack` — распаковка товара из контейнера в россыпь. Обычно создается специализированной контейнерной операцией, не рекомендуется фронту создавать вручную без отдельного сценария.
+- `unpack` — legacy movement type; через generic endpoint допустим только для россыпи без container_code.
 - `adjust` — ручная корректировка остатка: увеличение — `to_location_code` заполнен и `from_location_code = null`; уменьшение — `from_location_code` заполнен и `to_location_code = null`.
 - `write_off` — списание по Python enum. Перед ручным использованием проверьте, что значение разрешено constraint целевой БД; для обычной отгрузки/списания используйте `ship`.
 - `kit_assembly` — служебное движение комплектации. Создается через `POST /api/kit-operations`, фронту не нужно создавать вручную через `POST /api/movements`.
@@ -153,7 +154,18 @@ MOVEMENT_REQUEST_EXAMPLES = {
     response_model=MovementBulkCreateResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Создать движения товаров / ручная корректировка остатков",
-    description=CREATE_MOVEMENTS_DESCRIPTION,
+    description=CREATE_MOVEMENTS_DESCRIPTION + (
+        "\n\n**Контейнеры:** `container_code` должен быть null/omitted. Container stock "
+        "изменяется только через `/api/container-operations/*`. "
+        "\n\n**Активные КИЗ:** обычный расход может списать только неидентифицированную часть. "
+        "Например, при physical=10 и identified=4 можно списать 6, но не 7. "
+        "При KIZ_CONFLICT весь массив откатывается с HTTP 409. При CONCURRENT_WRITE_CONFLICT "
+        "повторите весь запрос. Сам по себе повтор успешного запроса создаёт новые движения."
+    ),
+    responses={201: success({"created": [{"movement_id": 1001, "movement_type": "receive",
+        "product_id": "wild1825", "from_location_id": None, "to_location_id": 10,
+        "quantity": 20, "created_at": "2026-09-07T10:00:00+03:00"}], "total": 1}),
+        409: CONFLICT_RESPONSE},
 )
 async def create_movement(
     data: List[MovementCreate] = Body(
@@ -185,7 +197,7 @@ async def create_movement(
     - **to_location_code**: Код локации-назначения (опционально)
     - **quantity**: Количество
     - **batch_number**: Номер партии (опционально)
-    - **container_code**: Код контейнера (опционально)
+    - **container_code**: Только null/omitted; generic endpoint работает с россыпью
     - **user_name**: Имя пользователя (опционально)
     - **reason**: Причина/комментарий (опционально)
 

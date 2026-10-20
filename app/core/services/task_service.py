@@ -6,8 +6,6 @@ from decimal import Decimal
 from typing import List, Optional
 from datetime import date
 
-from fastapi import HTTPException
-
 from app.core.schemas.task import (
     TaskCreate,
     TaskUpdate,
@@ -238,7 +236,7 @@ class TaskService:
         warnings = []
         for item in data.items:
             available = await self.task_repo.get_product_qty_in_zone(
-                item.product_id, data.from_location_code
+                item.product_id, data.from_location_code, item.batch_number
             )
             if item.quantity_planned > available:
                 warnings.append({
@@ -501,22 +499,23 @@ class TaskService:
 
         rows = await self.task_repo.get_suggestions_raw(task_id)
 
-        # Группируем по product_id
+        # Группируем по exact product/batch scope.
         products: dict = {}
         for row in rows:
-            pid = row["product_id"]
-            if pid not in products:
-                products[pid] = {
-                    "product_id": pid,
+            key = (row["product_id"], row["requested_batch_number"])
+            if key not in products:
+                products[key] = {
+                    "product_id": row["product_id"],
+                    "batch_number": row["requested_batch_number"],
                     "quantity_needed": float(row["quantity_needed"]),
                     "locations": [],
                     "running_total": 0.0,
                 }
-            products[pid]["locations"].append(row)
+            products[key]["locations"].append(row)
 
         suggestions = []
         warnings = []
-        for pid, pdata in products.items():
+        for _, pdata in products.items():
             locations = []
             running = 0.0
             needed = pdata["quantity_needed"]
@@ -536,11 +535,12 @@ class TaskService:
                     )
                 )
 
-            available_total = sum(float(l["quantity"]) for l in pdata["locations"])
+            available_total = sum(float(location["quantity"]) for location in pdata["locations"])
 
             suggestions.append(
                 ProductSuggestion(
-                    product_id=pid,
+                    product_id=pdata["product_id"],
+                    batch_number=pdata["batch_number"],
                     quantity_needed=needed,
                     available_total=available_total,
                     locations=locations,
@@ -549,7 +549,8 @@ class TaskService:
 
             if available_total < needed:
                 warnings.append({
-                    "product_id": pid,
+                    "product_id": pdata["product_id"],
+                    "batch_number": pdata["batch_number"],
                     "message": (
                         f"В зоне доступно {available_total:.0f} шт, "
                         f"запланировано {needed:.0f} шт"
@@ -608,7 +609,7 @@ class TaskService:
             # Нельзя подтвердить больше чем есть в ячейке
             if item["from_location_id"]:
                 available = await self.task_repo.get_inventory_qty_in_location(
-                    item["product_id"], item["from_location_id"]
+                    item["product_id"], item["from_location_id"], item["batch_number"]
                 )
                 if quantity > available:
                     raise TaskInvalidStatusError(
@@ -750,11 +751,12 @@ class TaskService:
         recount_results = []
         for item in data.items:
             current_qty = await self.task_repo.get_inventory_qty_by_location_code(
-                item.product_id, item.location_code
+                item.product_id, item.location_code, item.batch_number
             )
             recount_results.append({
                 "product_id": item.product_id,
                 "location_code": item.location_code,
+                "batch_number": item.batch_number,
                 "quantity_in_system": current_qty,
                 "quantity_counted": item.quantity_counted,
                 "difference": item.quantity_counted - current_qty,
@@ -782,7 +784,7 @@ class TaskService:
                 user_ids=approver_ids,
                 notification_type="recount_completed",
                 title=f"Пересчёт завершён для заявки #{parent_task_id}",
-                message=f"Сотрудник завершил пересчёт. Требуется подтверждение.",
+                message="Сотрудник завершил пересчёт. Требуется подтверждение.",
                 severity="warning",
                 related_task_id=task_id,
                 metadata={"recount_results": recount_results, "parent_task_id": parent_task_id},

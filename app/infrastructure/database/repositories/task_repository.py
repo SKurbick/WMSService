@@ -186,10 +186,12 @@ class TaskRepository:
             return await conn.fetch(queries.GET_SUGGESTIONS, task_id)
 
     async def get_product_qty_in_zone(
-            self, product_id: str, zone_code: str
+            self, product_id: str, zone_code: str, batch_number: Optional[str]
     ) -> float:
         async with self.pool.acquire() as conn:
-            row = await conn.fetchrow(queries.GET_PRODUCT_QTY_IN_ZONE, product_id, zone_code)
+            row = await conn.fetchrow(
+                queries.GET_PRODUCT_QTY_IN_ZONE, product_id, zone_code, batch_number
+            )
             return float(row["available"]) if row else 0.0
 
     # ============================================================
@@ -245,11 +247,14 @@ class TaskRepository:
             return await conn.fetchrow(queries.UPDATE_TASK_ITEM_APPROVED_QTY, item_id, quantity)
 
     async def get_inventory_qty_in_location(
-            self, product_id: str, location_id: int
+            self, product_id: str, location_id: int, batch_number: Optional[str]
     ) -> float:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                queries.GET_INVENTORY_QTY_IN_LOCATION, product_id, location_id
+                queries.GET_INVENTORY_QTY_IN_LOCATION,
+                product_id,
+                location_id,
+                batch_number,
             )
             return float(row["available"]) if row else 0.0
 
@@ -273,11 +278,14 @@ class TaskRepository:
             )
 
     async def get_inventory_qty_by_location_code(
-            self, product_id: str, location_code: str
+            self, product_id: str, location_code: str, batch_number: Optional[str]
     ) -> float:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                queries.GET_INVENTORY_QTY_BY_LOCATION_CODE, product_id, location_code
+                queries.GET_INVENTORY_QTY_BY_LOCATION_CODE,
+                product_id,
+                location_code,
+                batch_number,
             )
             return float(row["current_qty"]) if row else 0.0
 

@@ -1,11 +1,18 @@
 """Фоновый воркер для повторной обработки pending_retry позиций"""
 
 import asyncio
+import json
 import logging
 from collections import defaultdict
 from typing import List
 
 import asyncpg.exceptions
+from app.core.kiz_errors import (
+    KizGuardError,
+    write_conflict_code,
+    write_conflict_message,
+)
+
 
 from app.core.exceptions import FbsKizProcessingError
 
@@ -97,6 +104,19 @@ async def process_pending_retries(pool) -> None:
                     f"Retry успех | shipment_id={shipment_id} | product_id={product_id} | "
                     f"movement_id={movement_id} | попытка={new_retry_count}"
                 )
+
+            except KizGuardError as e:
+                async with pool.acquire() as conn:
+                    async with conn.transaction():
+                        await shipment_repo.record_write_conflict(
+                            conn,
+                            item_ids,
+                            write_conflict_code(e),
+                            write_conflict_message(e),
+                            new_retry_count,
+                            _calc_next_retry_at(new_retry_count),
+                        )
+                        await shipment_repo.update_shipment_status(conn, shipment_id)
 
             except (
                 asyncpg.exceptions.CheckViolationError,

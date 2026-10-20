@@ -1,4 +1,4 @@
-"""Схемы raw inbox и B2 business apply импорта КИЗ."""
+"""Схемы журнала сообщений и регистрации КИЗ поступления."""
 
 from datetime import datetime
 from decimal import Decimal
@@ -10,102 +10,204 @@ from pydantic import BaseModel, ConfigDict, Field
 class KizImportMessageListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    message_id: int
-    received_at: datetime
-    parse_status: str
-    order_guid: str | None = None
-    supply_number: str | None = None
-    organization: str | None = None
-    exchange_name: str | None = None
-    routing_key: str | None = None
-    wild_group_count: int
-    mark_code_count: int
-    business_status: str
-    processed_at: datetime | None = None
-    business_error_code: str | None = None
-    business_error_message: str | None = None
-    business_result: dict[str, Any] | None = None
+    message_id: int = Field(description="Идентификатор сохранённой доставки сообщения.")
+    received_at: datetime = Field(description="Дата и время получения сообщения с часовым поясом.")
+    parse_status: str = Field(
+        description="Разбор JSON: received — корректный JSON, invalid_json — ошибка разбора. received не гарантирует корректность бизнес-полей."
+    )
+    order_guid: str | None = Field(
+        None,
+        description="GUID поступления из supply.order_guid; при отсутствии используется временный аналог supply.supply_guid.",
+    )
+    supply_number: str | None = Field(
+        None, description="Номер поставки из supply.supply_number; диагностическое поле."
+    )
+    organization: str | None = Field(
+        None,
+        description="Организация из supply.organization без пробелов по краям; отсутствие поля соответствует null.",
+    )
+    exchange_name: str | None = Field(
+        None, description="Имя обменника RabbitMQ, из которого доставлено сообщение."
+    )
+    routing_key: str | None = Field(None, description="Ключ маршрутизации доставки RabbitMQ.")
+    wild_group_count: int = Field(
+        description="Количество товарных групп во входном сообщении до бизнес-проверок."
+    )
+    mark_code_count: int = Field(
+        description="Количество переданных кодов маркировки до проверки дубликатов и корректности."
+    )
+    business_status: str = Field(
+        description="Обработка: pending — ещё не применено, applied — применено, rejected — отклонено бизнес-проверками."
+    )
+    processed_at: datetime | None = Field(
+        None, description="Дата и время обработки сообщения; до обработки null."
+    )
+    business_error_code: str | None = Field(
+        None, description="Машинный код причины отклонения; при отсутствии ошибки null."
+    )
+    business_error_message: str | None = Field(
+        None, description="Текст причины отклонения сообщения."
+    )
+    business_result: dict[str, Any] | None = Field(
+        None,
+        description="Сохранённый результат успешной обработки. Это снимок первоначальной обработки, а не текущие остатки.",
+    )
 
 
 class KizImportMessageDetail(KizImportMessageListItem):
-    raw_body: str
-    raw_payload: Any | None = None
-    parse_error: str | None = None
-    rabbit_message_id: str | None = None
-    correlation_id: str | None = None
-    headers: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime
+    raw_body: str = Field(
+        description="Исходное тело сообщения. Для байтов вне UTF-8 сохраняется представление base64."
+    )
+    raw_payload: Any | None = Field(
+        None,
+        description="Разобранный исходный JSON без переписывания полей; при ошибке разбора null.",
+    )
+    parse_error: str | None = Field(
+        None, description="Ошибка разбора JSON или кодировки; при успешном разборе null."
+    )
+    rabbit_message_id: str | None = Field(
+        None,
+        description="Идентификатор сообщения, переданный отправителем RabbitMQ; может отсутствовать.",
+    )
+    correlation_id: str | None = Field(
+        None, description="Идентификатор корреляции из свойств RabbitMQ."
+    )
+    headers: dict[str, Any] = Field(
+        default_factory=dict, description="Сохранённые заголовки доставки RabbitMQ."
+    )
+    created_at: datetime = Field(
+        description="Дата и время создания записи журнала с часовым поясом."
+    )
 
 
 class KizImportGroupResult(BaseModel):
-    product_id: str
-    receipt_quantity: Decimal
-    requested_codes: int
-    new_kiz: int
-    existing_kiz: int
-    terminal_existing: int
-    physical_quantity: Decimal
-    identified_quantity: int
-    unidentified_quantity: Decimal
+    product_id: str = Field(description="Идентификатор товара из wild.")
+    receipt_quantity: Decimal = Field(
+        description="Количество товара в поступлении — предел текущих registered и active КИЗ этого поступления."
+    )
+    requested_codes: int = Field(description="Количество кодов товара во входном сообщении.")
+    new_kiz: int = Field(
+        description="Количество новых зарегистрированных КИЗ; при повторе применённого сообщения равно 0."
+    )
+    existing_kiz: int = Field(
+        description="Количество связанных существующих КИЗ в состояниях registered или active."
+    )
+    terminal_existing: int = Field(
+        description="Количество существующих КИЗ в конечных состояниях; они не активируются повторно."
+    )
+    physical_quantity: Decimal = Field(
+        description="Физический доступный остаток россыпи без партии в настроенной приёмочной локации на момент первоначальной обработки."
+    )
+    identified_quantity: int = Field(
+        description="Количество active КИЗ в этом физическом остатке на момент первоначальной обработки; registered КИЗ не учитываются."
+    )
+    unidentified_quantity: Decimal = Field(
+        description="Неидентифицированный остаток: physical_quantity минус identified_quantity. При повторе возвращается первоначальный снимок."
+    )
 
 
 class KizImportProcessResult(BaseModel):
-    message_id: int
-    business_status: str
-    order_guid: str
-    supply_number: str | None = None
-    organization: str | None = None
-    new_kiz_count: int
-    existing_kiz_count: int
-    terminal_existing_count: int
-    groups: list[KizImportGroupResult]
+    message_id: int = Field(description="Идентификатор применённого сообщения.")
+    business_status: str = Field(description="Успешное состояние обработки: applied.")
+    order_guid: str = Field(
+        description="GUID существующего поступления, записанный в origin_reference КИЗ."
+    )
+    supply_number: str | None = Field(
+        None, description="Номер поставки из сообщения, если передан."
+    )
+    organization: str | None = Field(
+        None,
+        description="Организация из сообщения, сохраняемая в новых КИЗ; null для старого формата.",
+    )
+    new_kiz_count: int = Field(
+        description="Всего создано registered КИЗ этим вызовом; повтор применённого сообщения возвращает 0."
+    )
+    existing_kiz_count: int = Field(
+        description="Всего связанных существующих registered и active КИЗ; при повторе определяется по текущему состоянию связей."
+    )
+    terminal_existing_count: int = Field(
+        description="Всего связанных КИЗ в конечных состояниях; при повторе определяется по текущему состоянию связей."
+    )
+    groups: list[KizImportGroupResult] = Field(
+        description="Результат регистрации и снимок остатков по каждому товару."
+    )
 
 
 class KizReceiptCapacityViolation(BaseModel):
-    order_guid: str
-    product_id: str
-    current_kiz_count: int
-    receipt_quantity: Decimal
+    order_guid: str = Field(description="GUID поступления с превышением лимита.")
+    product_id: str = Field(description="Идентификатор товара с превышением лимита.")
+    current_kiz_count: int = Field(
+        description="Количество registered и active КИЗ поступления по этому товару."
+    )
+    receipt_quantity: Decimal = Field(
+        description="Количество товара в поступлении, которое не должно быть превышено."
+    )
 
 
 class KizOrphanReceiptOrigin(BaseModel):
-    kiz_id: int
-    kiz_code: str
-    order_guid: str
-    product_id: str
-    lifecycle_status: str
+    kiz_id: int = Field(description="Идентификатор КИЗ без соответствующей строки поступления.")
+    kiz_code: str = Field(description="Код КИЗ без соответствующей строки поступления.")
+    order_guid: str = Field(description="GUID поступления, указанный в происхождении КИЗ.")
+    product_id: str = Field(description="Идентификатор товара КИЗ.")
+    lifecycle_status: str = Field(description="Текущее состояние жизненного цикла КИЗ.")
 
 
 class KizRegisteredHolderViolation(BaseModel):
-    kiz_id: int
-    kiz_code: str
-    product_id: str
-    location_id: int | None = None
-    container_id: int | None = None
+    kiz_id: int = Field(description="Идентификатор registered КИЗ с недопустимым местом хранения.")
+    kiz_code: str = Field(description="Код зарегистрированного КИЗ с нарушением.")
+    product_id: str = Field(description="Идентификатор товара КИЗ.")
+    location_id: int | None = Field(
+        None, description="Ошибочно назначенная локация; у registered КИЗ должна быть null."
+    )
+    container_id: int | None = Field(
+        None, description="Ошибочно назначенный контейнер; у registered КИЗ должен быть null."
+    )
 
 
 class KizRegisteredOriginViolation(BaseModel):
-    kiz_id: int
-    kiz_code: str
-    product_id: str
-    origin_type: str
-    origin_reference: str | None = None
+    kiz_id: int = Field(description="Идентификатор registered КИЗ с некорректным происхождением.")
+    kiz_code: str = Field(description="Код КИЗ с некорректным происхождением.")
+    product_id: str = Field(description="Идентификатор товара КИЗ.")
+    origin_type: str = Field(
+        description="Фактический источник КИЗ; для registered ожидается receipt_import."
+    )
+    origin_reference: str | None = Field(
+        None,
+        description="Фактическая ссылка на происхождение; ожидается непустой GUID поступления.",
+    )
 
 
 class KizInvalidMessageLink(BaseModel):
-    message_id: int
-    kiz_id: int
-    message_order_guid: str | None = None
-    message_organization: str | None = None
-    origin_type: str
-    origin_reference: str | None = None
-    kiz_organization: str | None = None
+    message_id: int = Field(description="Идентификатор сообщения с некорректной связью на КИЗ.")
+    kiz_id: int = Field(description="Идентификатор связанного КИЗ.")
+    message_order_guid: str | None = Field(None, description="GUID поступления из сообщения.")
+    message_organization: str | None = Field(None, description="Организация из сообщения.")
+    origin_type: str = Field(description="Фактический источник связанного КИЗ.")
+    origin_reference: str | None = Field(
+        None, description="Фактический GUID происхождения КИЗ для сравнения с сообщением."
+    )
+    kiz_organization: str | None = Field(
+        None,
+        description="Организация КИЗ для сравнения с организацией сообщения, когда обе заполнены.",
+    )
 
 
 class KizImportIntegrityResponse(BaseModel):
-    is_valid: bool
-    receipt_capacity_violations: list[KizReceiptCapacityViolation]
-    orphan_receipt_kiz: list[KizOrphanReceiptOrigin]
-    registered_holder_violations: list[KizRegisteredHolderViolation]
-    registered_origin_violations: list[KizRegisteredOriginViolation]
-    invalid_message_kiz_links: list[KizInvalidMessageLink]
+    is_valid: bool = Field(
+        description="true, если все пять списков нарушений пусты; наличие нарушений не меняет HTTP 200."
+    )
+    receipt_capacity_violations: list[KizReceiptCapacityViolation] = Field(
+        description="Превышения количества registered и active КИЗ над количеством товара в поступлении."
+    )
+    orphan_receipt_kiz: list[KizOrphanReceiptOrigin] = Field(
+        description="КИЗ поступления, для которых не найдена соответствующая строка поступления и товара."
+    )
+    registered_holder_violations: list[KizRegisteredHolderViolation] = Field(
+        description="Registered КИЗ с назначенной локацией или контейнером."
+    )
+    registered_origin_violations: list[KizRegisteredOriginViolation] = Field(
+        description="Registered КИЗ с некорректным типом или ссылкой происхождения."
+    )
+    invalid_message_kiz_links: list[KizInvalidMessageLink] = Field(
+        description="Связи сообщений и КИЗ с несовпадающими происхождением или заполненными организациями."
+    )

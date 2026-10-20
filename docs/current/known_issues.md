@@ -9,7 +9,7 @@
 
 - Severity: high
 - Affected tables/functions: `wms.unpack_from_container`, `wms.container_contents`, constraints `container_contents_quantity_check`, `chk_content_status`.
-- Possible impact: полная распаковка товара из контейнера может падать check violation, потому что функция делает `quantity = 0` и затем пытается поставить `status = 'empty'`, а DDL требует `quantity > 0` и разрешает только `active`, `replaced`, `removed`.
+- Possible impact: полная распаковка товара из контейнера может падать check violation, потому что функция сначала делает `quantity = 0`, тогда как DDL требует `quantity > 0`; последующий перевод scope в `removed` уже не выполняется.
 - Recommended next action: выбрать целевую модель распаковки: разрешить `quantity = 0/status = empty` миграцией или изменить функцию на существующие статусы `removed/replaced` без нулевого active content; после решения добавить regression test на полную и частичную распаковку.
 
 ## 2. Positive quantity constraint остаётся `NOT VALID`
@@ -34,13 +34,13 @@
 
 ## 4. Parent `wms.movements` без PK
 
-- Triage: `confirmed-in-snapshot`, open design decision DB-02
-- Verified: 2026-08-07 по parent DDL и source-link consumers
+- Triage: `resolved-in-phase1`, production application and backfill pending
+- Verified: 2026-09-10 на PostgreSQL 17 integration tests
 
 - Severity: medium
 - Affected tables/functions: `wms.movements`, all movement partitions, consumers of `movement_id`, `wms.fbs_shipment_items.movement_id`, `wms.tasks.related_movement_id`.
-- Possible impact: нет DB-level уникальности `movement_id` на partitioned table; сложнее и небезопаснее ссылаться на movement из FBS/tasks/аудита.
-- Recommended next action: проверить требования PostgreSQL к unique/PK на partitioned table; спроектировать PK/unique с учетом partition key `created_at` или отдельную стабильную ссылочную модель.
+- Current resolution: Phase 1 добавляет DB-level unique точной пары `(movement_id, created_at)` и stable `movement_ref` через registry с composite FK.
+- Recommended next action: применить migration и завершить coverage backfill; legacy consumers переводить на `movement_ref` только отдельными scoped изменениями.
 
 ## 5. `container_code` без FK на `containers.qr_code`
 
@@ -74,13 +74,13 @@
 
 ## 8. FBS `movement_id` без FK
 
-- Triage: `confirmed-in-snapshot`, open design decision DB-02
-- Verified: 2026-08-07 по FBS/source-link DDL
+- Triage: `partially-mitigated`, stable registry ready; legacy FBS link unchanged
+- Verified: 2026-09-10 по Phase 1 migration и FBS PostgreSQL regression
 
 - Severity: medium
 - Affected tables/functions: `wms.fbs_shipment_items.movement_id`, `wms.movements`.
 - Possible impact: FBS item может ссылаться на несуществующее или неверное движение; аудит списаний и retry-result reconciliation становятся ненадежными.
-- Recommended next action: определить ссылочную модель на partitioned `movements`; после решения добавить FK/тип `bigint` или хранить устойчивый movement reference в отдельной таблице/metadata.
+- Recommended next action: при отдельной FBS KIZ/link migration хранить `movement_ref` с FK на `movement_registry`; legacy `movement_id` массово не менять в Stage 2A Phase 1.
 
 ## 9. Read-then-write операции без `SELECT FOR UPDATE`/advisory locks
 
@@ -140,7 +140,9 @@
 - Severity: medium
 - Affected endpoints/tables: `POST /api/kit-operations`, `wms.operation_locations`, `wms.kit_operations`, `wms.kit_operation_items`, `wms.movements`, `wms.inventory`.
 - Subtree mode не реализован: `scope='direct'` использует только остатки на выбранной `location_id`, дочерние адреса не учитываются.
-- Container stock для kit operations не поддерживается: расход возможен только из loose stock с `container_code IS NULL`; при наличии остатка только в контейнере endpoint возвращает conflict.
+- Container stock для kit operations не поддерживается: расход возможен только из
+  россыпного остатка с `container_code IS NULL`; при наличии остатка только в контейнере
+  endpoint возвращает conflict.
 - Batch stock для расхода kit operations не поддерживается: MVP расходует только строки с `batch_number IS NULL`.
 - Retry/idempotency key для kit operations не реализован: повторный одинаковый HTTP-запрос не дедуплицируется.
 - Внешняя синхронизация с 1С для kit operations не выполняется.
@@ -159,10 +161,52 @@ Unit/SQL-contract тесты не заменяют integration verification на
 - Verified: 2026-10-01 по activation service/API scope
 
 Явная loose activation `registered -> active` реализована. Activation напрямую в
-container, automatic activation, KIZ card/list/history API и новые transfer/shipment
-flows для active KIZ в текущем scope не добавлены.
+container и automatic activation остаются вне scope. Карточка, список, история,
+explicit transfer/ship и FBS KIZ Stage 1 доступны в объединённой версии.
 ## FBS KIZ Stage 1
 
 - Active KIZ внутри container намеренно не поддерживается: возвращается `KIZ_CONTAINER_SHIPMENT_UNSUPPORTED`; container shipment относится к Stage 2.
 - Для работы Stage 1 обязательны обе write-migrations от `20261002`; deploy кода раньше schema migration несовместим.
 - Первоначальный `chk_fbs_task_result_written_off_source` запрещал старому коду писать legacy `written_off` rows после schema-first deploy. `20261005_fbs_stage1_backward_compat_hotfix.sql` разрешает только две согласованные формы: все source-поля `NULL` для legacy либо полностью заполненная Stage 1 identity.
+
+## KIZ v1: эксплуатация и границы
+
+- Runtime роль vector_admin является superuser/owner member и может отключать guards,
+  выполнять TRUNCATE и произвольные KIZ SQL writes. [Read-only проверка и ужесточение](../database/kiz_v1_runtime_check.md).
+- Recalculate берёт table locks на movements/inventory. Запускать как maintenance;
+  возможны ожидание writers и deadlock с существующим обратным lock order.
+  40001/40P01 дают 409; клиент повторяет операцию целиком.
+- Неатомарность task orchestration остаётся техдолгом: guard откатывает запрещённый
+  movement, но не превращает ранее раздельные task writes в единую transaction.
+- FBS product-group atomicity сохранена; существующий retry-claim техдолг не устраняется.
+  KIZ failures failed без retry; serialization failures имеют bounded retry.
+  Worker теперь декодирует JSON-строку assembly_tasks, иначе retry asyncpg rows был невозможен.
+- Raw KIZ INSERT вне сервисного lock/touch протокола не поддерживается; DB constraints
+  сами по себе не заменяют assignment transaction. Нет защиты от умышленного superuser.
+- Stage 2A Phase 1–4 применены владельцем БД. Phase 5 explicit shipment реализована,
+  но её migration требует проверки production apply. Container holder, receipt import
+  и FBS KIZ Stage 1 реализованы; batch и kit/re-sorting identity lifecycle остаются вне scope.
+
+## Container Stage 3B: состояние после объединения B1–B4 и C1
+
+- Register поддерживает создание пустого контейнера; содержимое добавляется controlled fill.
+- Controlled extract, move и unpack-all реализованы; legacy move/unpack пути закрыты B4.
+- Generic movement с container_code отклоняется; поддерживаемые container writers защищены B4.
+- Stage 3C holder КИЗ внутри контейнера реализован. Nested containers и отдельная
+  карточка истории container operation B5 остаются вне scope.
+- Production runtime role superuser; минимизация grants требует отдельного rollout.
+
+## После Container B3
+
+После B4 generic movement writers не являются допустимым путём изменения контейнерного
+остатка. B3 проверяет contents/inventory invariant и откатывается при несогласованности.
+
+## Container B4 remaining infrastructure debt
+
+- Runtime connection `vector_admin` остаётся superuser. Цель — отдельная non-owner runtime
+  role с минимальными table/sequence/function grants и отдельной migration owner role.
+- B4 service и DB trigger закрывают supported generic container writes, но superuser способен
+  отключить triggers или выполнить произвольный SQL; credential cutover вынесен отдельно.
+- `container_code` остаётся text reference без FK; B4 audit-summary обнаруживает orphan values.
+- `sync_container_to_inventory()` остаётся compatibility trigger для controlled fill suppression;
+  прямой active-content insert не является supported API и упадёт на B4 movement guard.

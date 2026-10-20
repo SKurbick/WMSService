@@ -3,7 +3,7 @@
 from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from app.core.exceptions import (
     DomainException,
     LocationNotFoundError,
@@ -35,10 +35,23 @@ from app.core.exceptions import (
     KizImportMessageNotFoundError,
     KizImportBusinessError,
     KizImportConcurrentConflictError,
-    KizConflictError,
     KizActivationNotFoundError,
+    KizOperationIdempotencyConflictError,
+    ContainerOperationConflictError,
+    ContainerOperationIdempotencyConflictError,
+    ContainerContentsNotAllowedError,
+    ContainerInventoryIntegrityError,
+    GenericContainerMovementNotAllowedError,
 )
 import logging
+import json
+import asyncpg
+from app.core.kiz_errors import (
+    KizConflictError,
+    KizNotFoundError,
+    write_conflict_code,
+    write_conflict_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +59,101 @@ logger = logging.getLogger(__name__)
 def add_exception_handlers(app: FastAPI):
     """Добавить обработчики исключений в приложение"""
 
+    @app.exception_handler(KizNotFoundError)
+    async def kiz_not_found_handler(request, exc):
+        return JSONResponse(
+            status_code=404,
+            content={
+                "detail": str(exc),
+                "error_code": "KIZ_NOT_FOUND",
+            },
+        )
+
+    @app.exception_handler(KizConflictError)
+    @app.exception_handler(KizOperationIdempotencyConflictError)
+    @app.exception_handler(ContainerOperationConflictError)
+    @app.exception_handler(ContainerOperationIdempotencyConflictError)
+    @app.exception_handler(asyncpg.PostgresError)
+    async def write_conflict_handler(request, exc):
+        if isinstance(exc, KizOperationIdempotencyConflictError):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": str(exc),
+                    "error_code": "KIZ_IDEMPOTENCY_CONFLICT",
+                    "operation_id": exc.operation_id,
+                },
+            )
+        if isinstance(exc, ContainerOperationIdempotencyConflictError):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": str(exc),
+                    "error_code": "CONTAINER_IDEMPOTENCY_CONFLICT",
+                    "operation_id": exc.operation_id,
+                },
+            )
+        if isinstance(exc, ContainerOperationConflictError):
+            return JSONResponse(
+                status_code=409,
+                content={"detail": str(exc), "error_code": "CONTAINER_OPERATION_CONFLICT"},
+            )
+        code = write_conflict_code(exc)
+        if code is None:
+            return await general_exception_handler(request, exc)
+        content = {"detail": write_conflict_message(exc), "error_code": code}
+        diagnostics = getattr(exc, "diagnostics", None)
+        if diagnostics is None and getattr(exc, "detail", None):
+            try:
+                diagnostics = json.loads(exc.detail)
+            except (ValueError, TypeError):
+                pass
+        if diagnostics is not None:
+            content["diagnostics"] = diagnostics
+        return JSONResponse(status_code=409, content=jsonable_encoder(content))
+
     @app.exception_handler(LocationNotFoundError)
     async def location_not_found_handler(request: Request, exc: LocationNotFoundError):
         logger.warning(f"Локация не найдена: {exc}")
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={"detail": str(exc), "message": str(exc), "error_code": "LOCATION_NOT_FOUND"},
+        )
+
+    @app.exception_handler(GenericContainerMovementNotAllowedError)
+    async def generic_container_movement_handler(request, exc):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "detail": str(exc),
+                "message": str(exc),
+                "error_code": "GENERIC_CONTAINER_MOVEMENT_NOT_ALLOWED",
+            },
+        )
+
+    @app.exception_handler(ContainerContentsNotAllowedError)
+    async def container_contents_not_allowed_handler(request, exc):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "detail": str(exc),
+                "message": str(exc),
+                "error_code": "CONTAINER_CONTENTS_NOT_ALLOWED",
+            },
+        )
+
+    @app.exception_handler(ContainerInventoryIntegrityError)
+    async def container_inventory_integrity_handler(request, exc):
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=jsonable_encoder(
+                {
+                    "detail": str(exc),
+                    "message": str(exc),
+                    "error_code": "CONTAINER_INVENTORY_INTEGRITY_ERROR",
+                    "diagnostics": exc.diagnostics,
+                }
+            ),
         )
 
     @app.exception_handler(ContainerNotFoundError)
@@ -302,17 +404,8 @@ def add_exception_handlers(app: FastAPI):
             content={"detail": str(exc), "error_code": "KIZ_IMPORT_CONCURRENT_CONFLICT"},
         )
 
-    @app.exception_handler(KizConflictError)
-    async def kiz_conflict_handler(request: Request, exc: KizConflictError):
-        return JSONResponse(
-            status_code=status.HTTP_409_CONFLICT,
-            content={"detail": str(exc), "error_code": "KIZ_CONFLICT"},
-        )
-
     @app.exception_handler(KizActivationNotFoundError)
-    async def kiz_activation_not_found_handler(
-        request: Request, exc: KizActivationNotFoundError
-    ):
+    async def kiz_activation_not_found_handler(request: Request, exc: KizActivationNotFoundError):
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={"detail": str(exc), "error_code": exc.error_code},
@@ -321,6 +414,13 @@ def add_exception_handlers(app: FastAPI):
     @app.exception_handler(RequestValidationError)
     async def request_validation_handler(request: Request, exc: RequestValidationError):
         details = jsonable_encoder(exc.errors())
+        if "КИЗ" in getattr(request.scope.get("route"), "tags", []):
+            # Invalid Unicode may also occur in the echoed validation input.
+            return Response(
+                content=json.dumps({"detail": details}, ensure_ascii=True),
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                media_type="application/json",
+            )
         if request.url.path.startswith("/api/re-sorting-operations"):
             return JSONResponse(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
