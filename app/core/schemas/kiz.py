@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from app.core.json_validation import validate_jsonb_value
+from app.core.kiz_code import KizCode, KIZ_CODE_DESCRIPTION
 
 Lifecycle = Literal["registered", "active", "error", "deactivated", "shipped"]
 NonEmpty = Annotated[str, StringConstraints(min_length=1)]
@@ -24,9 +25,7 @@ def _validate_metadata(value):
 
 class KizAssignment(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kiz_code: NonEmpty = Field(
-        description="Полный код КИЗ. Регистр значим; код не переиспользуется после закрытия. При назначении запрещены пустая строка, NUL, пробелы по краям, код stock-summary и окончание /events."
-    )
+    kiz_code: KizCode = Field(description=KIZ_CODE_DESCRIPTION)
     product_id: Annotated[str, StringConstraints(min_length=1, max_length=50)] = Field(
         description="Идентификатор существующего товара (SKU) из public.products.id."
     )
@@ -41,7 +40,7 @@ class KizAssignment(BaseModel):
         description="Дополнительные сведения в виде JSON-объекта. При закрытии сохраняются в событии; метаданные карточки не заменяются.",
     )
 
-    @field_validator("kiz_code", "product_id", "location_code", "author")
+    @field_validator("product_id", "location_code", "author")
     @classmethod
     def validate_text(cls, value):
         if not value.strip() or value != value.strip() or "\x00" in value:
@@ -55,8 +54,6 @@ class KizAssignment(BaseModel):
             raise ValueError(
                 "Код КИЗ конфликтует с маршрутом API: stock-summary и окончание /events запрещены"
             )
-        if "\n" in value:
-            raise ValueError("Код КИЗ не должен содержать перевод строки")
         if any(part in {".", ".."} for part in value.split("/")):
             raise ValueError("Код КИЗ не должен содержать сегменты пути . или ..")
         return value
@@ -89,9 +86,7 @@ class KizTerminalRequest(BaseModel):
 
 class KizState(BaseModel):
     kiz_id: int = Field(description="Внутренний идентификатор записи КИЗ.")
-    kiz_code: str = Field(
-        description="Полный код КИЗ. Регистр значим; код не переиспользуется после закрытия. При назначении запрещены пустая строка, NUL и пробелы по краям."
-    )
+    kiz_code: str = Field(description=KIZ_CODE_DESCRIPTION)
     product_id: str = Field(
         description="Идентификатор существующего товара (SKU) из public.products.id."
     )

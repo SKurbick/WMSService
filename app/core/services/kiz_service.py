@@ -1,5 +1,6 @@
 """KIZ identity operations; never create a physical movement."""
 import asyncpg
+from app.core.kiz_code import normalize_kiz_code
 from app.core.exceptions import LocationNotFoundError, ProductNotFoundError
 from app.core.kiz_errors import KizConflictError, KizNotFoundError
 from app.core.schemas.kiz import KizAssignment, KizTerminalRequest
@@ -18,7 +19,7 @@ class KizService:
         return location
 
     async def _get(self, conn, kiz_code, *, lock=False):
-        row = await self.repo.get(conn, kiz_code, lock=lock)
+        row = await self.repo.get(conn, normalize_kiz_code(kiz_code), lock=lock)
         if row is None:
             raise KizNotFoundError(f'КИЗ {kiz_code} не найден')
         return dict(row)

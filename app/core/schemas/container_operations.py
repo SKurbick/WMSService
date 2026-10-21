@@ -13,6 +13,7 @@ from pydantic import (
 )
 
 from app.core.json_validation import validate_jsonb_value
+from app.core.kiz_code import KizCode, KIZ_CODE_DESCRIPTION
 
 Text100 = Annotated[str, StringConstraints(min_length=1, max_length=100)]
 Text200 = Annotated[str, StringConstraints(min_length=1, max_length=200)]
@@ -33,7 +34,7 @@ class ContainerFillItem(BaseModel):
     product_id: ProductId
     quantity: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
     batch_number: str | None = Field(default=None, max_length=50)
-    kiz_codes: list[Text200] = Field(default_factory=list)
+    kiz_codes: list[KizCode] = Field(default_factory=list, description=KIZ_CODE_DESCRIPTION)
 
     _validate_text = field_validator("external_line_id", "product_id")(_text)
 

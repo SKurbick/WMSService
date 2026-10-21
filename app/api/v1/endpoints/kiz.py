@@ -1,5 +1,6 @@
 """API реестра, назначения, остатков и закрытия КИЗ."""
 from fastapi import APIRouter, Depends, Query, Path, Body
+from app.core.kiz_code import KizCode
 from app.api.v1.dependencies import get_kiz_service, get_kiz_activation_service
 from app.core.schemas.kiz_activation import KizActivationRequest, KizActivationResponse
 from app.core.services.kiz_activation_service import KizActivationService
@@ -109,9 +110,9 @@ async def list_kiz(
 
 @router.get("/{kiz_code:path}/events", response_model=KizEventPage, **OPERATIONS["events"])
 async def events(
-    kiz_code: str = Path(
+    kiz_code: KizCode = Path(
         ...,
-        description="Полный код КИЗ с percent-encoding в URL; регистр значим.",
+        description="КИЗ произвольной длины: поиск буквально по первым 24 символам без trim или изменения регистра; используйте percent-encoding в URL.",
         examples=["KIZ-001"],
     ),
     limit: int = Query(50, ge=1, le=200, description="Размер страницы от 1 до 200 записей."),
@@ -123,7 +124,11 @@ async def events(
 
 @router.post("/{kiz_code:path}/mark-error", response_model=KizState, **OPERATIONS["error"])
 async def mark_error(
-    kiz_code: str = Path(..., description="Полный код КИЗ; регистр значим.", examples=["KIZ-001"]),
+    kiz_code: KizCode = Path(
+        ...,
+        description="КИЗ произвольной длины: учитываются буквально первые 24 символа.",
+        examples=["KIZ-001"],
+    ),
     data: KizTerminalRequest = Body(
         ..., openapi_examples={"close": {"summary": "Закрытие с причиной", "value": TERMINAL}}
     ),
@@ -134,7 +139,11 @@ async def mark_error(
 
 @router.post("/{kiz_code:path}/deactivate", response_model=KizState, **OPERATIONS["deactivate"])
 async def deactivate(
-    kiz_code: str = Path(..., description="Полный код КИЗ; регистр значим.", examples=["KIZ-001"]),
+    kiz_code: KizCode = Path(
+        ...,
+        description="КИЗ произвольной длины: учитываются буквально первые 24 символа.",
+        examples=["KIZ-001"],
+    ),
     data: KizTerminalRequest = Body(
         ..., openapi_examples={"close": {"summary": "Закрытие с причиной", "value": TERMINAL}}
     ),
@@ -145,9 +154,9 @@ async def deactivate(
 
 @router.get("/{kiz_code:path}", response_model=KizState, **OPERATIONS["get"])
 async def get_kiz(
-    kiz_code: str = Path(
+    kiz_code: KizCode = Path(
         ...,
-        description="Полный код КИЗ с percent-encoding в URL; регистр значим.",
+        description="КИЗ произвольной длины: поиск буквально по первым 24 символам без trim или изменения регистра; используйте percent-encoding в URL.",
         examples=["KIZ-001"],
     ),
     service: KizService = Depends(get_kiz_service),

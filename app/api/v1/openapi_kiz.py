@@ -1,5 +1,7 @@
 """Русские описания и примеры OpenAPI; не участвуют в выполнении операций."""
 
+from app.core.kiz_code import KIZ_CODE_DESCRIPTION
+
 ASSIGNMENT = {
     "kiz_code": "KIZ-001",
     "product_id": "wild1825",
@@ -223,6 +225,9 @@ container_id. Адрес контейнера возвращается отде�
 VALIDATION_RESPONSE = {
     "description": "Ошибка формата запроса или параметров; detail содержит список ошибок валидации.",
 }
+
+for operation in OPERATIONS.values():
+    operation["description"] += "\n\n" + KIZ_CODE_DESCRIPTION
 SERVER_ERROR_RESPONSE = {
     "description": "Внутренняя ошибка сервера или несогласованность данных. Причина возвращается в detail.",
 }

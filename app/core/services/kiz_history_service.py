@@ -1,6 +1,7 @@
 """Build the read-only KIZ history model from existing ledgers."""
 
 from app.core.kiz_errors import KizNotFoundError
+from app.core.kiz_code import normalize_kiz_code
 from app.core.schemas.kiz_history import KizHistory
 
 
@@ -15,7 +16,7 @@ class KizHistoryService:
     async def get(self, kiz_code: str) -> KizHistory:
         async with self.repository.pool.acquire() as conn:
             async with conn.transaction(isolation="repeatable_read", readonly=True):
-                current = await self.repository.current_state(conn, kiz_code)
+                current = await self.repository.current_state(conn, normalize_kiz_code(kiz_code))
                 if current is None:
                     raise KizNotFoundError(f"КИЗ {kiz_code} не найден")
 

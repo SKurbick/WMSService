@@ -45,7 +45,7 @@ def test_legacy_payload_remains_valid():
             {"assembly_task": "1", "kiz_code": "K1"},
             {"assembly_task": "2", "kiz_code": "K1"},
         ],
-        [{"assembly_task": "1", "kiz_code": "   "}],
+        [{"assembly_task": "1", "kiz_code": ""}],
     ],
 )
 def test_invalid_kiz_bindings_are_rejected(bindings):
@@ -205,9 +205,7 @@ async def test_unknown_kiz_is_retryable_without_movements():
 
 @pytest.mark.asyncio
 async def test_contained_kiz_is_controlled_permanent_failure():
-    repository = FakeRepository(
-        {"1": binding("1", "K1", "active", container_id=99)}
-    )
+    repository = FakeRepository({"1": binding("1", "K1", "active", container_id=99)})
 
     with pytest.raises(FbsKizProcessingError) as caught:
         await FbsKizShipmentService(repository).process(

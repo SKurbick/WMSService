@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Any, Mapping
 
 import asyncpg
+from app.core.kiz_code import normalize_kiz_code
 
 from app.core.exceptions import (
     KizImportBusinessError,
@@ -303,11 +304,18 @@ class KizImportService:
                 )
             product_codes = codes_by_product.setdefault(product_id, [])
             for code in codes:
-                if not isinstance(code, str) or not code or code[0].isspace() or code[-1].isspace():
+                if not isinstance(code, str) or not code:
                     raise KizImportBusinessError(
-                        "KIZ code должен быть непустой строкой без крайних пробелов",
+                        "KIZ code должен быть непустой строкой",
                         error_code="INVALID_KIZ_CODE",
                     )
+                try:
+                    code = normalize_kiz_code(code)
+                except ValueError as error:
+                    raise KizImportBusinessError(
+                        "KIZ code содержит NUL или некорректный Unicode",
+                        error_code="INVALID_KIZ_CODE",
+                    ) from error
                 if code in seen_codes:
                     raise KizImportBusinessError(
                         f"KIZ code повторяется в сообщении: {code}",

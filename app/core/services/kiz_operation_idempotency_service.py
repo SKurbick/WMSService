@@ -1,6 +1,7 @@
 """Internal Phase 3 API; it never owns or commits a database transaction."""
 
 import json
+from app.core.kiz_code import normalize_kiz_payload, restore_legacy_kiz_intent
 from typing import Any, Mapping
 
 from app.core.exceptions import KizOperationIdempotencyConflictError
@@ -52,9 +53,7 @@ class KizOperationIdempotencyService:
             author=author,
         )
         if created is not None:
-            return KizOperationAcquisition(
-                KizOperationDisposition.NEW, self._row(created)
-            )
+            return KizOperationAcquisition(KizOperationDisposition.NEW, self._row(created))
 
         existing = await self.repository.get_for_update(
             conn,
@@ -65,13 +64,19 @@ class KizOperationIdempotencyService:
         if existing is None:
             raise RuntimeError("Idempotency row disappeared after unique conflict")
         operation = self._row(existing)
-        if operation["request_fingerprint"] != fingerprint:
+        if operation["request_fingerprint"] != fingerprint and operation[
+            "request_fingerprint"
+        ] != kiz_operation_fingerprint(
+            restore_legacy_kiz_intent(intent, operation["result_payload"]),
+            normalize_codes=False,
+        ):
             raise KizOperationIdempotencyConflictError(
                 "Idempotency key уже зарегистрирован для другого KIZ physical intent",
                 operation_id=operation["operation_id"],
             )
         if operation["result_payload"] is None:
             raise RuntimeError("Committed KIZ operation has no stored result")
+        operation["result_payload"] = normalize_kiz_payload(operation["result_payload"])
         return KizOperationAcquisition(KizOperationDisposition.REPLAY, operation)
 
     async def create_item(self, conn, *, operation_id: int, external_line_id: str):
@@ -83,9 +88,7 @@ class KizOperationIdempotencyService:
         )
         return self._row(row)
 
-    async def attach_movement(
-        self, conn, *, operation_item_id: int, movement_ref: int
-    ):
+    async def attach_movement(self, conn, *, operation_item_id: int, movement_ref: int):
         self._require_transaction(conn)
         row = await self.repository.attach_movement(
             conn,

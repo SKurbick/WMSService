@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import Any, Mapping
 
 from app.core.json_validation import validate_jsonb_value
+from app.core.kiz_code import normalize_kiz_payload
 
 
 class ContainerOperationDisposition(StrEnum):
@@ -59,10 +60,10 @@ def _canonicalize(value: Any, *, field_name: str | None = None):
     raise ValueError(f"Неподдерживаемый тип container intent: {type(value).__name__}")
 
 
-def container_operation_fingerprint(intent: Mapping[str, Any]) -> str:
+def container_operation_fingerprint(intent: Mapping[str, Any], *, normalize_codes=True) -> str:
     validate_jsonb_value(intent)
     canonical = json.dumps(
-        _canonicalize(intent),
+        _canonicalize(normalize_kiz_payload(intent) if normalize_codes else intent),
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,

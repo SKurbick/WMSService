@@ -2,9 +2,17 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from app.core.json_validation import validate_jsonb_value
+from app.core.kiz_code import KizCode, KIZ_CODE_DESCRIPTION
 
 Text100 = Annotated[str, StringConstraints(min_length=1, max_length=100)]
 Text200 = Annotated[str, StringConstraints(min_length=1, max_length=200)]
@@ -21,7 +29,9 @@ def _text(value: str) -> str:
 class KizTransferItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    external_line_id: Text200 = Field(description="Стабильный идентификатор строки внешней операции.")
+    external_line_id: Text200 = Field(
+        description="Стабильный идентификатор строки внешней операции."
+    )
     product_id: ProductId = Field(description="Идентификатор товара/SKU.")
     from_location_code: Text100 = Field(description="Код точной исходной локации.")
     to_location_code: Text100 = Field(description="Код точной целевой локации.")
@@ -35,8 +45,7 @@ class KizTransferItem(BaseModel):
         ),
         examples=[5],
     )
-    kiz_codes: list[Text200] = Field(default_factory=list,
-                                     description="Явно выбранные active КИЗ; порядок незначим.")
+    kiz_codes: list[KizCode] = Field(default_factory=list, description=KIZ_CODE_DESCRIPTION)
 
     _validate_text = field_validator(
         "external_line_id", "product_id", "from_location_code", "to_location_code"
@@ -45,8 +54,6 @@ class KizTransferItem(BaseModel):
     @field_validator("kiz_codes")
     @classmethod
     def unique_kiz(cls, values):
-        for value in values:
-            _text(value)
         if len(values) != len(set(values)):
             raise ValueError("duplicate KIZ внутри item запрещён")
         return values
@@ -64,13 +71,15 @@ class KizTransferRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_system: Text100 = Field(description="Стабильное имя внешней системы-источника.")
-    external_operation_id: Text200 = Field(description="Идемпотентный идентификатор внешней команды.")
+    external_operation_id: Text200 = Field(
+        description="Идемпотентный идентификатор внешней команды."
+    )
     author: Text100 = Field(description="Автор физической операции.")
-    items: list[KizTransferItem] = Field(min_length=1, description="Непустой набор атомарных строк transfer.")
+    items: list[KizTransferItem] = Field(
+        min_length=1, description="Непустой набор атомарных строк transfer."
+    )
 
-    _validate_text = field_validator(
-        "source_system", "external_operation_id", "author"
-    )(_text)
+    _validate_text = field_validator("source_system", "external_operation_id", "author")(_text)
 
     @model_validator(mode="after")
     def validate_operation(self):
@@ -95,39 +104,44 @@ class KizTransferResultItem(BaseModel):
 
 class KizTransferResponse(BaseModel):
     operation_id: int = Field(description="Внутренний идентификатор KIZ operation.")
-    operation_type: Literal["transfer"] = Field(description="Тип операции; в Phase 4 только transfer.")
+    operation_type: Literal["transfer"] = Field(
+        description="Тип операции; в Phase 4 только transfer."
+    )
     source_system: str = Field(description="Система-источник идемпотентной команды.")
     external_operation_id: str = Field(description="Внешний идентификатор команды.")
-    items: list[KizTransferResultItem] = Field(description="Сохранённый результат строк с movement_ref.")
+    items: list[KizTransferResultItem] = Field(
+        description="Сохранённый результат строк с movement_ref."
+    )
 
 
 class KizShipItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    external_line_id: Text200 = Field(description="Стабильный идентификатор строки внешней операции.")
+    external_line_id: Text200 = Field(
+        description="Стабильный идентификатор строки внешней операции."
+    )
     product_id: ProductId = Field(description="Идентификатор товара/SKU.")
     from_location_code: Text100 = Field(description="Код точной исходной локации.")
     quantity: int = Field(
-        strict=True, gt=0, le=99_999_999, examples=[5],
+        strict=True,
+        gt=0,
+        le=99_999_999,
+        examples=[5],
         description=(
             "Полное количество штучных единиц для списания. Передаётся целым "
             "JSON-числом; строки, дробные значения и float не принимаются."
         ),
     )
-    kiz_codes: list[Text200] = Field(
+    kiz_codes: list[KizCode] = Field(
         default_factory=list,
-        description="Явно отгружаемые active КИЗ; порядок незначим.",
+        description=KIZ_CODE_DESCRIPTION,
     )
 
-    _validate_text = field_validator(
-        "external_line_id", "product_id", "from_location_code"
-    )(_text)
+    _validate_text = field_validator("external_line_id", "product_id", "from_location_code")(_text)
 
     @field_validator("kiz_codes")
     @classmethod
     def unique_kiz(cls, values):
-        for value in values:
-            _text(value)
         if len(values) != len(set(values)):
             raise ValueError("duplicate KIZ внутри item запрещён")
         return values
@@ -143,13 +157,15 @@ class KizShipRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_system: Text100 = Field(description="Стабильное имя внешней системы-источника.")
-    external_operation_id: Text200 = Field(description="Идемпотентный идентификатор внешней команды.")
+    external_operation_id: Text200 = Field(
+        description="Идемпотентный идентификатор внешней команды."
+    )
     author: Text100 = Field(description="Автор физической операции.")
-    items: list[KizShipItem] = Field(min_length=1, description="Непустой атомарный набор строк shipment.")
+    items: list[KizShipItem] = Field(
+        min_length=1, description="Непустой атомарный набор строк shipment."
+    )
 
-    _validate_text = field_validator(
-        "source_system", "external_operation_id", "author"
-    )(_text)
+    _validate_text = field_validator("source_system", "external_operation_id", "author")(_text)
 
     @model_validator(mode="after")
     def validate_operation(self):
@@ -173,7 +189,11 @@ class KizShipResultItem(BaseModel):
 
 class KizShipResponse(BaseModel):
     operation_id: int = Field(description="Внутренний идентификатор KIZ operation.")
-    operation_type: Literal["ship"] = Field(description="Тип операции; для этого endpoint всегда ship.")
+    operation_type: Literal["ship"] = Field(
+        description="Тип операции; для этого endpoint всегда ship."
+    )
     source_system: str = Field(description="Система-источник идемпотентной команды.")
     external_operation_id: str = Field(description="Внешний идентификатор команды.")
-    items: list[KizShipResultItem] = Field(description="Сохранённый результат строк с movement_ref.")
+    items: list[KizShipResultItem] = Field(
+        description="Сохранённый результат строк с movement_ref."
+    )

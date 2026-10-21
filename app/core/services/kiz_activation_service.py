@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 import asyncpg
+from app.core.kiz_code import normalize_kiz_payload, restore_legacy_kiz_intent
 
 from app.core.exceptions import (
     KizActivationNotFoundError,
@@ -31,7 +32,7 @@ class KizActivationService:
                     request.idempotency_key,
                 )
                 if existing_operation is not None:
-                    return self._replay_operation(existing_operation, request_hash)
+                    return self._replay_operation(existing_operation, request_hash, request)
 
                 location = await self.repository.lock_location(
                     connection,
@@ -54,7 +55,7 @@ class KizActivationService:
                 if operation is None:
                     raise KizConflictError("Не удалось заблокировать activation operation")
                 if not was_created:
-                    return self._replay_operation(operation, request_hash)
+                    return self._replay_operation(operation, request_hash, request)
 
                 sorted_codes = sorted(request.kiz_codes)
                 rows = await self.repository.lock_kiz_by_codes(connection, sorted_codes)
@@ -205,9 +206,28 @@ class KizActivationService:
         return dict(value)
 
     @classmethod
-    def _replay_operation(cls, operation: Any, request_hash: str) -> dict[str, Any]:
+    def _replay_operation(cls, operation: Any, request_hash: str, request=None) -> dict[str, Any]:
         if operation["request_fingerprint"] != request_hash:
-            raise KizConflictError("Idempotency key уже использован для другого activation intent")
+            legacy_hash = None
+            if request is not None and operation["result_payload"] is not None:
+                legacy_intent = restore_legacy_kiz_intent(
+                    {
+                        "kiz_codes": sorted(request.kiz_codes),
+                        "location_code": request.location_code,
+                        "user_name": request.user_name,
+                    },
+                    cls._decode_json(operation["result_payload"]),
+                )
+                legacy_intent["kiz_codes"] = sorted(legacy_intent["kiz_codes"])
+                legacy_hash = hashlib.sha256(
+                    json.dumps(
+                        legacy_intent, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+                    ).encode("utf-8")
+                ).hexdigest()
+            if operation["request_fingerprint"] != legacy_hash:
+                raise KizConflictError(
+                    "Idempotency key уже использован для другого activation intent"
+                )
         if operation["result_payload"] is None:
             raise KizConflictError("Activation operation ещё не завершена")
-        return cls._decode_json(operation["result_payload"])
+        return normalize_kiz_payload(cls._decode_json(operation["result_payload"]))

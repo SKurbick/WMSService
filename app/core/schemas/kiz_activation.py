@@ -3,6 +3,7 @@
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from app.core.kiz_code import KizCode, KIZ_CODE_DESCRIPTION
 
 
 NonBlankString = Annotated[str, StringConstraints(min_length=1)]
@@ -11,10 +12,10 @@ NonBlankString = Annotated[str, StringConstraints(min_length=1)]
 class KizActivationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kiz_codes: list[NonBlankString] = Field(
+    kiz_codes: list[KizCode] = Field(
         ...,
         min_length=1,
-        description="Коды существующих КИЗ без дубликатов и пробелов по краям. Товар определяется по КИЗ.",
+        description=KIZ_CODE_DESCRIPTION + " Дубликаты первых 24 символов запрещены.",
         examples=[["B21-KIZ-1", "B21-KIZ-2"]],
     )
     location_code: NonBlankString = Field(
@@ -33,8 +34,6 @@ class KizActivationRequest(BaseModel):
     @field_validator("kiz_codes")
     @classmethod
     def validate_kiz_codes(cls, value: list[str]) -> list[str]:
-        if any(code != code.strip() for code in value):
-            raise ValueError("kiz_codes не должны содержать пробелы по краям")
         if len(value) != len(set(value)):
             raise ValueError("kiz_codes не должны содержать дубликаты")
         return value

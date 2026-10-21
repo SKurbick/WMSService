@@ -175,7 +175,12 @@ def kiz_database_template():
 
 
 @pytest.fixture
-async def kiz_pool(kiz_database_template):
+def kiz_legacy_schema(request):
+    return getattr(request, "param", False)
+
+
+@pytest.fixture
+async def kiz_pool(kiz_database_template, kiz_legacy_schema):
     dsn, template = kiz_database_template
     name = "kiz_case_" + uuid4().hex
     admin = await asyncpg.connect(dsn)
@@ -190,6 +195,11 @@ async def kiz_pool(kiz_database_template):
             command_timeout=10,
             server_settings={"search_path": "wms,public"},
         )
+        if not kiz_legacy_schema:
+            async with pool.acquire() as connection:
+                await connection.execute(
+                    (ROOT / "scripts/migrations/20261021_normalize_kiz_code_prefix.sql").read_text()
+                )
         yield pool
     finally:
         if pool is not None:

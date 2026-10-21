@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import Any, Mapping
 
 from app.core.json_validation import validate_jsonb_value
+from app.core.kiz_code import normalize_kiz_payload
 
 
 class KizOperationDisposition(StrEnum):
@@ -39,10 +40,7 @@ def _canonicalize(value: Any, *, field_name: str | None = None):
     if isinstance(value, Mapping):
         if not all(isinstance(key, str) for key in value):
             raise ValueError("Ключи physical intent должны быть строками")
-        return {
-            key: _canonicalize(value[key], field_name=key)
-            for key in sorted(value)
-        }
+        return {key: _canonicalize(value[key], field_name=key) for key in sorted(value)}
     if isinstance(value, (list, tuple)):
         normalized = [_canonicalize(item) for item in value]
         if field_name == "kiz_codes":
@@ -69,10 +67,10 @@ def _canonicalize(value: Any, *, field_name: str | None = None):
     raise ValueError(f"Неподдерживаемый тип physical intent: {type(value).__name__}")
 
 
-def canonical_kiz_operation_json(intent: Mapping[str, Any]) -> str:
+def canonical_kiz_operation_json(intent: Mapping[str, Any], *, normalize_codes=True) -> str:
     """Serialize normalized physical intent independently of JSON formatting/order."""
     validate_jsonb_value(intent)
-    canonical = _canonicalize(intent)
+    canonical = _canonicalize(normalize_kiz_payload(intent) if normalize_codes else intent)
     return json.dumps(
         canonical,
         ensure_ascii=False,
@@ -82,6 +80,6 @@ def canonical_kiz_operation_json(intent: Mapping[str, Any]) -> str:
     )
 
 
-def kiz_operation_fingerprint(intent: Mapping[str, Any]) -> str:
-    canonical = canonical_kiz_operation_json(intent)
+def kiz_operation_fingerprint(intent: Mapping[str, Any], *, normalize_codes=True) -> str:
+    canonical = canonical_kiz_operation_json(intent, normalize_codes=normalize_codes)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

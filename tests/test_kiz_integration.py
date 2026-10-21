@@ -384,7 +384,7 @@ async def test_api_read_lifecycle_and_integrity(client, kiz_pool, stock):
     assert (await client.get("/api/system/kiz-integrity")).json() == []
 
 @pytest.mark.parametrize("path,data,status", [
-    ("/api/kiz/assign", {"kiz_code":" bad","product_id":"sku","location_code":"KIZTEST","author":"t"}, 422),
+    ("/api/kiz/assign", {"kiz_code":"","product_id":"sku","location_code":"KIZTEST","author":"t"}, 422),
     ("/api/kiz/assign", {"kiz_code":"a","product_id":"missing","location_code":"KIZTEST","author":"t"}, 404),
     ("/api/kiz/assign", {"kiz_code":"a","product_id":"sku","location_code":"missing","author":"t"}, 404),
     ("/api/kiz/assign", {"kiz_code":"a","product_id":"other","location_code":"KIZTEST","author":"t"}, 409),
@@ -652,7 +652,7 @@ async def test_recalculate_waits_for_assignment_and_preserves_identity(kiz_pool,
     assert (await kiz_service.events("code"))["total"] == 1
 
 
-@pytest.mark.parametrize("code", ["stock-summary", "alpha/events", ".", "a/../b", "a\nb"])
+@pytest.mark.parametrize("code", ["stock-summary", "alpha/events", ".", "a/../b"])
 async def test_assignment_route_collision_422_without_writes(client, kiz_pool, stock, code):
     async with kiz_pool.acquire() as c:
         before = dict(await c.fetchrow("SELECT * FROM wms.inventory"))

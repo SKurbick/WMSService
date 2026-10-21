@@ -1,6 +1,7 @@
 """Idempotency boundary for caller-owned container operation transactions."""
 
 import json
+from app.core.kiz_code import normalize_kiz_payload, restore_legacy_kiz_intent
 
 from app.core.container_operation_idempotency import (
     ContainerOperationAcquisition,
@@ -54,13 +55,19 @@ class ContainerOperationIdempotencyService:
         if existing is None:
             raise RuntimeError("Container idempotency row disappeared")
         operation = self._row(existing)
-        if operation["request_fingerprint"] != fingerprint:
+        if operation["request_fingerprint"] != fingerprint and operation[
+            "request_fingerprint"
+        ] != container_operation_fingerprint(
+            restore_legacy_kiz_intent(intent, operation["result_payload"]),
+            normalize_codes=False,
+        ):
             raise ContainerOperationIdempotencyConflictError(
                 "Idempotency key уже зарегистрирован для другого container operation intent",
                 operation_id=operation["operation_id"],
             )
         if operation["result_payload"] is None:
             raise RuntimeError("Committed container operation has no stored result")
+        operation["result_payload"] = normalize_kiz_payload(operation["result_payload"])
         return ContainerOperationAcquisition(ContainerOperationDisposition.REPLAY, operation)
 
     async def store_result(self, conn, *, operation_id, payload):

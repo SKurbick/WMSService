@@ -2,14 +2,15 @@
 
 import datetime
 from typing import List, Optional
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+from app.core.kiz_code import KizCode, KIZ_CODE_DESCRIPTION
 
 
 class KizBinding(BaseModel):
     assembly_task: str
-    kiz_code: str
+    kiz_code: KizCode = Field(description=KIZ_CODE_DESCRIPTION)
 
-    @field_validator("assembly_task", "kiz_code")
+    @field_validator("assembly_task")
     @classmethod
     def validate_non_empty(cls, value: str) -> str:
         normalized = value.strip()
@@ -35,12 +36,12 @@ class WriteOffAccordingToFBS(ShipmentOfGoodsUpdate):
     assembly_tasks: List[str]
     kiz_bindings: Optional[List[KizBinding]] = None
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def validate_task_contract(self):
         if self.quantity != len(self.assembly_tasks):
             raise ValueError(
-                f'quantity ({self.quantity}) должно быть равно '
-                f'количеству assembly_tasks ({len(self.assembly_tasks)})'
+                f"quantity ({self.quantity}) должно быть равно "
+                f"количеству assembly_tasks ({len(self.assembly_tasks)})"
             )
         if len(self.assembly_tasks) != len(set(self.assembly_tasks)):
             raise ValueError("assembly_tasks содержит дубли")

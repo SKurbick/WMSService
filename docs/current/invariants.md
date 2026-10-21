@@ -4,6 +4,10 @@
 
 ## Enforced by DB
 
+- После `20261021_normalize_kiz_code_prefix.sql` КИЗ и FBS bindings хранят 1–24
+  символа кода. Уникальность применяется к буквальному префиксу без trim/case changes;
+  preflight/миграция останавливаются при коллизиях без слияния identities.
+
 - `locations.location_code` уникален.
 - `locations.path` обязателен и имеет тип `wms.ltree`.
 - `locations.parent_location_id`, если заполнен, ссылается на существующую location.

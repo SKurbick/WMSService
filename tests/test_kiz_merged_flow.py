@@ -1,4 +1,7 @@
 import json
+from pathlib import Path
+
+import asyncpg
 
 import httpx
 import pytest
@@ -63,12 +66,17 @@ async def merged_scope(kiz_pool, monkeypatch):
         yield client, locations[0], locations[1]
 
 
-async def register_codes(pool, client):
+async def register_codes(pool, client, codes=None):
     ingestion = await KizImportService(KizImportRepository(pool)).ingest(
         json.dumps(
             {
                 "supply": {"order_guid": "MERGE-RECEIPT", "organization": "Вектор"},
-                "wild_groups": [{"wild": "testwild", "mark_codes": ["MERGE-K1", "MERGE-K2"]}],
+                "wild_groups": [
+                    {
+                        "wild": "testwild",
+                        "mark_codes": codes if codes is not None else ["MERGE-K1", "MERGE-K2"],
+                    }
+                ],
             }
         ).encode(),
         exchange_name="orders",
@@ -81,6 +89,202 @@ async def register_codes(pool, client):
     assert response.status_code == 200, response.text
     assert response.json()["new_kiz_count"] == 2
     return ingestion.message_id
+
+
+def prefix_migration(name):
+    return (Path(__file__).resolve().parents[1] / "scripts/migrations" / name).read_text()
+
+
+async def test_literal_prefix_import_activation_fbs_and_replay(kiz_pool, merged_scope):
+    client, source, _ = merged_scope
+    codes = ["01234567890123456789012A", "01234567890123456789012B"]
+    message_id = await register_codes(kiz_pool, client, [code + "I" * 72 for code in codes])
+    card = await client.get("/api/kiz/" + codes[0] + "different-tail")
+    assert card.status_code == 200, card.text
+    assert card.json()["kiz_code"] == codes[0]
+    request = dict(
+        kiz_codes=[codes[0] + "A" * 8],
+        location_code=source["location_code"],
+        user_name="tester",
+        idempotency_key="prefix-activation",
+    )
+    activation = await client.post("/api/kiz/activate", json=request)
+    assert activation.status_code == 200, activation.text
+    request["kiz_codes"] = [codes[0] + "B" * 70]
+    replay = await client.post("/api/kiz/activate", json=request)
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == activation.json()
+    payload = shipment()
+    for binding, code in zip(payload[0]["kiz_bindings"], codes):
+        binding["kiz_code"] = code + "F" * 70
+    shipment_response = await client.post("/api/fbs-shipments", json=payload)
+    assert shipment_response.status_code == 201, shipment_response.text
+    assert shipment_response.json()["status"] == "completed"
+    for binding, code in zip(payload[0]["kiz_bindings"], codes):
+        binding["kiz_code"] = code + "replay-tail"
+    replay = await client.post("/api/fbs-shipments", json=payload)
+    assert replay.status_code == 201, replay.text
+    assert replay.json()["items"][0]["task_resolution_status"] == "duplicate_only"
+    history = await client.get("/api/kiz-history", params={"kiz_code": codes[0] + "suffix"})
+    assert history.status_code == 200, history.text
+    assert history.json()["kiz_code"] == codes[0]
+    receipt_replay = await client.post(f"/api/kiz-import/messages/{message_id}/process")
+    assert receipt_replay.status_code == 200, receipt_replay.text
+    assert receipt_replay.json()["new_kiz_count"] == 0
+    async with kiz_pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM wms.movements") == 2
+        assert await connection.fetchval("SELECT count(*) FROM wms.fbs_kiz_bindings") == 2
+        assert (
+            await connection.fetchval(
+                "SELECT count(*) FROM wms.kiz WHERE lifecycle_status='shipped'"
+            )
+            == 2
+        )
+        assert (
+            await connection.fetchval(
+                "SELECT count(*) FROM wms.kiz_events WHERE event_type='activated'"
+            )
+            == 1
+        )
+        assert await connection.fetchval("SELECT max(char_length(kiz_code)) FROM wms.kiz") == 24
+
+
+@pytest.mark.parametrize("collision", [False, True])
+@pytest.mark.parametrize("kiz_legacy_schema", [True], indirect=True)
+async def test_prefix_migration_existing_codes_and_collision_rollback(
+    kiz_pool, merged_scope, collision
+):
+    client, source, _ = merged_scope
+    code = "P" * 24 + "original-long-code"
+    async with kiz_pool.acquire() as connection:
+        kiz_id = await connection.fetchval(
+            "INSERT INTO wms.kiz(kiz_code,product_id,location_id,created_by) "
+            "VALUES ($1,'testwild',$2,'tester') RETURNING kiz_id",
+            code,
+            source["location_id"],
+        )
+        await connection.execute(
+            "INSERT INTO wms.fbs_kiz_bindings(task_id,kiz_code,kiz_id,product_id,state) "
+            "VALUES (1,$1,$2,'testwild','resolved')",
+            code,
+            kiz_id,
+        )
+        if collision:
+            await connection.execute(
+                "INSERT INTO wms.kiz(kiz_code,product_id,location_id,created_by) "
+                "VALUES ($1,'testwild',$2,'tester')",
+                "P" * 24 + "other",
+                source["location_id"],
+            )
+            with pytest.raises(asyncpg.RaiseError, match="KIZ_PREFIX_COLLISION"):
+                await connection.execute(prefix_migration("20261021_kiz_code_prefix_preflight.sql"))
+            await connection.execute("ROLLBACK")
+            with pytest.raises(asyncpg.RaiseError, match="KIZ_PREFIX_COLLISION"):
+                await connection.execute(prefix_migration("20261021_normalize_kiz_code_prefix.sql"))
+            await connection.execute("ROLLBACK")
+            assert (
+                await connection.fetchval("SELECT kiz_code FROM wms.kiz WHERE kiz_id=$1", kiz_id)
+                == code
+            )
+        else:
+            await connection.execute(prefix_migration("20261021_kiz_code_prefix_preflight.sql"))
+            await connection.execute(prefix_migration("20261021_normalize_kiz_code_prefix.sql"))
+            assert (
+                await connection.fetchval("SELECT kiz_code FROM wms.kiz WHERE kiz_id=$1", kiz_id)
+                == code[:24]
+            )
+            assert (
+                await connection.fetchval(
+                    "SELECT kiz_code FROM wms.fbs_kiz_bindings WHERE task_id=1"
+                )
+                == code[:24]
+            )
+            with pytest.raises(asyncpg.PostgresError):
+                await connection.execute(
+                    "UPDATE wms.kiz SET kiz_code='forbidden' WHERE kiz_id=$1", kiz_id
+                )
+            with pytest.raises(asyncpg.PostgresError):
+                await connection.execute(
+                    "UPDATE wms.fbs_kiz_bindings SET kiz_code='forbidden' WHERE task_id=1"
+                )
+    if not collision:
+        literal_code = " \t\n\x1d "
+        assigned = await client.post(
+            "/api/kiz/assign",
+            json=dict(
+                kiz_code=literal_code,
+                product_id="testwild",
+                location_code=source["location_code"],
+                author="tester",
+            ),
+        )
+        assert assigned.status_code == 201, assigned.text
+        assert assigned.json()["kiz"]["kiz_code"] == literal_code
+
+
+@pytest.mark.parametrize("kiz_legacy_schema", [True], indirect=True)
+async def test_prefix_migration_rejects_binding_collisions(kiz_pool, merged_scope):
+    async with kiz_pool.acquire() as connection:
+        await connection.execute(
+            "INSERT INTO wms.fbs_kiz_bindings(task_id,kiz_code,product_id,state) "
+            "VALUES (1,$1,'testwild','pending_resolution'),(2,$2,'testwild','pending_resolution')",
+            "X" * 24 + "first",
+            "X" * 24 + "second",
+        )
+        with pytest.raises(asyncpg.RaiseError, match="KIZ_BINDING_PREFIX_COLLISION"):
+            await connection.execute(prefix_migration("20261021_normalize_kiz_code_prefix.sql"))
+        await connection.execute("ROLLBACK")
+        assert (
+            await connection.fetchval("SELECT min(char_length(kiz_code)) FROM wms.fbs_kiz_bindings")
+            > 24
+        )
+
+
+@pytest.mark.parametrize("kiz_legacy_schema", [True], indirect=True)
+async def test_real_legacy_activation_replay_after_prefix_migration(kiz_pool, merged_scope):
+    from app.core.schemas.kiz_activation import KizActivationRequest
+    from app.core.services.kiz_activation_service import KizActivationService
+    from app.infrastructure.database.repositories.kiz_activation_repository import (
+        KizActivationRepository,
+    )
+
+    client, source, _ = merged_scope
+    old_code = "Z" * 24 + "legacy-full-code"
+    async with kiz_pool.acquire() as connection:
+        await connection.execute(
+            "INSERT INTO wms.kiz(kiz_code,product_id,lifecycle_status,origin_type,origin_reference,created_by) "
+            "VALUES ($1,'testwild','registered','receipt_import','MERGE-RECEIPT','tester')",
+            old_code,
+        )
+    request = KizActivationRequest.model_construct(
+        kiz_codes=[old_code],
+        location_code=source["location_code"],
+        user_name="tester",
+        idempotency_key="legacy-full-code",
+    )
+    original = await KizActivationService(KizActivationRepository(kiz_pool)).activate(request)
+    async with kiz_pool.acquire() as connection:
+        await connection.execute(prefix_migration("20261021_normalize_kiz_code_prefix.sql"))
+    replay = await client.post(
+        "/api/kiz/activate",
+        json=dict(
+            kiz_codes=["Z" * 24 + "new-tail"],
+            location_code=source["location_code"],
+            user_name="tester",
+            idempotency_key="legacy-full-code",
+        ),
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["operation_id"] == original["operation_id"]
+    assert replay.json()["items"][0]["kiz_code"] == "Z" * 24
+    async with kiz_pool.acquire() as connection:
+        assert (
+            await connection.fetchval(
+                "SELECT count(*) FROM wms.kiz_events WHERE event_type='activated'"
+            )
+            == 1
+        )
+        assert await connection.fetchval("SELECT count(*) FROM wms.movements") == 1
 
 
 def shipment():
