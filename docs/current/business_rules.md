@@ -2,6 +2,18 @@
 
 Статус: `CURRENT`.
 
+## Сводка КИЗ по организациям
+
+- `/api/kiz-reports/summary` считает строки wms.kiz, а не inventory и не raw inbox.
+- registered, active и terminal-состояния не смешиваются; active разбивается на
+  loose/container. Registered не считается физическим размещением или резервом.
+- organization — сохранённое происхождение identity; строки с NULL не теряются.
+  organization_missing=true/false/отсутствует означает NULL/NOT NULL/все соответственно.
+- Все фильтры применяются до группировки. totals и total_groups не зависят от страницы.
+- Адрес — прямой location holder либо текущий адрес контейнера; дочерние и исторические
+  адреса не включаются. Закрытые identity не подтверждают физический остаток.
+- Сводка не изменяет lifecycle, holder, movements, inventory или историю операций.
+
 ## Канонический код КИЗ (21.10.2026)
 
 Для регистрации из очереди, FBS bindings и всех ручных КИЗ API идентификатором

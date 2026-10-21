@@ -4,6 +4,8 @@ from fastapi import Depends
 from asyncpg import Pool
 from app.infrastructure.database.repositories.kiz_repository import KizRepository
 from app.core.services.kiz_service import KizService
+from app.core.services.kiz_report_service import KizReportService
+from app.infrastructure.database.repositories.kiz_report_repository import KizReportRepository
 
 from app.infrastructure.database.connection import get_db_pool
 
@@ -284,6 +286,10 @@ def get_kiz_service(pool: Pool = Depends(get_db_pool)) -> KizService:
 
 def get_kiz_history_service(pool: Pool = Depends(get_db_pool)) -> KizHistoryService:
     return KizHistoryService(KizHistoryRepository(pool))
+
+
+def get_kiz_report_service(pool: Pool = Depends(get_db_pool)) -> KizReportService:
+    return KizReportService(KizReportRepository(pool))
 
 
 def get_kiz_transfer_service(pool: Pool = Depends(get_db_pool)) -> KizTransferService:

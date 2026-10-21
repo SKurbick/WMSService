@@ -115,7 +115,7 @@ def test_kiz_endpoints_document_errors_and_current_holder_semantics():
             continue
         for operation in methods.values():
             expected = {"200", "500"} if path == "/api/kiz-import/integrity" else {"422", "500"}
-            if path != "/api/kiz-import/messages" and path != "/api/kiz-import/integrity":
+            if path not in {"/api/kiz-import/messages", "/api/kiz-import/integrity", "/api/kiz-reports/summary"}:
                 expected.add("404")
             assert expected <= operation["responses"].keys(), path
             for response in operation["responses"].values():

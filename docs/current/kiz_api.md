@@ -1,5 +1,72 @@
 # API КИЗ в объединённой версии WMS
 
+## Аналитическая сводка
+
+`GET /api/kiz-reports/summary` возвращает группировки существующих identity реестра.
+Существующий список `GET /api/kiz` не меняется. Новых таблиц и миграций для отчёта нет;
+требуется уже существующая схема КИЗ, включая `organization`.
+
+Все параметры необязательны:
+
+| Параметр | По умолчанию | Значение |
+|---|---|---|
+| `group_by` | `organization,product_id` | Через запятую или повторяющиеся query-параметры. Допустимы organization, product_id, lifecycle_status, location_code, container_id, container_qr_code, origin_type. От 1 до 7 разных измерений. |
+| `organization` | без фильтра | Точное, регистрозависимое значение организации. |
+| `organization_missing` | без фильтра | true — только NULL organization; false — только заполненные. true несовместим с organization (422). |
+| `product_id` | без фильтра | Точный идентификатор товара. |
+| `lifecycle_status` | все состояния | registered, active, shipped, error, deactivated. |
+| `location_code` | без фильтра | Точный адрес текущего holder: россыпь либо текущий адрес контейнера. Не включает дочерние адреса. |
+| `container_id` | без фильтра | Положительный ID текущего контейнера. |
+| `container_qr_code` | без фильтра | Точный QR текущего контейнера. При сочетании с container_id оба фильтра должны совпасть. |
+| `origin_type` | без фильтра | warehouse_assignment или receipt_import. |
+| `origin_reference` | без фильтра | Точное origin_reference, например order_guid поступления. |
+| `limit` | 50 | Размер страницы групп, 1–200. |
+| `offset` | 0 | Смещение групп, от 0. |
+
+Фильтры объединяются через AND. Неизвестный товар, адрес, организация или контейнер —
+200 с нулевыми totals и пустым items, не 404. Пустые строки, неизвестные параметры,
+неверные boolean/enum/числа, дубликаты и неизвестные измерения дают 422 с detail.
+
+Примеры:
+
+```text
+/api/kiz-reports/summary
+/api/kiz-reports/summary?organization_missing=true
+/api/kiz-reports/summary?organization=СТАРТ&group_by=product_id,lifecycle_status
+/api/kiz-reports/summary?group_by=organization&group_by=product_id&limit=50&offset=0
+/api/kiz-reports/summary?lifecycle_status=active&group_by=location_code,container_id
+```
+
+Ответ содержит `group_by`, `filters`, `total_groups`, `limit`, `offset`, `totals`,
+`items`. Элемент items содержит `group` (только выбранные измерения, включая явные
+null) и `counts`. Обе схемы счётчиков одинаковые:
+
+| Счётчик | Смысл |
+|---|---|
+| `total_count` | Все отфильтрованные записи реестра, включая закрытые и отгруженные. |
+| `registered_count` | Зарегистрированные без активации: holder отсутствует, физический остаток не резервируется. |
+| `active_count` | Все active identity: идентифицированные единицы организации. |
+| `active_loose_count` | Active с прямой локацией и без контейнера. |
+| `active_container_count` | Active с контейнером и без прямой локации. |
+| `shipped_count` | Отгруженные, не входят в active. |
+| `error_count` | Закрытая ошибочная идентификация, не входит в active. |
+| `deactivated_count` | Деактивированные, не входят в active. |
+
+Общий количественный остаток inventory и unidentified по организации не вычисляются.
+Не зарегистрированные в wms.kiz коды из inbox не учитываются. Сохранённый holder у
+error/deactivated не означает подтверждённого физического размещения. История адресов
+не реконструируется; location контейнера берётся из его текущего состояния.
+
+Сортировка стабильна по измерениям group_by по возрастанию, NULL сначала. Пагинация
+ограничивает только items. totals и total_groups относятся ко всему отфильтрованному
+реестру даже при offset за концом списка. Ответ читается в одной read-only транзакции
+REPEATABLE READ, без блокировки строк для записи. Отдельные запросы могут видеть
+разные состояния при параллельных регистрациях/движениях.
+
+Swagger содержит полные схемы, описания параметров и пример 200. Ошибка БД — 500 без
+частичного результата. Подсчёт всех групп требует агрегации отфильтрованного набора:
+limit сам по себе не уменьшает стоимость общего подсчёта на больших объёмах.
+
 ## Первые 24 символа
 
 Все входные `kiz_code`/`kiz_codes` принимают произвольную длину: запись, поиск,

@@ -6,6 +6,15 @@
 
 Базовый префикс API: `settings.API_V1_PREFIX`, по умолчанию `/api`.
 
+### Аналитика КИЗ
+
+- `GET /api/kiz-reports/summary` — отдельная read-only сводка; прежний `GET /api/kiz` не меняется.
+- Все параметры необязательны. `group_by=organization,product_id` по умолчанию;
+  также доступны lifecycle_status, location_code, container_id, container_qr_code, origin_type.
+- `organization_missing=true` — только NULL organization; false — только заполненные;
+  отсутствие параметра — все. Сочетание true с organization даёт 422.
+- Полный контракт фильтров, счётчиков и пагинации: [API КИЗ](kiz_api.md#аналитическая-сводка).
+
 Также есть системные endpoints без этого префикса:
 
 - `GET /` - информация о сервисе.

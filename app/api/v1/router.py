@@ -20,6 +20,7 @@ from app.api.v1.endpoints import (
     kiz_import,
     kiz_operations,
     kiz_history,
+    kiz_reports,
     container_operations,
 )
 
@@ -45,4 +46,5 @@ api_router.include_router(kiz.router)
 api_router.include_router(kiz_import.router)
 api_router.include_router(kiz_operations.router)
 api_router.include_router(kiz_history.router)
+api_router.include_router(kiz_reports.router)
 api_router.include_router(container_operations.router)
