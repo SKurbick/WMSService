@@ -64,3 +64,6 @@ kiz_steps_tests.md
 # Локальная диагностика RabbitMQ, не относящаяся к реализации сервиса.
 /scripts/peek_stock_reservation_messages.py
 /tests/test_peek_stock_reservation_messages.py
+
+# Локальный справочник новых endpoint ветки КИЗ.
+/LOCAL_KIZ_ENDPOINTS.md
