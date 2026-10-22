@@ -182,10 +182,10 @@ active на существующей россыпи, receipt import создаё
 - B2.1 регистрирует identity для receipt, но не назначает KIZ физической единице и не создаёт receipt/movement.
 - Новый `receipt_import` KIZ имеет `lifecycle_status=registered`, `location_id=NULL`, `container_id=NULL`.
 - Registered KIZ не участвует в `identified/unidentified` и physical guards; physical identity определяют только active KIZ с holder.
-- Registration не требует physical stock в receipt location; обязателен receipt item для `(order_guid, product_id)`.
-- Current `registered` + `active` receipt-import KIZ count не превышает `receipt_items.quantity` для `(order_guid, product_id)`; terminal KIZ слот не занимают.
+- Registration не требует receipt item, приёмочную локацию или physical stock. GUID поставки информационен; receipt может появиться позже.
+- Количество receipt не ограничивает регистрацию. Отсутствие receipt и расхождение количества информационны, не влияют на integrity.is_valid.
 - Один code во входном сообщении допустим только один раз; строки не нормализуются.
-- Existing registered/active KIZ того же product/receipt является idempotent; terminal не реактивируется.
+- Existing receipt-import KIZ того же product/organization является idempotent даже при другом GUID; исходный origin_reference сохраняется, terminal не реактивируется.
 - Existing KIZ другого product/origin отклоняет всё сообщение.
 - `supply.organization` optional; непустое значение сохраняется в inbox и новых KIZ, отсутствие сохраняет legacy `NULL`.
 - Existing KIZ с другой непустой organization отклоняет всё сообщение; legacy KIZ с `organization=NULL` не переписывается автоматически.
@@ -193,7 +193,7 @@ active на существующей россыпи, receipt import создаё
 - Message применяется атомарно; business conflict сохраняет `rejected`, system/DB error откатывается.
 - `wms.kiz_import_message_kiz` хранит immutable provenance и допускает несколько messages на один KIZ.
 - Replay applied message возвращает `new_kiz_count=0`, а linked current KIZ учитывает как existing.
-- Consumer завершает только B1 save/ACK и никогда автоматически не запускает B2.
+- При KIZ_IMPORT_CONSUMER_ENABLED=true consumer сохраняет inbox и сразу регистрирует КИЗ. ACK после applied или persisted rejected; системные ошибки вызывают NACK/requeue. Старые pending/rejected строки повторяются через `/process`, фонового обхода нет.
 
 ## KIZ activation
 

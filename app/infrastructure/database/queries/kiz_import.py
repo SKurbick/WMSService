@@ -73,6 +73,25 @@ ORDER BY id
 FOR SHARE;
 """
 
+REGISTRATION_CONTEXT = """
+SELECT input.product_id,
+       (SELECT SUM(ri.quantity) FROM wms.receipt_items ri
+        WHERE ri.guid = $1 AND ri.product_id = input.product_id) AS receipt_quantity,
+       CASE WHEN location.location_id IS NOT NULL THEN
+         COALESCE((SELECT SUM(i.quantity) FROM wms.inventory i
+          WHERE i.product_id = input.product_id AND i.location_id = location.location_id
+            AND i.status = 'available' AND i.batch_number IS NULL AND i.container_code IS NULL), 0)
+       END AS physical_quantity,
+       CASE WHEN location.location_id IS NOT NULL THEN
+         (SELECT COUNT(*) FROM wms.kiz k
+          WHERE k.product_id = input.product_id AND k.location_id = location.location_id
+            AND k.lifecycle_status = 'active' AND k.container_id IS NULL)
+       END AS identified_quantity
+FROM unnest($2::varchar[]) AS input(product_id)
+LEFT JOIN wms.locations location ON location.location_code = $3::varchar
+ORDER BY input.product_id;
+"""
+
 LOCK_RECEIPT_ITEMS = """
 SELECT receipt_item_id, product_id, quantity
 FROM wms.receipt_items
@@ -257,7 +276,6 @@ FROM wms.kiz_import_message_kiz link
 JOIN wms.kiz_import_messages message USING (message_id)
 JOIN wms.kiz k USING (kiz_id)
 WHERE k.origin_type <> 'receipt_import'
-   OR message.order_guid IS DISTINCT FROM k.origin_reference
    OR message.organization IS NOT NULL
       AND k.organization IS NOT NULL
       AND message.organization IS DISTINCT FROM k.organization

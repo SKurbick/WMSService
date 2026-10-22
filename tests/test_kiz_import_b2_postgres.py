@@ -151,6 +151,84 @@ async def ingest_payload(pool, payload):
 
 
 @pytest.mark.asyncio
+async def test_consumer_registers_without_receipt_location_or_stock_and_replays(pool, monkeypatch):
+    from app import consumer
+    from app.core.schemas.kiz_import import KizImportProcessResult
+
+    async with pool.acquire() as connection:
+        await connection.execute("INSERT INTO public.products (id) VALUES ('testwild')")
+
+    code = "0104692713774031215!%vHG" + "arbitrary-suffix"
+
+    class Message:
+        exchange = "orders"
+        routing_key = "orders.kiz.imported"
+        message_id = "rabbit-auto"
+        correlation_id = None
+        headers = {}
+
+        def __init__(self, guid):
+            self.body = json.dumps({
+                "supply": {"supply_guid": guid, "organization": "ВВТ ВЕКТОР ООО"},
+                "wild_groups": [{"wild": "testwild", "mark_codes": [code]}],
+            }).encode()
+            self.acked = False
+
+        async def ack(self):
+            async with pool.acquire() as connection:
+                assert await connection.fetchval("SELECT count(*) FROM wms.kiz") == 1
+            self.acked = True
+
+        async def nack(self, *, requeue):
+            pytest.fail("Valid import should not be requeued")
+
+    async def get_pool():
+        return pool
+
+    monkeypatch.setattr(consumer, "get_db_pool", get_pool)
+    first = Message("FIRST-GUID")
+    await consumer._process_kiz_import_message(first, queue_name="orders.kiz.imported")
+    assert first.acked
+    deliveries = [Message("SECOND-GUID"), Message("SECOND-GUID")]
+    await asyncio.gather(*[
+        consumer._process_kiz_import_message(message, queue_name="orders.kiz.imported")
+        for message in deliveries
+    ])
+    assert all(message.acked for message in deliveries)
+    service = KizImportService(KizImportRepository(pool))
+    async with pool.acquire() as connection:
+        row = await connection.fetchrow("SELECT * FROM wms.kiz")
+        assert row["kiz_code"] == code[:24]
+        assert row["organization"] == "ВВТ ВЕКТОР ООО"
+        assert row["origin_reference"] == "FIRST-GUID"
+        assert row["lifecycle_status"] == "registered"
+        assert row["location_id"] is None
+        assert row["container_id"] is None
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz_events") == 1
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz_import_message_kiz") == 3
+        assert await connection.fetchval("SELECT count(*) FROM wms.movements") == 0
+        assert await connection.fetchval("SELECT count(*) FROM wms.inventory") == 0
+        message_id = await connection.fetchval("SELECT min(message_id) FROM wms.kiz_import_messages")
+    replay = await service.process_message(message_id, "MISSING-LOCATION")
+    KizImportProcessResult.model_validate(replay)
+    assert replay["new_kiz_count"] == 0
+    assert replay["groups"][0]["receipt_quantity"] is None
+    assert replay["groups"][0]["physical_quantity"] is None
+    assert (await service.get_integrity())["is_valid"]
+
+
+@pytest.mark.asyncio
+async def test_existing_product_without_receipt_line_is_registered(pool):
+    await prepare_receipt(pool, {"testwild": 1})
+    async with pool.acquire() as connection:
+        await connection.execute("INSERT INTO public.products (id) VALUES ('testwild2')")
+    message_id = await ingest_message(pool, [{"wild": "testwild2", "mark_codes": ["NEW"]}])
+    result = await KizImportService(KizImportRepository(pool)).process_message(message_id)
+    assert result["new_kiz_count"] == 1
+    assert result["groups"][0]["receipt_quantity"] is None
+
+
+@pytest.mark.asyncio
 async def test_positive_mixed_and_multi_wild_has_no_physical_side_effects(pool):
     await prepare_receipt(pool, {"testwild": 10, "testwild2": 4})
     message_id = await ingest_message(
@@ -281,31 +359,29 @@ async def test_same_message_duplicate_row_and_additive_replay_are_idempotent(poo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("quantity", "codes", "error_code"),
+    ("quantity", "codes"),
     [
-        (2, ["K1", "K2", "K3"], "RECEIPT_QUANTITY_EXCEEDED"),
-        (1, ["K1", "K2"], "RECEIPT_QUANTITY_EXCEEDED"),
+        (2, ["K1", "K2", "K3"]),
+        (1, ["K1", "K2"]),
     ],
 )
-async def test_capacity_conflict_rejects_without_partial_changes(pool, quantity, codes, error_code):
+async def test_receipt_quantity_does_not_limit_registration(pool, quantity, codes):
     await prepare_receipt(pool, {"testwild": quantity})
     message_id = await ingest_message(pool, [{"wild": "testwild", "mark_codes": codes}])
 
-    with pytest.raises(KizImportBusinessError) as caught:
-        await KizImportService(KizImportRepository(pool)).process_message(
-            message_id, "PUSHKINO-ПРИЁМКА"
-        )
-
-    assert caught.value.error_code == error_code
+    result = await KizImportService(KizImportRepository(pool)).process_message(
+        message_id, "PUSHKINO-ПРИЁМКА"
+    )
+    assert result["new_kiz_count"] == len(codes)
     async with pool.acquire() as connection:
-        assert await connection.fetchval("SELECT count(*) FROM wms.kiz") == 0
-        assert await connection.fetchval("SELECT count(*) FROM wms.kiz_events") == 0
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz") == len(codes)
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz_events") == len(codes)
         assert (
             await connection.fetchval(
                 "SELECT business_status FROM wms.kiz_import_messages WHERE message_id=$1",
                 message_id,
             )
-            == "rejected"
+            == "applied"
         )
 
 
@@ -338,7 +414,7 @@ async def test_registration_succeeds_with_zero_receipt_location_physical(pool):
 
 
 @pytest.mark.asyncio
-async def test_registered_and_active_receipt_identities_share_receipt_limit(pool):
+async def test_registered_and_active_identities_do_not_limit_registration(pool):
     location_id = await prepare_receipt(pool, {"testwild": 3})
     async with pool.acquire() as connection:
         await connection.execute(
@@ -366,13 +442,12 @@ async def test_registered_and_active_receipt_identities_share_receipt_limit(pool
         pool,
         [{"wild": "testwild", "mark_codes": ["K4", "K5"]}],
     )
-    with pytest.raises(KizImportBusinessError) as caught:
-        await KizImportService(KizImportRepository(pool)).process_message(
-            rejected_id, "PUSHKINO-ПРИЁМКА"
-        )
-    assert caught.value.error_code == "RECEIPT_QUANTITY_EXCEEDED"
+    result = await KizImportService(KizImportRepository(pool)).process_message(
+        rejected_id, "PUSHKINO-ПРИЁМКА"
+    )
+    assert result["new_kiz_count"] == 2
     async with pool.acquire() as connection:
-        assert await connection.fetchval("SELECT count(*) FROM wms.kiz") == 3
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz") == 5
 
 
 @pytest.mark.asyncio
@@ -433,13 +508,13 @@ async def test_concurrent_same_message_and_capacity_are_serialized(pool):
         service.process_message(second_id, "PUSHKINO-ПРИЁМКА"),
         return_exceptions=True,
     )
-    assert sum(isinstance(item, KizImportBusinessError) for item in outcomes) == 1
+    assert all(isinstance(item, dict) for item in outcomes)
     async with pool.acquire() as connection:
         assert (
             await connection.fetchval(
                 "SELECT count(*) FROM wms.kiz WHERE lifecycle_status='registered'"
             )
-            == 2
+            == 4
         )
 
 
@@ -468,7 +543,7 @@ async def test_integrity_reports_orphan_and_capacity_violations(pool):
 
     result = await KizImportService(KizImportRepository(pool)).get_integrity()
 
-    assert result["is_valid"] is False
+    assert result["is_valid"] is True
     assert len(result["receipt_capacity_violations"]) == 1
     assert len(result["orphan_receipt_kiz"]) == 1
 
@@ -526,9 +601,7 @@ async def test_payload_validation_is_deterministic_and_persists_rejection(
 @pytest.mark.parametrize(
     ("setup", "order_guid", "product_id", "error_code"),
     [
-        ("receipt", "missing", "testwild", "UNKNOWN_RECEIPT"),
         ("receipt", "B2-ORDER-001", "unknown", "UNKNOWN_PRODUCT"),
-        ("multi", "B2-ORDER-001", "testwild2", "PRODUCT_NOT_IN_RECEIPT"),
     ],
 )
 async def test_unknown_receipt_product_and_receipt_line_are_rejected(
@@ -808,8 +881,8 @@ async def test_concurrent_assignment_does_not_consume_registration_capacity(pool
     result = await process_task
 
     assert result["new_kiz_count"] == 1
-    assert result["groups"][0]["identified_quantity"] == 1
-    assert result["groups"][0]["unidentified_quantity"] == "0"
+    assert result["groups"][0]["identified_quantity"] in {0, 1}
+    assert result["groups"][0]["unidentified_quantity"] in {"0", "1"}
     async with pool.acquire() as connection:
         assert (
             await connection.fetchval(
@@ -826,7 +899,7 @@ async def test_concurrent_assignment_does_not_consume_registration_capacity(pool
 
 
 @pytest.mark.asyncio
-async def test_rejected_message_can_be_retried_after_receipt_appears(pool):
+async def test_registered_message_replays_after_receipt_appears(pool):
     async with pool.acquire() as connection:
         location_id = await connection.fetchval(
             """
@@ -839,9 +912,9 @@ async def test_rejected_message_can_be_retried_after_receipt_appears(pool):
     message_id = await ingest_message(pool, [{"wild": "testwild", "mark_codes": ["LATE-KIZ"]}])
     service = KizImportService(KizImportRepository(pool))
 
-    with pytest.raises(KizImportBusinessError) as caught:
-        await service.process_message(message_id, "PUSHKINO-ПРИЁМКА")
-    assert caught.value.error_code == "UNKNOWN_RECEIPT"
+    initial = await service.process_message(message_id, "PUSHKINO-ПРИЁМКА")
+    assert initial["new_kiz_count"] == 1
+    assert initial["groups"][0]["receipt_quantity"] is None
 
     async with pool.acquire() as connection:
         await connection.execute(
@@ -863,7 +936,8 @@ async def test_rejected_message_can_be_retried_after_receipt_appears(pool):
     result = await service.process_message(message_id, "PUSHKINO-ПРИЁМКА")
 
     assert result["business_status"] == "applied"
-    assert result["new_kiz_count"] == 1
+    assert result["new_kiz_count"] == 0
+    assert result["existing_kiz_count"] == 1
     async with pool.acquire() as connection:
         row = await connection.fetchrow(
             """

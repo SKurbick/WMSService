@@ -249,11 +249,40 @@ async def test_consumer_acks_only_after_database_commit(monkeypatch):
 
     monkeypatch.setattr(consumer, "get_db_pool", fake_get_pool)
 
+    async def fake_process(self, message_id, location_code):
+        assert state[-1] == "commit"
+        state.extend(["apply", "commit"])
+        return {"new_kiz_count": 1, "existing_kiz_count": 0}
+
+    monkeypatch.setattr(KizImportService, "process_message", fake_process)
+
     await consumer._process_kiz_import_message(message, queue_name="orders.kiz.imported")
 
-    assert state == ["transaction_enter", "insert", "commit", "ack"]
+    assert state == ["transaction_enter", "insert", "commit", "apply", "commit", "ack"]
     assert message.acked is True
     assert message.nacked is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("business_error", [False, True])
+async def test_consumer_processing_failure_ack_policy(monkeypatch, business_error):
+    state = []
+    message = FakeMessage(state)
+
+    async def fake_get_pool():
+        return FakePool(state)
+
+    async def fake_process(self, message_id, location_code):
+        if business_error:
+            state.extend(["rejected", "commit"])
+            raise KizImportBusinessError("Неизвестный товар", error_code="UNKNOWN_PRODUCT")
+        raise RuntimeError("database unavailable during registration")
+
+    monkeypatch.setattr(consumer, "get_db_pool", fake_get_pool)
+    monkeypatch.setattr(KizImportService, "process_message", fake_process)
+    await consumer._process_kiz_import_message(message, queue_name="orders.kiz.imported")
+    assert message.acked is business_error
+    assert message.nacked is not business_error
 
 
 @pytest.mark.asyncio

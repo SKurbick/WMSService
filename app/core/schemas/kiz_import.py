@@ -82,8 +82,8 @@ class KizImportMessageDetail(KizImportMessageListItem):
 
 class KizImportGroupResult(BaseModel):
     product_id: str = Field(description="Идентификатор товара из wild.")
-    receipt_quantity: Decimal = Field(
-        description="Количество товара в поступлении — предел текущих registered и active КИЗ этого поступления."
+    receipt_quantity: Decimal | None = Field(
+        description="Информационное количество товара в поступлении; null, если поступление ещё не найдено. Не ограничивает регистрацию."
     )
     requested_codes: int = Field(description="Количество кодов товара во входном сообщении.")
     new_kiz: int = Field(
@@ -95,13 +95,13 @@ class KizImportGroupResult(BaseModel):
     terminal_existing: int = Field(
         description="Количество существующих КИЗ в конечных состояниях; они не активируются повторно."
     )
-    physical_quantity: Decimal = Field(
-        description="Физический доступный остаток россыпи без партии в настроенной приёмочной локации на момент первоначальной обработки."
+    physical_quantity: Decimal | None = Field(
+        description="Снимок доступной россыпи без партии в настроенной приёмочной локации; null, если локация не найдена. На регистрацию не влияет."
     )
-    identified_quantity: int = Field(
+    identified_quantity: int | None = Field(
         description="Количество active КИЗ в этом физическом остатке на момент первоначальной обработки; registered КИЗ не учитываются."
     )
-    unidentified_quantity: Decimal = Field(
+    unidentified_quantity: Decimal | None = Field(
         description="Неидентифицированный остаток: physical_quantity минус identified_quantity. При повторе возвращается первоначальный снимок."
     )
 
@@ -110,7 +110,7 @@ class KizImportProcessResult(BaseModel):
     message_id: int = Field(description="Идентификатор применённого сообщения.")
     business_status: str = Field(description="Успешное состояние обработки: applied.")
     order_guid: str = Field(
-        description="GUID существующего поступления, записанный в origin_reference КИЗ."
+        description="Информационный GUID поставки, записанный в origin_reference новых КИЗ. Поступление может появиться позже."
     )
     supply_number: str | None = Field(
         None, description="Номер поставки из сообщения, если передан."
@@ -134,13 +134,15 @@ class KizImportProcessResult(BaseModel):
 
 
 class KizReceiptCapacityViolation(BaseModel):
-    order_guid: str = Field(description="GUID поступления с превышением лимита.")
-    product_id: str = Field(description="Идентификатор товара с превышением лимита.")
+    order_guid: str = Field(
+        description="Информационный GUID поступления с расхождением количества."
+    )
+    product_id: str = Field(description="Идентификатор товара с расхождением количества.")
     current_kiz_count: int = Field(
         description="Количество registered и active КИЗ поступления по этому товару."
     )
     receipt_quantity: Decimal = Field(
-        description="Количество товара в поступлении, которое не должно быть превышено."
+        description="Информационное количество товара в поступлении; не ограничивает регистрацию."
     )
 
 
@@ -184,7 +186,8 @@ class KizInvalidMessageLink(BaseModel):
     message_organization: str | None = Field(None, description="Организация из сообщения.")
     origin_type: str = Field(description="Фактический источник связанного КИЗ.")
     origin_reference: str | None = Field(
-        None, description="Фактический GUID происхождения КИЗ для сравнения с сообщением."
+        None,
+        description="Исходный информационный GUID КИЗ; может отличаться от GUID повторного сообщения.",
     )
     kiz_organization: str | None = Field(
         None,
@@ -194,13 +197,13 @@ class KizInvalidMessageLink(BaseModel):
 
 class KizImportIntegrityResponse(BaseModel):
     is_valid: bool = Field(
-        description="true, если все пять списков нарушений пусты; наличие нарушений не меняет HTTP 200."
+        description="true, если нет нарушений holder, origin и связей сообщений. Отсутствие поступления и превышение его количества информационны и не влияют на is_valid. HTTP 200 сохраняется."
     )
     receipt_capacity_violations: list[KizReceiptCapacityViolation] = Field(
-        description="Превышения количества registered и active КИЗ над количеством товара в поступлении."
+        description="Информационные превышения количества КИЗ над количеством поступления; не являются ошибкой регистрации."
     )
     orphan_receipt_kiz: list[KizOrphanReceiptOrigin] = Field(
-        description="КИЗ поступления, для которых не найдена соответствующая строка поступления и товара."
+        description="Информационный список КИЗ без найденной строки поступления; поступление может появиться позже."
     )
     registered_holder_violations: list[KizRegisteredHolderViolation] = Field(
         description="Registered КИЗ с назначенной локацией или контейнером."

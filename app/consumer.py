@@ -17,6 +17,7 @@ from app.infrastructure.database.repositories.stock_reservation_repository impor
 from app.core.services.stock_reservation_service import StockReservationService
 from app.infrastructure.database.repositories.kiz_import_repository import KizImportRepository
 from app.core.services.kiz_import_service import KizImportService
+from app.core.exceptions import KizImportBusinessError
 from app.handlers.write_off_fbs_handler import handle_write_off_fbs
 from app.core.schemas.write_off_fbs import WriteOffAccordingToFBS
 from app.core.enums import FbsShipmentSource
@@ -247,7 +248,8 @@ async def _process_kiz_import_message(message, *, queue_name: str) -> None:
     rabbit_message_id = message.message_id
     try:
         pool = await get_db_pool()
-        result = await KizImportService(KizImportRepository(pool)).ingest(
+        service = KizImportService(KizImportRepository(pool))
+        result = await service.ingest(
             message.body,
             exchange_name=message.exchange or None,
             routing_key=message.routing_key or None,
@@ -255,9 +257,26 @@ async def _process_kiz_import_message(message, *, queue_name: str) -> None:
             correlation_id=message.correlation_id,
             headers=message.headers,
         )
+        try:
+            applied = await service.process_message(
+                result.message_id, settings.KIZ_IMPORT_RECEIPT_LOCATION_CODE
+            )
+            kiz_import_logger.info(
+                "KIZ import зарегистрирован | message_id=%s | new=%s | existing=%s",
+                result.message_id,
+                applied["new_kiz_count"],
+                applied["existing_kiz_count"],
+            )
+        except KizImportBusinessError as error:
+            kiz_import_logger.warning(
+                "KIZ import отклонён | message_id=%s | code=%s | error=%s",
+                result.message_id,
+                error.error_code,
+                error,
+            )
     except Exception as error:
         kiz_import_logger.error(
-            "KIZ import message не сохранено | queue=%s | rabbit_message_id=%s | error=%s",
+            "KIZ import получение/регистрация не завершены | queue=%s | rabbit_message_id=%s | error=%s",
             queue_name,
             rabbit_message_id or "-",
             error,

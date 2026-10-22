@@ -95,6 +95,17 @@ class KizImportRepository:
     async def lock_products(self, connection: Connection, product_ids: list[str]):
         return await connection.fetch(queries.LOCK_PRODUCTS, product_ids)
 
+    async def get_registration_context(
+        self,
+        connection: Connection,
+        order_guid: str,
+        product_ids: list[str],
+        location_code: str | None,
+    ):
+        return await connection.fetch(
+            queries.REGISTRATION_CONTEXT, order_guid, product_ids, location_code
+        )
+
     async def lock_receipt_items(self, connection: Connection, order_guid: str):
         return await connection.fetch(queries.LOCK_RECEIPT_ITEMS, order_guid)
 

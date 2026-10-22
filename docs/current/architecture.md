@@ -135,7 +135,7 @@ Write path `POST /api/kit-operations` выполняется в одной DB tr
 `orders.kiz.imported` и не использует FBS/reservation processing. Адаптер передаёт bytes
 и RabbitMQ metadata в `KizImportService`, repository записывает одну строку
 `wms.kiz_import_messages` в отдельной транзакции. Consumer ACK-ает сообщение только после
-возврата из repository, то есть после commit; ошибка БД приводит к NACK/requeue.
+регистрации КИЗ или сохранения бизнес-отказа; ошибка БД приводит к NACK/requeue.
 
 R1 является только ingestion/audit слоем: raw body и parsed JSON сохраняются без
 складских операций. Consumer выключен по умолчанию настройкой
@@ -143,16 +143,16 @@ R1 является только ingestion/audit слоем: raw body и parsed 
 
 ## KIZ import controlled business apply
 
-B2 запускается только явным `POST /api/kiz-import/messages/{message_id}/process`; RabbitMQ
-consumer остаётся B1 raw-ingestion-only. Service блокирует inbox row, receipt rows
-документа, диагностический receipt inventory и KIZ в детерминированном порядке. Business
+B2 запускается consumer сразу после inbox commit или явно через `POST /api/kiz-import/messages/{message_id}/process`.
+Service блокирует inbox row, товары и существующие KIZ в детерминированном порядке.
+Receipt и inventory читаются только для информационного снимка, без блокировок и ограничений регистрации. Business
 apply выполняется во вложенном savepoint: любой конфликт откатывает KIZ/events/links
 целиком, после чего outer transaction фиксирует `business_status=rejected`.
 
 Успех создаёт `registered` rows в `wms.kiz`, registration events и immutable
 provenance `wms.kiz_import_message_kiz`; movements, inventory и receipt_items не изменяются.
-Registration не проверяет unidentified physical capacity. Receipt quantity limit считает
-current registered + active receipt identities до insert и после него. Replay applied message
+Registration не проверяет unidentified physical capacity и receipt quantity limit.
+Диагностика receipt/stock читается одним SELECT без блокировок и не ограничивает регистрацию. Replay applied message
 пересчитывает counters по immutable links и возвращает `new=0`.
 
 ## KIZ activation

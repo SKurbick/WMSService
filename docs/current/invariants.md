@@ -117,8 +117,8 @@ Completed операция имеет две разные роли и одина
 - `registered` KIZ не имеет holder: `location_id IS NULL AND container_id IS NULL`; active holder contract не меняется.
 - Registered KIZ не занимает physical unit, не входит в identified quantity и не ограничивает loose movement.
 - Один active KIZ занимает одну physical unit своего holder scope; physical guards продолжают считать только active KIZ.
-- Current `registered` + `active` receipt-import KIZ по `(origin_reference, product_id)` не превышают `receipt_items.quantity`.
-- Registration требует receipt item, но не требует inventory в configured receipt location.
+- Receipt quantity не ограничивает регистрацию; отсутствие receipt и расхождения количества являются информационной диагностикой.
+- Registration не требует receipt item, inventory или configured receipt location; GUID поставки информационен.
 - B2 не создаёт movements и не изменяет inventory/receipt_items quantity.
 - Один message применяется атомарно; provenance links immutable и не являются quantity ledger.
 - Replay terminal KIZ не меняет lifecycle; conflicting origin/product отклоняет весь message.

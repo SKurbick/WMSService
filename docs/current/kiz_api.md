@@ -162,7 +162,12 @@ Quantity — полное целое количество, включая КИЗ
 Импорт receipt КИЗ и активация registered → active входят в объединённый API.
 `GET /api/kiz-import/messages` и detail возвращают исходные сообщения; ручной
 `POST /api/kiz-import/messages/{message_id}/process` создаёт registered КИЗ без holder
-и физического резерва. `GET /api/kiz-import/integrity` проверяет происхождение и лимиты.
+и физического резерва. Включённый consumer выполняет эту регистрацию автоматически.
+Товар должен существовать; receipt, его количество, локация и остатки не ограничивают регистрацию.
+GUID информационен: другой GUID того же КИЗ не заменяет origin_reference, добавляется связь с сообщением.
+receipt_quantity и снимки остатков могут быть null без receipt/локации.
+`GET /api/kiz-import/integrity` проверяет holder, origin и связи; отсутствие receipt и расхождения количества информационны, не меняют is_valid.
+Старые pending/rejected сообщения повторяются через `/process`; фонового обхода нет.
 `POST /api/kiz/activate` подтверждает сканирование в loose location без движения товара.
 Карточки, список, журнал и история поддерживают registered, receipt_import и события
 registered/activated; карточка также возвращает nullable organization.

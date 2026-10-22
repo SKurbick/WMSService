@@ -6,7 +6,7 @@
 доступны реестр/история/explicit transfer/ship и container operations, а также receipt
 import, registered lifecycle, activation и FBS task-level shipment с optional KIZ binding.
 Registered КИЗ не резервирует physical stock; active КИЗ сохраняет физическую защиту.
-Автоматический business apply из RabbitMQ и FBS shipment active container KIZ не включены.
+Включённый consumer автоматически регистрирует КИЗ независимо от receipt и остатков. FBS shipment active container KIZ не включён.
 
 ## Назначение
 
@@ -194,12 +194,12 @@ Changed/physical/movement fields намеренно отсутствуют: ст
 ошибка записи БД приводит к NACK/requeue. Доступны read-only endpoints списка и detail.
 Optional `supply.organization` нормализуется в диагностическую колонку `organization`;
 raw payload остаётся неизменным.
-Создание КИЗ и любые изменения movements, inventory или receipt flow не выполняются.
+После сохранения inbox consumer автоматически создаёт registered КИЗ; movements, inventory и receipt flow не меняются.
 Перед включением consumer требуется применить датированную additive migration на stage.
 
 ## KIZ import controlled apply
 
-Сохранённое B1-сообщение можно вручную применить к существующему receipt через
+Сохранённое сообщение можно повторно применить независимо от наличия receipt через
 `POST /api/kiz-import/messages/{message_id}/process`. B2.1 создаёт KIZ в статусе
 `registered` с `origin_type=receipt_import` и `origin_reference=order_guid`, но без
 текущего physical holder. Receipt location сохраняется только в metadata
@@ -210,7 +210,7 @@ nullable identity attribute в `wms.kiz`; legacy payload и KIZ сохраняю
 Обработка атомарна и идемпотентна для same message, duplicate inbox rows и additive
 replay. Terminal KIZ не реактивируется. Physical quantity, receipt snapshot и movements
 не меняются. Registered KIZ не участвует в `identified/unidentified` и не
-резервирует loose stock. Автоматический apply из RabbitMQ consumer не реализован.
+резервирует loose stock. Автоматический apply выполняется включённым consumer; backlog не обходится.
 
 ## KIZ activation
 

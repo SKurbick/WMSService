@@ -183,7 +183,8 @@ INTEGRITY_DOCUMENTATION = {
         "КИЗ без строки поступления, недопустимое место хранения и происхождение registered КИЗ, "
         "а также несогласованные связи сообщение–КИЗ, включая разные заполненные организации. "
         "Читает данные без исправлений. Возвращает HTTP 200 даже при нарушениях: проверяйте "
-        "`is_valid` и пять списков ошибок. Registered КИЗ без локации и контейнера — нормальное "
+        "`is_valid` и пять списков. Отсутствие receipt и превышение его количества информационны "
+        "и не влияют на is_valid. Разные GUID сообщений одного КИЗ допустимы. Registered КИЗ без локации и контейнера — нормальное "
         "состояние. Эта проверка не заменяет общую сверку физических остатков WMS."
     ),
     "responses": {
@@ -240,16 +241,15 @@ DETAIL_DOCUMENTATION = {
 PROCESS_DOCUMENTATION = {
     "summary": "Зарегистрировать КИЗ из сохранённого сообщения поступления",
     "description": (
-        "Вручную применяет сообщение из журнала. Тело HTTP-запроса не требуется: данные берутся "
+        "Применяет или повторяет сообщение из журнала. Включённый consumer автоматически выполняет ту же регистрацию после сохранения доставки. Тело HTTP-запроса не требуется: данные берутся "
         "из сохранённого raw_payload. Ожидается объект с `supply.order_guid`, необязательными "
         "`supply_number` и `organization`, массивом `wild_groups` из объектов `wild` и "
         "`mark_codes`. Допускается временный аналог `supply.supply_guid`; если оба GUID переданы, "
         "они должны совпадать. Для mark_codes используются буквально первые 24 символа; короткие коды сохраняются целиком. Пробелы и регистр не изменяются, дубликаты проверяются после сокращения.\n\n"
-        "Товар и строка поступления `(order_guid, product_id)` должны существовать. Число текущих "
-        "registered и active КИЗ поступления по товару не должно превышать receipt quantity. "
-        "Частичное покрытие поступления кодами разрешено. Настроенная приёмочная локация "
-        "`KIZ_IMPORT_RECEIPT_LOCATION_CODE` должна существовать; физический остаток для регистрации "
-        "не требуется. Новые КИЗ получают `registered`, `origin_type=receipt_import`, "
+        "Товар должен существовать. Поступление, его количество, приёмочная локация и физический остаток "
+        "не ограничивают регистрацию. GUID — информационная связь; поступление может появиться позже. "
+        "receipt_quantity равен null без поступления, снимки остатков равны null без настроенной локации. "
+        "Новые КИЗ получают `registered`, `origin_type=receipt_import`, "
         "`origin_reference=order_guid`, `location_id=NULL`, `container_id=NULL`.\n\n"
         "Регистрация не создаёт движений, не меняет поступление и физический остаток, не уменьшает "
         "unidentified и не резервирует товар для КИЗ. Организация необязательна, сохраняется "
@@ -260,7 +260,10 @@ PROCESS_DOCUMENTATION = {
         "без частично созданных КИЗ; после устранения причины можно повторить запрос. "
         "Повтор applied-сообщения возвращает `new_kiz_count=0` и текущие количества связанных "
         "существующих/конечных КИЗ. Значения физических остатков при повторе остаются снимком "
-        "первоначальной обработки. Consumer автоматически этот endpoint не вызывает."
+        "первоначальной обработки. Другой GUID того же КИЗ, товара и организации не создаёт новую identity: "
+        "исходный origin_reference сохраняется, добавляется связь с сообщением. ACK следует после applied "
+        "или сохранения rejected; системная ошибка вызывает requeue. Старые pending/rejected сообщения "
+        "повторяются через этот endpoint, автоматического обхода backlog нет."
     ),
     "responses": {
         200: {
@@ -283,19 +286,17 @@ PROCESS_DOCUMENTATION = {
                 "error_code — причина). Коды формата: INVALID_RAW_PAYLOAD, INVALID_SUPPLY, "
                 "ORDER_GUID_MISMATCH, ORDER_GUID_REQUIRED, INVALID_WILD_GROUPS, INVALID_WILD_GROUP, "
                 "INVALID_PRODUCT_ID, INVALID_MARK_CODES, INVALID_KIZ_CODE, DUPLICATE_KIZ_CODE, "
-                "INVALID_ORGANIZATION. Коды данных: RECEIPT_LOCATION_NOT_FOUND, UNKNOWN_PRODUCT, "
-                "UNKNOWN_RECEIPT, PRODUCT_NOT_IN_RECEIPT, RECEIPT_KIZ_INTEGRITY_CONFLICT, "
-                "RECEIPT_QUANTITY_EXCEEDED, FINAL_KIZ_INTEGRITY_CONFLICT, KIZ_OWNERSHIP_CONFLICT, "
+                "INVALID_ORGANIZATION. Коды данных: UNKNOWN_PRODUCT, KIZ_OWNERSHIP_CONFLICT, "
                 "KIZ_ORGANIZATION_CONFLICT. Для бизнес-ошибки сообщение получает статус rejected."
             ),
             "content": {
                 "application/json": {
                     "examples": {
                         "business": {
-                            "summary": "Превышен лимит кодов поступления",
+                            "summary": "Неизвестный товар",
                             "value": {
-                                "detail": "Количество КИЗ превышает количество товара в поступлении",
-                                "error_code": "RECEIPT_QUANTITY_EXCEEDED",
+                                "detail": "Неизвестный товар: testwild",
+                                "error_code": "UNKNOWN_PRODUCT",
                             },
                         },
                         "validation": {

@@ -154,7 +154,9 @@ class KizImportService:
     async def get_message(self, message_id: int):
         return await self.repository.get_message(message_id)
 
-    async def process_message(self, message_id: int, receipt_location_code: str) -> dict[str, Any]:
+    async def process_message(
+        self, message_id: int, receipt_location_code: str | None = None
+    ) -> dict[str, Any]:
         rejection: KizImportBusinessError | None = None
         result: dict[str, Any] | None = None
         try:
@@ -210,7 +212,7 @@ class KizImportService:
             invalid_links,
         ) = await self.repository.get_integrity_issues()
         return {
-            "is_valid": not any((capacity, orphans, holders, origins, invalid_links)),
+            "is_valid": not any((holders, origins, invalid_links)),
             "receipt_capacity_violations": [dict(row) for row in capacity],
             "orphan_receipt_kiz": [dict(row) for row in orphans],
             "registered_holder_violations": [dict(row) for row in holders],
@@ -348,110 +350,23 @@ class KizImportService:
         *,
         message_id: int,
         request: KizImportBusinessRequest,
-        receipt_location_code: str,
+        receipt_location_code: str | None,
     ) -> dict[str, Any]:
         product_ids = sorted(request.codes_by_product)
-        location = await self.repository.lock_receipt_location(
-            connection,
-            receipt_location_code,
-        )
-        if location is None:
-            raise KizImportBusinessError(
-                f"Активная receipt location {receipt_location_code} не найдена",
-                error_code="RECEIPT_LOCATION_NOT_FOUND",
-            )
-        location_id = location["location_id"]
-
         products = await self.repository.lock_products(connection, product_ids)
-        existing_products = {row["id"] for row in products}
-        missing_products = sorted(set(product_ids) - existing_products)
+        missing_products = sorted(set(product_ids) - {row["id"] for row in products})
         if missing_products:
             raise KizImportBusinessError(
                 f"Товары не найдены: {', '.join(missing_products)}",
                 error_code="UNKNOWN_PRODUCT",
             )
 
-        receipt_rows = await self.repository.lock_receipt_items(
-            connection,
-            request.order_guid,
-        )
-        if not receipt_rows:
-            raise KizImportBusinessError(
-                f"Поступление {request.order_guid} не найдено",
-                error_code="UNKNOWN_RECEIPT",
-            )
-        receipt_by_product = {row["product_id"]: Decimal(row["quantity"]) for row in receipt_rows}
-        missing_receipt_products = sorted(set(product_ids) - set(receipt_by_product))
-        if missing_receipt_products:
-            raise KizImportBusinessError(
-                "Товары отсутствуют в поступлении: " + ", ".join(missing_receipt_products),
-                error_code="PRODUCT_NOT_IN_RECEIPT",
-            )
-
-        inventory_rows = await self.repository.lock_loose_inventory(
-            connection,
-            location_id,
-            product_ids,
-        )
-        physical_by_product = {product_id: Decimal("0") for product_id in product_ids}
-        for row in inventory_rows:
-            physical_by_product[row["product_id"]] += Decimal(row["quantity"])
-
         all_codes = sorted(code for codes in request.codes_by_product.values() for code in codes)
         existing_rows = await self.repository.lock_existing_codes(connection, all_codes)
-        await self.repository.lock_current_receipt_kiz(
-            connection,
-            request.order_guid,
-            product_ids,
-        )
-        await self.repository.lock_active_loose_kiz(
-            connection,
-            location_id,
-            product_ids,
-        )
-
         existing_by_code = {row["kiz_code"]: row for row in existing_rows}
-        current_receipt_counts = await self.repository.count_current_receipt_kiz(
-            connection,
-            request.order_guid,
-            product_ids,
-        )
-        planned_new: dict[str, list[str]] = {}
         existing_current: dict[str, list[Any]] = {product_id: [] for product_id in product_ids}
         existing_terminal: dict[str, list[Any]] = {product_id: [] for product_id in product_ids}
-        for product_id in product_ids:
-            new_codes = []
-            for code in request.codes_by_product[product_id]:
-                current = existing_by_code.get(code)
-                if current is None:
-                    new_codes.append(code)
-                    continue
-                self._validate_existing_kiz(
-                    current,
-                    product_id,
-                    request.order_guid,
-                    request.organization,
-                )
-                target = (
-                    existing_current
-                    if current["lifecycle_status"] in {"registered", "active"}
-                    else existing_terminal
-                )
-                target[product_id].append(current)
-            planned_new[product_id] = new_codes
-
-            receipt_quantity = receipt_by_product[product_id]
-            current_receipt_count = current_receipt_counts.get(product_id, 0)
-            if current_receipt_count > receipt_quantity:
-                raise KizImportBusinessError(
-                    f"Current receipt KIZ уже превышают quantity для {product_id}",
-                    error_code="RECEIPT_KIZ_INTEGRITY_CONFLICT",
-                )
-            if Decimal(current_receipt_count + len(new_codes)) > receipt_quantity:
-                raise KizImportBusinessError(
-                    f"Недостаточно receipt quantity для {product_id}",
-                    error_code="RECEIPT_QUANTITY_EXCEEDED",
-                )
+        created_by_product: dict[str, list[Any]] = {product_id: [] for product_id in product_ids}
         metadata = {
             "source": self.SOURCE,
             "order_guid": request.order_guid,
@@ -460,90 +375,70 @@ class KizImportService:
             "kiz_import_message_id": message_id,
             "receipt_location_code": receipt_location_code,
         }
-        created_by_product: dict[str, list[Any]] = {product_id: [] for product_id in product_ids}
         for product_id in product_ids:
-            for code in sorted(planned_new[product_id]):
-                created = await self.repository.insert_kiz(
-                    connection,
-                    kiz_code=code,
-                    product_id=product_id,
-                    order_guid=request.order_guid,
-                    organization=request.organization,
-                    author=self.AUTHOR,
-                    metadata=metadata,
-                )
-                if created is None:
-                    current = await self.repository.lock_kiz_by_code(connection, code)
-                    self._validate_existing_kiz(
-                        current,
-                        product_id,
-                        request.order_guid,
-                        request.organization,
+            for code in sorted(request.codes_by_product[product_id]):
+                current = existing_by_code.get(code)
+                created = False
+                if current is None:
+                    current = await self.repository.insert_kiz(
+                        connection,
+                        kiz_code=code,
+                        product_id=product_id,
+                        order_guid=request.order_guid,
+                        organization=request.organization,
+                        author=self.AUTHOR,
+                        metadata=metadata,
                     )
+                    created = current is not None
+                    if current is None:
+                        current = await self.repository.lock_kiz_by_code(connection, code)
+                if created:
+                    await self.repository.insert_registered_event(
+                        connection,
+                        kiz_id=current["kiz_id"],
+                        product_id=product_id,
+                        author=self.AUTHOR,
+                        metadata=metadata,
+                    )
+                    created_by_product[product_id].append(current)
+                else:
+                    self._validate_existing_kiz(current, product_id, request.organization)
                     target = (
                         existing_current
                         if current["lifecycle_status"] in {"registered", "active"}
                         else existing_terminal
                     )
                     target[product_id].append(current)
-                    continue
-                await self.repository.insert_registered_event(
-                    connection,
-                    kiz_id=created["kiz_id"],
-                    product_id=product_id,
-                    author=self.AUTHOR,
-                    metadata=metadata,
-                )
-                created_by_product[product_id].append(created)
-
-        for product_id in product_ids:
-            for row in created_by_product[product_id]:
                 await self.repository.link_message_kiz(
-                    connection,
-                    message_id,
-                    row["kiz_id"],
-                    True,
-                )
-            for row in existing_current[product_id] + existing_terminal[product_id]:
-                await self.repository.link_message_kiz(
-                    connection,
-                    message_id,
-                    row["kiz_id"],
-                    False,
+                    connection, message_id, current["kiz_id"], created
                 )
 
-        final_receipt_counts = await self.repository.count_current_receipt_kiz(
-            connection,
-            request.order_guid,
-            product_ids,
-        )
-        final_loose_counts = await self.repository.count_active_loose_kiz(
-            connection,
-            location_id,
-            product_ids,
-        )
+        diagnostics = {
+            row["product_id"]: row
+            for row in await self.repository.get_registration_context(
+                connection, request.order_guid, product_ids, receipt_location_code
+            )
+        }
         groups = []
         for product_id in product_ids:
-            receipt_quantity = receipt_by_product[product_id]
-            physical_quantity = physical_by_product[product_id]
-            receipt_identified = final_receipt_counts.get(product_id, 0)
-            identified = final_loose_counts.get(product_id, 0)
-            if Decimal(receipt_identified) > receipt_quantity:
-                raise KizImportBusinessError(
-                    f"Final KIZ invariant нарушен для {product_id}",
-                    error_code="FINAL_KIZ_INTEGRITY_CONFLICT",
-                )
+            context = diagnostics[product_id]
+            physical = context["physical_quantity"]
+            identified = context["identified_quantity"]
             groups.append(
                 {
                     "product_id": product_id,
-                    "receipt_quantity": _quantity(receipt_quantity),
+                    "receipt_quantity": _quantity(context["receipt_quantity"])
+                    if context["receipt_quantity"] is not None
+                    else None,
                     "requested_codes": len(request.codes_by_product[product_id]),
                     "new_kiz": len(created_by_product[product_id]),
                     "existing_kiz": len(existing_current[product_id]),
                     "terminal_existing": len(existing_terminal[product_id]),
-                    "physical_quantity": _quantity(physical_quantity),
+                    "physical_quantity": _quantity(physical) if physical is not None else None,
                     "identified_quantity": identified,
-                    "unidentified_quantity": _quantity(physical_quantity - identified),
+                    "unidentified_quantity": _quantity(physical - identified)
+                    if physical is not None and identified is not None
+                    else None,
                 }
             )
 
@@ -563,13 +458,11 @@ class KizImportService:
     def _validate_existing_kiz(
         row,
         product_id: str,
-        order_guid: str,
         organization: str | None,
     ) -> None:
         if row is None or (
             row["product_id"] != product_id
             or row["origin_type"] != "receipt_import"
-            or row["origin_reference"] != order_guid
         ):
             code = row["kiz_code"] if row is not None else "unknown"
             raise KizImportBusinessError(

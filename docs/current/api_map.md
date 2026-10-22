@@ -227,7 +227,7 @@ Legacy revisions читаются из `public.supply_to_sellers_warehouse`, cur
 - `GET /api/kiz-import/messages?limit=100&offset=0` — список диагностических полей без raw payload, сортировка `message_id DESC`.
 - `GET /api/kiz-import/messages/{message_id}` — detail с raw body, parsed payload, parse error и RabbitMQ metadata.
 - `POST /api/kiz-import/messages/{message_id}/process` — атомарно регистрирует receipt KIZ без physical holder, movements и inventory writes.
-- `GET /api/kiz-import/integrity` — read-only проверка receipt quantity, registered holder/origin, orphan receipt-origin KIZ и message↔KIZ links.
+- `GET /api/kiz-import/integrity` — read-only проверка registered holder/origin и message↔KIZ links; отсутствие receipt и превышение его количества информационны, не влияют на is_valid.
 
 Карточка, список и полная история доступны через API КИЗ ниже. Process endpoint не назначает
 физическое место хранения и не подставляет приёмочную локацию как текущую.
