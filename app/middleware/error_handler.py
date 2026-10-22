@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+from app.core.inventory_document_errors import InventoryDocumentError
 from app.core.exceptions import (
     DomainException,
     LocationNotFoundError,
@@ -58,6 +59,15 @@ logger = logging.getLogger(__name__)
 
 def add_exception_handlers(app: FastAPI):
     """Добавить обработчики исключений в приложение"""
+
+    @app.exception_handler(InventoryDocumentError)
+    async def inventory_document_error_handler(request, exc):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=jsonable_encoder(
+                {"detail": str(exc), "error_code": exc.code, "diagnostics": exc.details}
+            ),
+        )
 
     @app.exception_handler(KizNotFoundError)
     async def kiz_not_found_handler(request, exc):

@@ -1,5 +1,16 @@
 # Open Questions
 
+## Инвентаризация: отложено до этапа 2
+
+- INV-02-01: доказуемая physical boundary ФБС и count; stage 1 консервативно отмечает
+  ambiguity, не вычисляет автоматически безопасную физическую корректировку.
+- INV-02-02: technical allocation shortage/excess по batch components, без новых UI-фильтров.
+- INV-02-03: source-specific strict adjust, revision locks, immutable application links
+  и document-wide idempotent approval. Existing updater на этапе 1 не меняется.
+- INV-OPS-01: stage load test full-warehouse evidence capture; лимит 100000 rows на
+  категорию даёт явный conflict, история не усекалась. Контроль роста revision JSON нужен
+  до большого production pilot. [Runbook](../flows/inventory_stage1.md).
+
 Статус: `CURRENT`. Последний triage: 2026-09-24.
 
 Статусы: `open` — требуется решение или проверка; `answered` — ответ подтверждён

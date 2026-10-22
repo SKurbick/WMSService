@@ -8,6 +8,12 @@ from app.core.services.kiz_report_service import KizReportService
 from app.infrastructure.database.repositories.kiz_report_repository import KizReportRepository
 
 from app.infrastructure.database.connection import get_db_pool
+from app.core.inventory_document_errors import InventoryDocumentError
+from app.core.services.inventory_document_service import InventoryDocumentService
+from app.infrastructure.database.repositories.inventory_document_repository import (
+    InventoryDocumentRepository,
+)
+from app.shared.config import settings
 
 # Repositories
 from app.infrastructure.database.repositories.location_repository import LocationRepository
@@ -77,6 +83,26 @@ from app.core.services.container_unpack_all_service import ContainerUnpackAllSer
 
 
 # === Repositories ===
+
+
+def require_inventory_module():
+    if not settings.INVENTORY_MODULE_ENABLED:
+        raise InventoryDocumentError(
+            "Inventory module is disabled", status_code=503, code="INVENTORY_MODULE_DISABLED"
+        )
+    if settings.INVENTORY_APPLY_ENABLED:
+        raise InventoryDocumentError(
+            "Physical apply is not implemented in stage 1",
+            status_code=503,
+            code="INVENTORY_APPLY_NOT_IMPLEMENTED",
+        )
+
+
+def get_inventory_document_service(
+    enabled=Depends(require_inventory_module),
+    pool: Pool = Depends(get_db_pool),
+) -> InventoryDocumentService:
+    return InventoryDocumentService(InventoryDocumentRepository(pool))
 
 
 def get_location_repository(pool: Pool = Depends(get_db_pool)) -> LocationRepository:

@@ -4,6 +4,22 @@
 
 Alembic и автоматический migration runner в проекте отсутствуют. SQL применяется внешним процессом или владельцем БД. Все изменения сначала проверяются на stage и выполняются до запуска версии приложения, которая от них зависит.
 
+## Инвентаризация — этап 1, 22.10.2026
+
+`20261022_add_inventory_documents.sql` применяется вручную после текущей КИЗ/registry
+цепочки. Только новые document/scope/claim/snapshot/attempt/revision/history/command
+таблицы, индексы, constraints и module-only guards. Не изменяет существующие inventory,
+movements, КИЗ/контейнерные functions/triggers и не backfill-ит данные.
+
+Сначала stage PostgreSQL 17 и isolated integration tests. Затем backup и ручное
+применение владельцем БД с ON_ERROR_STOP. Код можно выложить до миграции при
+`INVENTORY_MODULE_ENABLED=false`; после миграции включить только module flag.
+`INVENTORY_APPLY_ENABLED` на этапе 1 должен оставаться false (true возвращает 503).
+Runtime-роли нужны SELECT physical evidence, права на новые tables/sequences; старое
+приложение новые объекты не использует. Rollback — выключить module, additive audit
+schema оставить. Повторный запуск SQL не поддерживается. Production apply агентом
+не выполнялся. [Подробный runbook](../../docs/flows/inventory_stage1.md).
+
 ## Найденные файлы
 
 ### КИЗ: первые 24 символа — 21.10.2026

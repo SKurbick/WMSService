@@ -1,5 +1,22 @@
 # Decisions
 
+## 2026-10-22 — инвентаризация, этап 1 без применения
+
+- Отдельные inventory documents, не tasks и не inventory_snapshots; additive migration
+  `20261022_add_inventory_documents.sql`, без изменения existing physical tables/functions.
+- Claims уникальны по location независимо от SKU; snapshot/start одной REPEATABLE READ
+  transaction. Claims не читаются обычными writers и не блокируют movements.
+- Все module write-команды имеют optimistic document version, UUID idempotency key,
+  canonical request hash и saved response; сериализуются по document row и command key.
+- Initial scope/components, revisions, history и completed attempts защищены новыми
+  guards только на таблицах модуля. Inventory IDs в component snapshot не являются FK.
+- Reconciliation сравнивает видимые identity sets и состояния, не использует created_at
+  как commit/physical order. Делает только preliminary revision с safe_for_apply=false.
+- Оба feature flags по умолчанию false. Apply=true в stage 1 fail-closed (503).
+  Физического approval endpoint, новых movement types и adjustment links пока нет.
+- Для stage 2 использовать существующий movement_registry, отдельный inventory source
+  для adjust и отдельное ревью атомарного применения. [Runbook](../flows/inventory_stage1.md).
+
 ## 2026-10-21 — отдельная аналитика реестра КИЗ
 
 - Добавлен read-only `GET /api/kiz-reports/summary`, без изменения контракта `/api/kiz`.

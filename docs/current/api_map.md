@@ -6,6 +6,34 @@
 
 Базовый префикс API: `settings.API_V1_PREFIX`, по умолчанию `/api`.
 
+### Инвентаризация — документы и пересчёты, этап 1
+
+Отдельный prefix `/api/inventory-documents`, 503 при выключенном module flag.
+Create/list/get/patch, preview-scope/scope/start, items, attempts/progress/complete,
+reconcile/submit/return-to-count/close-without-adjustment, history/revisions.
+Write-команды требуют UUID idempotency_key, user_name и (кроме create) expected_version.
+Physical apply endpoint отсутствует. [Полная таблица URL и примеры](../flows/inventory_stage1.md#api).
+
+- `POST /api/inventory-documents` — создать draft.
+- `GET /api/inventory-documents` — список документов.
+- `GET /api/inventory-documents/{document_id}` — документ и версия.
+- `PATCH /api/inventory-documents/{document_id}` — изменить draft.
+- `POST /api/inventory-documents/{document_id}/preview-scope` — read-only preview draft.
+- `GET /api/inventory-documents/{document_id}/scope` — frozen locations.
+- `POST /api/inventory-documents/{document_id}/start` — snapshot и claims.
+- `GET /api/inventory-documents/{document_id}/items` — строки.
+- `POST /api/inventory-documents/{document_id}/items` — найденный товар.
+- `GET /api/inventory-documents/{document_id}/items/{item_id}/attempts` — история попыток.
+- `POST /api/inventory-documents/{document_id}/items/{item_id}/attempts` — начать попытку.
+- `PUT /api/inventory-documents/{document_id}/items/{item_id}/attempts/{attempt_id}/progress` — прогресс.
+- `POST /api/inventory-documents/{document_id}/items/{item_id}/attempts/{attempt_id}/complete` — завершить попытку.
+- `POST /api/inventory-documents/{document_id}/reconcile` — предварительная ревизия.
+- `POST /api/inventory-documents/{document_id}/submit` — отправить целиком.
+- `POST /api/inventory-documents/{document_id}/return-to-count` — вернуть на пересчёт.
+- `POST /api/inventory-documents/{document_id}/close-without-adjustment` — закрыть без применения.
+- `GET /api/inventory-documents/{document_id}/history` — audit history.
+- `GET /api/inventory-documents/{document_id}/revisions` — evidence revisions.
+
 ### Аналитика КИЗ
 
 - `GET /api/kiz-reports/summary` — отдельная read-only сводка; прежний `GET /api/kiz` не меняется.

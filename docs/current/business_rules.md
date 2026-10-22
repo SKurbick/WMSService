@@ -2,6 +2,23 @@
 
 Статус: `CURRENT`.
 
+## Инвентаризация — этап 1 (22.10.2026)
+
+- Документ: draft/counting/pending_approval/closed_without_adjustment. Applied/approved нет.
+- Full охватывает root склада и descendants; partial — locations/subtrees/SKU/intersection.
+  SKU-only включает пустые locations всего склада. Неактивные locations не исключаются.
+- После старта scope/SKU и initial snapshot неизменяемы. Unique active claims запрещают
+  второй документ на той же location даже при разных SKU, но обычные движения продолжаются.
+- Expected — available loose, исключая active КИЗ exact holder; registered без holder
+  не вычитаются. Batch decomposition и stable КИЗ IDs сохраняются; allocation не выполняется.
+- Не пересчитано (actual NULL), count 0 и положительный actual различаются. Новая попытка
+  сохраняется отдельно; progress тоже попадает в audit. Submit требует completed count всех
+  необходимых строк. Ambiguity можно передать на рассмотрение, но нельзя считать safe apply.
+- Found pair только внутри frozen locations/SKU, initial expected=0; reconciliation отдельно
+  показывает текущий expected и incoming evidence. Нет автоматического объявления излишка.
+- Return-to-count сохраняет attempts/решение; close окончательный и освобождает claims.
+- Stage 1 никогда не пишет movements/inventory/lifecycle КИЗ. [API/runbook](../flows/inventory_stage1.md).
+
 ## Сводка КИЗ по организациям
 
 - `/api/kiz-reports/summary` считает строки wms.kiz, а не inventory и не raw inbox.

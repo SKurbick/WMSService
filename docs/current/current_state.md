@@ -2,6 +2,15 @@
 
 Статус: `CURRENT`. Документ описывает текущие возможности сервиса; история решений и изменений ведётся в `decisions.md`.
 
+## Инвентаризация — stage 1
+
+Добавлен самостоятельный `/api/inventory-documents`: draft editing/preview, frozen scope,
+claims, initial physical/КИЗ snapshot, counting attempts/progress, found SKU, preliminary
+reconciliation, submission, recount, closing without adjustments, audit/revision history.
+Оба flags по умолчанию false; physical apply отсутствует. Миграция подготовлена, не
+запускается приложением и требует ручного stage/production deployment владельцем БД.
+Полный контракт и ограничения: [inventory_stage1.md](../flows/inventory_stage1.md).
+
 После объединения `feature/kiz` и `feature/kiz-fbs-integration` в одном приложении
 доступны реестр/история/explicit transfer/ship и container operations, а также receipt
 import, registered lifecycle, activation и FBS task-level shipment с optional KIZ binding.
