@@ -45,6 +45,22 @@ async def pool():
         await connection.execute(
             (ROOT / "scripts/migrations/20261005_add_kiz_organization.sql").read_text()
         )
+        await connection.execute(
+            (ROOT / "scripts/migrations/20261001_add_kiz_activation.sql").read_text()
+        )
+        await connection.execute(
+            (ROOT / "scripts/migrations/20261002_extend_kiz_fbs_shipment.sql").read_text()
+        )
+        await connection.execute('''
+            CREATE TABLE wms.fbs_kiz_bindings (
+                task_id bigint PRIMARY KEY, kiz_id bigint REFERENCES wms.kiz(kiz_id),
+                kiz_code text NOT NULL UNIQUE, product_id varchar NOT NULL REFERENCES public.products(id),
+                state text NOT NULL DEFAULT 'pending_resolution'
+            )
+        ''')
+        await connection.execute(
+            (ROOT / "scripts/migrations/20261023_add_kiz_product_corrections.sql").read_text()
+        )
     finally:
         await connection.close()
 
@@ -451,7 +467,7 @@ async def test_registered_and_active_identities_do_not_limit_registration(pool):
 
 
 @pytest.mark.asyncio
-async def test_conflicting_existing_kiz_rolls_back_all_products(pool):
+async def test_conflicting_existing_kiz_preserves_other_products(pool):
     location_id = await prepare_receipt(pool, {"testwild": 2, "testwild2": 2})
     async with pool.acquire() as connection:
         await connection.execute(
@@ -472,16 +488,15 @@ async def test_conflicting_existing_kiz_rolls_back_all_products(pool):
         ],
     )
 
-    with pytest.raises(KizImportBusinessError) as caught:
-        await KizImportService(KizImportRepository(pool)).process_message(
-            message_id, "PUSHKINO-ПРИЁМКА"
-        )
-
-    assert caught.value.error_code == "KIZ_OWNERSHIP_CONFLICT"
+    result = await KizImportService(KizImportRepository(pool)).process_message(
+        message_id, "PUSHKINO-ПРИЁМКА"
+    )
+    assert result["is_partial"] is True
+    assert result["rejected_groups"][0]["error_code"] == "KIZ_OWNERSHIP_CONFLICT"
     async with pool.acquire() as connection:
-        assert await connection.fetchval("SELECT count(*) FROM wms.kiz WHERE kiz_code='VALID'") == 0
-        assert await connection.fetchval("SELECT count(*) FROM wms.kiz_events") == 0
-        assert await connection.fetchval("SELECT count(*) FROM wms.kiz_import_message_kiz") == 0
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz WHERE kiz_code='VALID'") == 1
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz_events") == 1
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz_import_message_kiz") == 1
 
 
 @pytest.mark.asyncio
@@ -623,6 +638,231 @@ async def test_unknown_receipt_product_and_receipt_line_are_rejected(
         )
 
     assert caught.value.error_code == error_code
+
+
+@pytest.mark.asyncio
+async def test_partial_import_unknown_product_replay_and_corrected_delivery(pool):
+    from app.core.schemas.kiz_import import KizImportProcessResult
+
+    await prepare_receipt(pool, {"testwild": 2, "testwild2": 2})
+    service = KizImportService(KizImportRepository(pool))
+    message_id = await ingest_message(pool, [
+        {"wild": "testwild", "mark_codes": ["GOOD-1"]},
+        {"wild": "Testwild2", "mark_codes": ["CORRECT-LATER"]},
+    ])
+    first = await service.process_message(message_id)
+    assert first["is_partial"] is True
+    assert first["new_kiz_count"] == 1
+    assert first["rejected_groups"][0]["product_id"] == "Testwild2"
+    assert first["rejected_groups"][0]["error_code"] == "UNKNOWN_PRODUCT"
+    response = KizImportProcessResult.model_validate(first).model_dump()
+    assert response["is_partial"] is True
+    assert response["rejected_groups"] == first["rejected_groups"]
+    async with pool.acquire() as connection:
+        saved = await connection.fetchrow(
+            "SELECT business_status, business_result FROM wms.kiz_import_messages WHERE message_id=$1",
+            message_id,
+        )
+        assert saved["business_status"] == "applied"
+        assert json.loads(saved["business_result"])["rejected_groups"] == first["rejected_groups"]
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz WHERE kiz_code='CORRECT-LATER'") == 0
+    replay = await service.process_message(message_id)
+    assert replay["new_kiz_count"] == 0
+    assert replay["existing_kiz_count"] == 1
+    assert replay["rejected_groups"] == first["rejected_groups"]
+    corrected_id = await ingest_message(pool, [
+        {"wild": "testwild2", "mark_codes": ["CORRECT-LATER"]},
+    ])
+    assert (await service.process_message(corrected_id))["new_kiz_count"] == 1
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz_events") == 2
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz_import_message_kiz") == 2
+        assert await connection.fetchval("SELECT count(*) FROM wms.movements") == 0
+
+
+@pytest.mark.asyncio
+async def test_group_ownership_conflict_rolls_back_group_only(pool):
+    await prepare_receipt(pool, {"testwild": 2, "testwild2": 2})
+    service = KizImportService(KizImportRepository(pool))
+    original = await ingest_message(pool, [
+        {"wild": "testwild2", "mark_codes": ["Z-CONFLICT"]},
+    ])
+    await service.process_message(original)
+    message_id = await ingest_message(pool, [
+        {"wild": "testwild", "mark_codes": ["A-ROLLBACK", "Z-CONFLICT"]},
+        {"wild": "testwild2", "mark_codes": ["VALID"]},
+    ])
+    result = await service.process_message(message_id)
+    assert result["new_kiz_count"] == 1
+    assert result["rejected_groups"][0]["error_code"] == "KIZ_OWNERSHIP_CONFLICT"
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz WHERE kiz_code='A-ROLLBACK'") == 0
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz_events") == 2
+        assert await connection.fetchval(
+            "SELECT count(*) FROM wms.kiz_import_message_kiz WHERE message_id=$1", message_id,
+        ) == 1
+
+
+@pytest.mark.asyncio
+async def test_malformed_and_duplicate_groups_do_not_block_independent_group(pool):
+    await prepare_receipt(pool, {"testwild": 2, "testwild2": 2})
+    message_id = await ingest_message(pool, [
+        {"wild": "testwild", "mark_codes": ["AMBIGUOUS"]},
+        {"wild": "testwild2", "mark_codes": ["AMBIGUOUS"]},
+        {"wild": "testwild", "mark_codes": ["VALID"]},
+        {"wild": "testwild2", "mark_codes": "bad"},
+    ])
+    result = await KizImportService(KizImportRepository(pool)).process_message(message_id)
+    assert result["new_kiz_count"] == 1
+    assert [g["error_code"] for g in result["rejected_groups"]] == [
+        "DUPLICATE_KIZ_CODE", "DUPLICATE_KIZ_CODE", "INVALID_MARK_CODES",
+    ]
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT kiz_code FROM wms.kiz") == "VALID"
+
+
+@pytest.mark.asyncio
+async def test_system_failure_rolls_back_successful_groups_and_message(pool, monkeypatch):
+    await prepare_receipt(pool, {"testwild": 2, "testwild2": 2})
+    message_id = await ingest_message(pool, [
+        {"wild": "testwild", "mark_codes": ["VALID"]},
+        {"wild": "testwild2", "mark_codes": ["DB-FAIL"]},
+    ])
+    repository = KizImportRepository(pool)
+    original = repository.insert_kiz
+
+    async def insert_kiz(connection, **kwargs):
+        if kwargs["kiz_code"] == "DB-FAIL":
+            raise RuntimeError("database unavailable")
+        return await original(connection, **kwargs)
+
+    monkeypatch.setattr(repository, "insert_kiz", insert_kiz)
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await KizImportService(repository).process_message(message_id)
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz") == 0
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz_events") == 0
+        assert await connection.fetchval("SELECT count(*) FROM wms.kiz_import_message_kiz") == 0
+        assert await connection.fetchval(
+            "SELECT business_status FROM wms.kiz_import_messages WHERE message_id=$1", message_id,
+        ) == "pending"
+
+
+async def prepare_product_correction(pool):
+    await prepare_receipt(pool, {"testwild": 3, "testwild2": 3})
+    message_id = await ingest_message(pool, [
+        {"wild": "testwild", "mark_codes": ["FIX-ME", "UNCHANGED"]},
+    ], organization='Вектор')
+    await KizImportService(KizImportRepository(pool)).process_message(message_id)
+    async with pool.acquire() as conn:
+        kiz_id = await conn.fetchval("SELECT kiz_id FROM wms.kiz WHERE kiz_code='FIX-ME'")
+        await conn.execute('''
+            INSERT INTO wms.fbs_kiz_bindings(task_id,kiz_code,product_id)
+            VALUES (1001,'FIX-ME','testwild2')
+        ''')
+    return message_id, kiz_id
+
+
+async def apply_product_correction(conn, message_id, kiz_id):
+    return await conn.fetchval('''
+        INSERT INTO wms.kiz_product_corrections
+          (kiz_id,old_product_id,new_product_id,source_message_id,fbs_task_id,reason,author)
+        VALUES ($1,'testwild','testwild2',$2,1001,'Confirmed FBS SKU','test')
+        RETURNING correction_id
+    ''', kiz_id, message_id)
+
+
+@pytest.mark.asyncio
+async def test_product_correction_replay_and_unrelated_kiz(pool):
+    message_id, kiz_id = await prepare_product_correction(pool)
+    async with pool.acquire() as conn:
+        before = await conn.fetchrow("SELECT * FROM wms.kiz_import_messages WHERE message_id=$1", message_id)
+        await apply_product_correction(conn, message_id, kiz_id)
+        assert await conn.fetchval("SELECT product_id FROM wms.kiz WHERE kiz_id=$1", kiz_id) == 'testwild2'
+        assert await conn.fetchval("SELECT product_id FROM wms.kiz WHERE kiz_code='UNCHANGED'") == 'testwild'
+        assert await conn.fetchrow("SELECT * FROM wms.kiz_import_messages WHERE message_id=$1", message_id) == before
+        assert await conn.fetchval("SELECT product_id FROM wms.kiz_events WHERE kiz_id=$1", kiz_id) == 'testwild'
+    service = KizImportService(KizImportRepository(pool))
+    original_replay = await service.process_message(message_id)
+    assert original_replay['existing_kiz_count'] == 2
+    assert original_replay['groups'][0]['existing_kiz'] == 2
+    for product in ('testwild', 'testwild2'):
+        repeated = await ingest_message(pool, [{'wild':product,'mark_codes':['FIX-ME']}])
+        result = await service.process_message(repeated)
+        assert result['new_kiz_count'] == 0
+        assert result['existing_kiz_count'] == 1
+        assert result['groups'][0]['product_id'] == 'testwild2'
+    async with pool.acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM wms.kiz") == 2
+        assert await conn.fetchval("SELECT count(*) FROM wms.kiz_events") == 2
+        assert await conn.fetchval("SELECT count(*) FROM wms.movements") == 0
+        assert await conn.fetchval("SELECT count(*) FROM wms.kiz_product_corrections") == 1
+
+
+@pytest.mark.asyncio
+async def test_product_correction_guards_and_rollback(pool):
+    message_id, kiz_id = await prepare_product_correction(pool)
+    async with pool.acquire() as conn:
+        with pytest.raises(asyncpg.PostgresError):
+            await conn.execute("UPDATE wms.kiz SET product_id='testwild2' WHERE kiz_id=$1", kiz_id)
+        with pytest.raises(RuntimeError):
+            async with conn.transaction():
+                await apply_product_correction(conn, message_id, kiz_id)
+                raise RuntimeError('rollback correction')
+        assert await conn.fetchval("SELECT count(*) FROM wms.kiz_product_corrections") == 0
+        assert await conn.fetchval("SELECT product_id FROM wms.kiz WHERE kiz_id=$1", kiz_id) == 'testwild'
+        await apply_product_correction(conn, message_id, kiz_id)
+        for query in (
+            "UPDATE wms.kiz_product_corrections SET reason='rewrite'",
+            "DELETE FROM wms.kiz_product_corrections",
+            "UPDATE wms.kiz SET product_id='testwild' WHERE kiz_code='FIX-ME'",
+        ):
+            with pytest.raises(asyncpg.PostgresError):
+                await conn.execute(query)
+
+
+@pytest.mark.asyncio
+async def test_product_correction_requires_document_binding_and_no_movements(pool):
+    message_id, kiz_id = await prepare_product_correction(pool)
+    other = await ingest_message(pool, [{'wild':'testwild','mark_codes':[]}])
+    async with pool.acquire() as conn:
+        with pytest.raises(asyncpg.PostgresError):
+            await apply_product_correction(conn, other, kiz_id)
+        await conn.execute("UPDATE wms.fbs_kiz_bindings SET product_id='testwild' WHERE task_id=1001")
+        with pytest.raises(asyncpg.PostgresError):
+            await apply_product_correction(conn, message_id, kiz_id)
+        await conn.execute("UPDATE wms.fbs_kiz_bindings SET product_id='testwild2' WHERE task_id=1001")
+        await conn.execute("INSERT INTO wms.kiz_movement_links(kiz_id,movement_ref) VALUES ($1,123)", kiz_id)
+        with pytest.raises(asyncpg.PostgresError):
+            await apply_product_correction(conn, message_id, kiz_id)
+        assert await conn.fetchval("SELECT count(*) FROM wms.kiz_product_corrections") == 0
+        assert await conn.fetchval("SELECT product_id FROM wms.kiz WHERE kiz_id=$1", kiz_id) == 'testwild'
+
+
+@pytest.mark.asyncio
+async def test_concurrent_product_correction_applies_once(pool):
+    message_id, kiz_id = await prepare_product_correction(pool)
+
+    async def correct():
+        async with pool.acquire() as conn:
+            return await apply_product_correction(conn, message_id, kiz_id)
+
+    results = await asyncio.gather(correct(), correct(), return_exceptions=True)
+    assert sum(isinstance(result, int) for result in results) == 1
+    assert sum(isinstance(result, asyncpg.PostgresError) for result in results) == 1
+    async with pool.acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM wms.kiz_product_corrections") == 1
+
+
+@pytest.mark.asyncio
+async def test_corrected_product_does_not_bypass_organization_conflict(pool):
+    message_id, kiz_id = await prepare_product_correction(pool)
+    async with pool.acquire() as conn:
+        await apply_product_correction(conn, message_id, kiz_id)
+    invalid = await ingest_message(pool, [{'wild':'testwild','mark_codes':['FIX-ME']}], organization='Старт')
+    with pytest.raises(KizImportBusinessError) as caught:
+        await KizImportService(KizImportRepository(pool)).process_message(invalid)
+    assert caught.value.error_code == 'KIZ_ORGANIZATION_CONFLICT'
 
 
 @pytest.mark.asyncio

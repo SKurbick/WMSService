@@ -207,8 +207,8 @@ raw payload остаётся неизменным.
 Если в сообщении передана `supply.organization`, она сохраняется как immutable
 nullable identity attribute в `wms.kiz`; legacy payload и KIZ сохраняют `NULL`.
 
-Обработка атомарна и идемпотентна для same message, duplicate inbox rows и additive
-replay. Terminal KIZ не реактивируется. Physical quantity, receipt snapshot и movements
+Обработка атомарна по входной группе wild_groups и идемпотентна для same message, duplicate inbox rows и additive
+replay. Частичный результат хранится как applied с is_partial/rejected_groups; исправленные группы требуют нового сообщения. Системная ошибка откатывает весь message. Terminal KIZ не реактивируется. Physical quantity, receipt snapshot и movements
 не меняются. Registered KIZ не участвует в `identified/unidentified` и не
 резервирует loose stock. Автоматический apply выполняется включённым consumer; backlog не обходится.
 

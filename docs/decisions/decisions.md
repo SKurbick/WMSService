@@ -723,3 +723,35 @@ Ship movement и shipped event объединяются только по точ
 - `kiz_codes=[]` означает расход unidentified units, а не автоматический выбор КИЗ.
 - Pair legs fill/extract/unpack группируются в один history item; move сохраняет holder.
 - Canonical lock order: container/projections до ordered KIZ locks.
+
+## 2026-10-23 — Подтверждённая коррекция product_id конкретного КИЗа
+
+- Пользователь подтвердил, что товар трёх FBS bindings правильный. Коррекция
+  только для этих identities, без автоматического переименования всех SKU.
+- Новый ledger `wms.kiz_product_corrections` хранит old/new products, origin message,
+  FBS task, автора и причину. INSERT валидирует и меняет unmoved registered receipt
+  KIZ одной транзакцией. Существующий guard расширяется узкой current-transaction
+  ветвью; triggers не отключаются. Одна immutable коррекция на КИЗ.
+- Исторический payload/events/links остаются исходными; physical quantity и
+  receipt items не меняются. История показывает отдельный product_corrected.
+- Новый импорт точного кода со старым продуктом использует подтверждённую
+  коррекцию. Origin/organization conflicts по-прежнему отклоняются. Уже applied
+  сообщения не переписываются, replay считает связи по исходной группе.
+- Миграция обязательна до нового кода. Для учёта коррекций в доставках нужен
+  обновлённый код на хосте. Публичный write endpoint и общий mapping не добавляются.
+
+## 2026-10-23 — Частичная регистрация сообщений импорта КИЗ
+
+- По запросу пользователя единица бизнес-отказа — входная группа wild_groups:
+  неизвестный товар, конфликт владельца/организации или некорректная группа не
+  блокируют независимые валидные группы. Внутри группы KIZ/events/links атомарны.
+- Общие поля supply/JSON валидируются до записей. Дубли identity между группами
+  отклоняют все затронутые группы; порядок групп не выбирает владельца КИЗа.
+- Сохраняем существующие DB statuses: частичный результат — applied с additive
+  is_partial/rejected_groups в business_result и HTTP response. При полном отказе
+  rejected и причины в business_error_message; systemic/DB failure откатывает весь apply.
+- Applied replay не переобрабатывает rejected_groups. Исправление приходит новым
+  сообщением, без изменения исходного raw payload и без автоматического lower-case wild.
+- Consumer и /process используют один сервис. Миграция не нужна, но для новых
+  доставок требуется выкладка кода; старый consumer иначе сохранит атомарность message.
+- Регистрация не меняет inventory, movements, assembly_task или FBS shipment statuses.

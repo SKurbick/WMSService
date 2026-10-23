@@ -49,6 +49,41 @@ async def history_stock(kiz_pool):
     return locations
 
 
+async def test_registered_product_correction_is_visible_in_history(kiz_pool, history_client):
+    import json
+    from app.core.services.kiz_import_service import KizImportService
+    from app.infrastructure.database.repositories.kiz_import_repository import KizImportRepository
+
+    async with kiz_pool.acquire() as conn:
+        await conn.execute("INSERT INTO public.products(id,name) VALUES ('old','Old'),('new','New')")
+    service = KizImportService(KizImportRepository(kiz_pool))
+    message = await service.ingest(
+        json.dumps({'supply':{'order_guid':'CORRECTION-DOC'},
+                    'wild_groups':[{'wild':'old','mark_codes':['CORRECTION-KIZ']}]}).encode(),
+        exchange_name='test',routing_key='test',rabbit_message_id=None,
+        correlation_id=None,headers={},
+    )
+    await service.process_message(message.message_id)
+    async with kiz_pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO wms.fbs_kiz_bindings(task_id,kiz_code,product_id,state)
+            VALUES (1001,'CORRECTION-KIZ','new','pending_resolution')
+        ''')
+        await conn.execute('''
+            INSERT INTO wms.kiz_product_corrections
+              (kiz_id,old_product_id,new_product_id,source_message_id,fbs_task_id,reason,author)
+            SELECT kiz_id,'old','new',$1,1001,'Confirmed SKU','tester'
+            FROM wms.kiz WHERE kiz_code='CORRECTION-KIZ'
+        ''', message.message_id)
+    response = await history_client.get('/api/kiz-history',params={'kiz_code':'CORRECTION-KIZ'})
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result['product_id'] == 'new'
+    assert [entry['event_type'] for entry in result['timeline']] == ['registered','product_corrected']
+    assert result['timeline'][1]['reason'] == 'old -> new: Confirmed SKU'
+    assert result['timeline'][1]['movement_refs'] == []
+
+
 @pytest.fixture
 def kiz_service(kiz_pool):
     return KizService(KizRepository(kiz_pool))

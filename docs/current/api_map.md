@@ -226,7 +226,7 @@ Legacy revisions читаются из `public.supply_to_sellers_warehouse`, cur
 
 - `GET /api/kiz-import/messages?limit=100&offset=0` — список диагностических полей без raw payload, сортировка `message_id DESC`.
 - `GET /api/kiz-import/messages/{message_id}` — detail с raw body, parsed payload, parse error и RabbitMQ metadata.
-- `POST /api/kiz-import/messages/{message_id}/process` — атомарно регистрирует receipt KIZ без physical holder, movements и inventory writes.
+- `POST /api/kiz-import/messages/{message_id}/process` — регистрирует receipt KIZ атомарно по входной группе wild_groups, без physical holder, movements и inventory writes. Частичный успех: applied, is_partial=true, rejected_groups с индексом группы и причиной; replay не переобрабатывает отказы, исправление приходит новым сообщением.
 - `GET /api/kiz-import/integrity` — read-only проверка registered holder/origin и message↔KIZ links; отсутствие receipt и превышение его количества информационны, не влияют на is_valid.
 
 Карточка, список и полная история доступны через API КИЗ ниже. Process endpoint не назначает
@@ -235,6 +235,10 @@ List/detail и результат process additive содержат nullable `or
 из `supply.organization`.
 
 # KIZ operations
+
+Read-only история КИЗа дополнительно возвращает `product_corrected` из
+`wms.kiz_product_corrections`; импорт учитывает подтверждённые per-KIZ соответствия.
+Новых HTTP маршрутов коррекции нет.
 
 - `POST /api/kiz/activate` — атомарно активирует registered KIZ в active loose location; request содержит `kiz_codes`, `location_code`, `user_name`, `idempotency_key`.
 

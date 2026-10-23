@@ -120,10 +120,15 @@ Completed операция имеет две разные роли и одина
 - Receipt quantity не ограничивает регистрацию; отсутствие receipt и расхождения количества являются информационной диагностикой.
 - Registration не требует receipt item, inventory или configured receipt location; GUID поставки информационен.
 - B2 не создаёт movements и не изменяет inventory/receipt_items quantity.
-- Один message применяется атомарно; provenance links immutable и не являются quantity ledger.
-- Replay terminal KIZ не меняет lifecycle; conflicting origin/product отклоняет весь message.
+- Каждая входная группа wild_groups атомарна; бизнес-ошибка одной группы не отменяет другие. Системная/DB ошибка откатывает весь message. Provenance links immutable и не являются quantity ledger.
+- Replay terminal KIZ не меняет lifecycle; conflicting origin/product отклоняет соответствующую группу. Дубли identity между группами отклоняют все затронутые группы.
 
 ## KIZ activation
+
+- Исключение identity immutability: подтверждённая per-KIZ коррекция product_id
+  только через `kiz_product_corrections`, без holder/движений, с исходным документом
+  и совпадающей target FBS binding. Audit INSERT и UPDATE карточки атомарны;
+  audit UPDATE/DELETE и произвольный product UPDATE запрещены.
 
 - Activation меняет только `registered` без holder на `active` с exact loose `location_id`; identity/origin не меняются.
 - Переход разрешён DB guard только transaction с `activate` operation/item и activation authorization.

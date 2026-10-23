@@ -186,14 +186,33 @@ active на существующей россыпи, receipt import создаё
 - Количество receipt не ограничивает регистрацию. Отсутствие receipt и расхождение количества информационны, не влияют на integrity.is_valid.
 - Один code во входном сообщении допустим только один раз; строки не нормализуются.
 - Existing receipt-import KIZ того же product/organization является idempotent даже при другом GUID; исходный origin_reference сохраняется, terminal не реактивируется.
-- Existing KIZ другого product/origin отклоняет всё сообщение.
+- Existing KIZ другого product/origin отклоняет соответствующую группу wild_groups.
 - `supply.organization` optional; непустое значение сохраняется в inbox и новых KIZ, отсутствие сохраняет legacy `NULL`.
-- Existing KIZ с другой непустой organization отклоняет всё сообщение; legacy KIZ с `organization=NULL` не переписывается автоматически.
+- Existing KIZ с другой непустой organization отклоняет соответствующую группу; legacy KIZ с `organization=NULL` не переписывается автоматически.
 - После создания `wms.kiz.organization` неизменяема.
-- Message применяется атомарно; business conflict сохраняет `rejected`, system/DB error откатывается.
+- Каждая входная группа wild_groups применяется в savepoint: business conflict откатывает только её КИЗ, события и provenance links. Системная/DB ошибка откатывает всю обработку сообщения.
+- Частичный успех сохраняется как `applied` с `business_result.is_partial=true` и `rejected_groups` (group_index с 0, product_id, error_code, error_message). Новые статусы и миграция не нужны.
+- Дубли кодов после сокращения до 24 символов между группами отклоняют все затронутые группы, независимо от их порядка. Ошибки общих полей supply/JSON отклоняют всё сообщение; отказ всех групп сохраняет `rejected`.
+- Replay applied-сообщения сохраняет перечень отказов и не запускает их повторно. Для исправления отклонённых групп источник отправляет новое валидное сообщение. Регистр product_id автоматически не исправляется.
 - `wms.kiz_import_message_kiz` хранит immutable provenance и допускает несколько messages на один KIZ.
 - Replay applied message возвращает `new_kiz_count=0`, а linked current KIZ учитывает как existing.
 - При KIZ_IMPORT_CONSUMER_ENABLED=true consumer сохраняет inbox и сразу регистрирует КИЗ. ACK после applied или persisted rejected; системные ошибки вызывают NACK/requeue. Старые pending/rejected строки повторяются через `/process`, фонового обхода нет.
+
+## Подтверждённая коррекция товара зарегистрированного КИЗа
+
+- После миграции `20261023_add_kiz_product_corrections.sql` INSERT в
+  `wms.kiz_product_corrections` — контролируемая maintenance-операция: БД проверяет
+  исходный документ и FBS-привязку, блокирует карточку и меняет только product_id.
+- Разрешён только receipt-import registered КИЗ без holder, движений и событий
+  кроме registered. Одна неизменяемая коррекция на kiz_id; общий mapping SKU запрещён.
+- Коррекция, карточка и автор/причина фиксируются атомарно. Raw inbox, старые события,
+  provenance links, receipt_items, inventory и movements не переписываются.
+- Новый импорт старого товара для исправленного кода учитывает точную пару
+  old_product_id → new_product_id. Остальные товары и КИЗы не затрагиваются;
+  organization/origin checks сохраняются. Гонка коррекции с импортом даёт retryable conflict.
+- История КИЗа добавляет product_corrected из таблицы коррекций. Replay исходного
+  applied message сохраняет исторические группы и корректные current counts.
+- Для новых повторов старого payload на хосте требуется обновлённый код импорта.
 
 ## KIZ activation
 

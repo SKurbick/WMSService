@@ -144,6 +144,7 @@ def kiz_database_template():
                     "20261002_extend_kiz_fbs_shipment.sql",
                     "20261005_add_kiz_organization.sql",
                     "20261005_fbs_stage1_backward_compat_hotfix.sql",
+                    "20261023_add_kiz_product_corrections.sql",
                 ):
                     await conn.execute((ROOT / "scripts/migrations" / migration).read_text())
 

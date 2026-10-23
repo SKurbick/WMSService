@@ -174,12 +174,11 @@ class KizImportService:
                     )
 
                 try:
-                    request = self._canonicalize(message)
                     async with connection.transaction():
-                        result = await self._apply_message(
+                        result = await self._apply_groups(
                             connection,
                             message_id=message_id,
-                            request=request,
+                            message=message,
                             receipt_location_code=receipt_location_code,
                         )
                 except KizImportBusinessError as error:
@@ -202,6 +201,109 @@ class KizImportService:
         if rejection is not None:
             raise rejection
         return result
+
+    async def _apply_groups(
+        self, connection, *, message_id: int, message: dict[str, Any],
+        receipt_location_code: str | None,
+    ) -> dict[str, Any]:
+        # Validate shared fields before applying any group. Keep raw inbox immutable.
+        payload = message.get("raw_payload")
+        if not isinstance(payload, dict) or not isinstance(payload.get("wild_groups"), list):
+            self._canonicalize(message)
+        envelope = {**message, "raw_payload": {**payload, "wild_groups": []}}
+        header = self._canonicalize(envelope)
+        requests = []
+        rejected = []
+        owners: dict[str, set[int]] = {}
+        duplicate_indexes = set()
+        for index, group in enumerate(payload["wild_groups"]):
+            try:
+                request = self._canonicalize({
+                    **message, "raw_payload": {**payload, "wild_groups": [group]},
+                })
+            except KizImportBusinessError as error:
+                rejected.append(self._group_rejection(index, group, error))
+                request = None
+            requests.append(request)
+            # Include valid codes from malformed groups in collision detection too:
+            # never let group order choose which product owns an ambiguous identity.
+            codes = group.get("mark_codes") if isinstance(group, dict) else None
+            if isinstance(codes, list):
+                for code in codes:
+                    if isinstance(code, str) and code:
+                        try:
+                            code = normalize_kiz_code(code)
+                        except ValueError:
+                            continue
+                        indexes = owners.setdefault(code, set())
+                        indexes.add(index)
+                        if len(indexes) > 1:
+                            duplicate_indexes.update(indexes)
+
+        results = []
+        # Canonical product order matches the existing product/KIZ lock protocol.
+        for index in sorted(range(len(requests)), key=lambda i: (
+            next(iter(requests[i].codes_by_product), "") if requests[i] else "", i
+        )):
+            request = requests[index]
+            if request is None:
+                continue
+            if index in duplicate_indexes:
+                error = KizImportBusinessError(
+                    "KIZ code повторяется в разных группах сообщения",
+                    error_code="DUPLICATE_KIZ_CODE",
+                )
+                rejected.append(self._group_rejection(index, payload["wild_groups"][index], error))
+                continue
+            try:
+                # A business failure rolls back this group's KIZ, events and links.
+                # Database/system errors still roll back the whole delivery for retry.
+                async with connection.transaction():
+                    result = await self._apply_message(
+                        connection, message_id=message_id, request=request,
+                        receipt_location_code=receipt_location_code,
+                    )
+            except KizImportBusinessError as error:
+                rejected.append(self._group_rejection(index, payload["wild_groups"][index], error))
+            else:
+                results.append(result)
+
+        rejected.sort(key=lambda group: group["group_index"])
+        if rejected and not results:
+            first = rejected[0]
+            raise KizImportBusinessError(
+                json.dumps(rejected, ensure_ascii=False), error_code=first["error_code"],
+            )
+
+        # Preserve one successful result per product for legacy readers/replay.
+        groups: dict[str, dict[str, Any]] = {}
+        for result in results:
+            for group in result["groups"]:
+                product_id = group["product_id"]
+                if product_id not in groups:
+                    groups[product_id] = dict(group)
+                else:
+                    for field in ("requested_codes", "new_kiz", "existing_kiz", "terminal_existing"):
+                        groups[product_id][field] += group[field]
+        return {
+            "message_id": message_id, "business_status": "applied",
+            "order_guid": header.order_guid, "supply_number": header.supply_number,
+            "organization": header.organization,
+            **{field: sum(result[field] for result in results) for field in (
+                "new_kiz_count", "existing_kiz_count", "terminal_existing_count",
+            )},
+            "groups": list(groups.values()),
+            "is_partial": bool(rejected), "rejected_groups": rejected,
+        }
+
+    @staticmethod
+    def _group_rejection(index, group, error) -> dict[str, Any]:
+        return {
+            "group_index": index,
+            "product_id": group.get("wild") if isinstance(group, dict)
+            and isinstance(group.get("wild"), str) else None,
+            "error_code": error.error_code, "error_message": str(error),
+        }
 
     async def get_integrity(self) -> dict[str, Any]:
         (
@@ -352,6 +454,25 @@ class KizImportService:
         request: KizImportBusinessRequest,
         receipt_location_code: str | None,
     ) -> dict[str, Any]:
+        original_codes = sorted(code for codes in request.codes_by_product.values() for code in codes)
+        corrections = {
+            row['kiz_code']: row
+            for row in await self.repository.get_product_corrections(connection, original_codes)
+        }
+        resolved: dict[str, list[str]] = {}
+        for product_id, codes in request.codes_by_product.items():
+            for code in codes:
+                correction = corrections.get(code)
+                target = (
+                    correction['new_product_id']
+                    if correction and correction['old_product_id'] == product_id else product_id
+                )
+                resolved.setdefault(target, []).append(code)
+            if not codes:
+                resolved.setdefault(product_id, [])
+        request = KizImportBusinessRequest(
+            request.order_guid, request.supply_number, request.organization, resolved,
+        )
         product_ids = sorted(request.codes_by_product)
         products = await self.repository.lock_products(connection, product_ids)
         missing_products = sorted(set(product_ids) - {row["id"] for row in products})
@@ -363,6 +484,12 @@ class KizImportService:
 
         all_codes = sorted(code for codes in request.codes_by_product.values() for code in codes)
         existing_rows = await self.repository.lock_existing_codes(connection, all_codes)
+        current_corrections = {
+            row['kiz_code']: row
+            for row in await self.repository.get_product_corrections(connection, original_codes)
+        }
+        if current_corrections != corrections:
+            raise KizImportConcurrentConflictError('Коррекция товара КИЗ изменилась; повторите обработку')
         existing_by_code = {row["kiz_code"]: row for row in existing_rows}
         existing_current: dict[str, list[Any]] = {product_id: [] for product_id in product_ids}
         existing_terminal: dict[str, list[Any]] = {product_id: [] for product_id in product_ids}

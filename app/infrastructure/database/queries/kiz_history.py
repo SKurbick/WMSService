@@ -59,6 +59,16 @@ WITH lifecycle_entries AS (
           CASE WHEN source_type='container_operation' THEN container_operation_type ELSE movement_type END,
           CASE WHEN source_type='container_operation' THEN 0 ELSE movement_ref END
 )
-SELECT * FROM(SELECT * FROM lifecycle_entries UNION ALL SELECT * FROM physical_entries) timeline
+SELECT * FROM(
+ SELECT * FROM lifecycle_entries UNION ALL SELECT * FROM physical_entries
+ UNION ALL
+ SELECT 'product_corrected', c.created_at, NULL::varchar,
+  NULL::varchar, NULL::varchar, NULL::bigint, ARRAY[]::bigint[],
+  NULL::numeric, NULL::bigint, 'registered', 'registered', c.author,
+  c.old_product_id || ' -> ' || c.new_product_id || ': ' || c.reason,
+  NULL::bigint, NULL::varchar, NULL::varchar,
+  2::smallint, c.correction_id, false, false, NULL::varchar, 0::bigint
+ FROM wms.kiz_product_corrections c WHERE c.kiz_id=$1
+) timeline
 ORDER BY occurred_at NULLS LAST,source_rank,source_identity
 """

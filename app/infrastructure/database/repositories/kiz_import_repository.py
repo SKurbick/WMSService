@@ -123,6 +123,11 @@ class KizImportRepository:
             return []
         return await connection.fetch(queries.LOCK_EXISTING_CODES, codes)
 
+    async def get_product_corrections(self, connection: Connection, codes: list[str]):
+        if not codes:
+            return []
+        return await connection.fetch(queries.GET_PRODUCT_CORRECTIONS, codes)
+
     async def lock_current_receipt_kiz(
         self, connection: Connection, order_guid: str, product_ids: list[str]
     ):

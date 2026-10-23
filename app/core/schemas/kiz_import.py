@@ -37,7 +37,7 @@ class KizImportMessageListItem(BaseModel):
         description="Количество переданных кодов маркировки до проверки дубликатов и корректности."
     )
     business_status: str = Field(
-        description="Обработка: pending — ещё не применено, applied — применено, rejected — отклонено бизнес-проверками."
+        description="Обработка: pending — ещё не применено, applied — применено полностью или частично (см. business_result.is_partial/rejected_groups), rejected — сообщение целиком отклонено."
     )
     processed_at: datetime | None = Field(
         None, description="Дата и время обработки сообщения; до обработки null."
@@ -106,6 +106,13 @@ class KizImportGroupResult(BaseModel):
     )
 
 
+class KizImportGroupRejection(BaseModel):
+    group_index: int = Field(description="Индекс отклонённой группы в исходном wild_groups, начиная с 0.")
+    product_id: str | None = Field(None, description="Переданный wild; null при некорректной группе.")
+    error_code: str
+    error_message: str
+
+
 class KizImportProcessResult(BaseModel):
     message_id: int = Field(description="Идентификатор применённого сообщения.")
     business_status: str = Field(description="Успешное состояние обработки: applied.")
@@ -130,6 +137,10 @@ class KizImportProcessResult(BaseModel):
     )
     groups: list[KizImportGroupResult] = Field(
         description="Результат регистрации и снимок остатков по каждому товару."
+    )
+    is_partial: bool = Field(False, description="true, если валидные группы применены, а часть групп отклонена.")
+    rejected_groups: list[KizImportGroupRejection] = Field(
+        default_factory=list, description="Отклонённые группы и причины. Для исправления отправьте новое сообщение."
     )
 
 

@@ -267,6 +267,11 @@ async def _process_kiz_import_message(message, *, queue_name: str) -> None:
                 applied["new_kiz_count"],
                 applied["existing_kiz_count"],
             )
+            if applied.get("is_partial"):
+                kiz_import_logger.warning(
+                    "KIZ import применён частично | message_id=%s | rejected_groups=%s",
+                    result.message_id, applied["rejected_groups"],
+                )
         except KizImportBusinessError as error:
             kiz_import_logger.warning(
                 "KIZ import отклонён | message_id=%s | code=%s | error=%s",

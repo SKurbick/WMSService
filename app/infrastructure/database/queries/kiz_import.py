@@ -122,6 +122,14 @@ ORDER BY kiz_code, kiz_id
 FOR UPDATE;
 """
 
+GET_PRODUCT_CORRECTIONS = """
+SELECT k.kiz_code, c.kiz_id, c.old_product_id, c.new_product_id
+FROM wms.kiz_product_corrections c
+JOIN wms.kiz k USING(kiz_id)
+WHERE k.kiz_code = ANY($1::text[])
+ORDER BY k.kiz_code;
+"""
+
 LOCK_CURRENT_RECEIPT_KIZ = """
 SELECT kiz_id, kiz_code, product_id
 FROM wms.kiz
@@ -195,12 +203,15 @@ ORDER BY product_id;
 """
 
 GET_MESSAGE_LINKED_KIZ = """
-SELECT k.product_id, k.lifecycle_status, count(*)::bigint AS quantity
+SELECT coalesce(c.old_product_id, k.product_id) AS product_id,
+       k.lifecycle_status, count(*)::bigint AS quantity
 FROM wms.kiz_import_message_kiz link
 JOIN wms.kiz k USING (kiz_id)
+LEFT JOIN wms.kiz_product_corrections c
+  ON c.kiz_id=k.kiz_id AND c.source_message_id=link.message_id
 WHERE link.message_id = $1
-GROUP BY k.product_id, k.lifecycle_status
-ORDER BY k.product_id, k.lifecycle_status;
+GROUP BY coalesce(c.old_product_id, k.product_id), k.lifecycle_status
+ORDER BY product_id, k.lifecycle_status;
 """
 
 COUNT_ACTIVE_LOOSE_KIZ = """
