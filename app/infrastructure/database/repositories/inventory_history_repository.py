@@ -11,6 +11,20 @@ class InventoryHistoryRepository:
     def __init__(self, pool: Pool):
         self.pool = pool
 
+    async def get_daily_turnover(
+        self,
+        date_from: date,
+        date_to: date,
+        product_id: str | None,
+        group_by: str = "day",
+    ) -> list[Record]:
+        """Весь оборот WMS одним запросом из согласованного snapshot."""
+        async with self.pool.acquire() as connection:
+            async with connection.transaction(isolation="repeatable_read", readonly=True):
+                return await connection.fetch(
+                    queries.GET_DAILY_TURNOVER, date_from, date_to, product_id, group_by
+                )
+
     async def get_daily_balance_page(
         self,
         date_from: date,

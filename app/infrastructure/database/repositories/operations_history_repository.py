@@ -11,6 +11,39 @@ class OperationsHistoryRepository:
     def __init__(self, pool: Pool):
         self.pool = pool
 
+    async def get_summary(
+        self,
+        date_from: date,
+        date_to: date,
+        source_type: str | None,
+        operation_type: str | None,
+        product_id: str | None,
+        location_id: int | None,
+        author: str | None,
+        status: str | None,
+        group_by: str,
+    ) -> tuple[bool, list[Record]]:
+        async with self.pool.acquire() as connection:
+            async with connection.transaction(isolation="repeatable_read", readonly=True):
+                location_exists = location_id is None or bool(
+                    await connection.fetchval(queries.LOCATION_EXISTS, location_id)
+                )
+                if not location_exists:
+                    return False, []
+                rows = await connection.fetch(
+                    queries.GET_OPERATIONS_HISTORY_SUMMARY,
+                    date_from,
+                    date_to,
+                    source_type,
+                    operation_type,
+                    product_id,
+                    location_id,
+                    author,
+                    status,
+                    group_by,
+                )
+                return True, rows
+
     async def get_page(
         self,
         date_from: date,

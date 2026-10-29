@@ -112,3 +112,54 @@ FROM calculated
 ORDER BY product_id ASC, day ASC
 """
 )
+
+
+_TURNOVER_CTES = """
+WITH params AS (
+    SELECT $1::date AS date_from, $2::date AS date_to,
+           ($1::date::timestamp AT TIME ZONE 'Europe/Moscow') AS period_start,
+           (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow') AS period_end
+),
+daily_activity AS (
+    SELECT m.product_id,
+           date_trunc($4::text, m.created_at AT TIME ZONE 'Europe/Moscow')::date AS period_date,
+           COALESCE(sum(m.quantity) FILTER (WHERE m.movement_type = 'receive'), 0)::numeric
+               AS received_quantity,
+           COALESCE(sum(m.quantity) FILTER (WHERE m.movement_type = 'ship'), 0)::numeric
+               AS shipped_quantity
+    FROM wms.movements m CROSS JOIN params p
+    WHERE m.created_at >= p.period_start AND m.created_at < p.period_end
+      AND m.movement_type IN ('receive', 'ship')
+      AND ($3::varchar IS NULL OR m.product_id = $3)
+    GROUP BY m.product_id, date_trunc($4::text, m.created_at AT TIME ZONE 'Europe/Moscow')::date
+),
+eligible_products AS (
+    SELECT DISTINCT product_id FROM daily_activity
+)
+"""
+
+GET_DAILY_TURNOVER = (
+    _TURNOVER_CTES
+    + """
+, turnover_products AS (
+    SELECT ep.product_id, p.name AS product_name
+    FROM eligible_products ep
+    LEFT JOIN public.products p ON p.id = ep.product_id
+),
+calendar_periods AS (
+    SELECT generate_series(
+               date_trunc($4::text, p.date_from::timestamp),
+               date_trunc($4::text, p.date_to::timestamp),
+               CASE WHEN $4::text = 'month' THEN interval '1 month' ELSE interval '1 day' END
+           )::date AS period_date
+    FROM params p
+)
+SELECT pp.product_id, pp.product_name, cd.period_date,
+       COALESCE(da.received_quantity, 0)::numeric AS received_quantity,
+       COALESCE(da.shipped_quantity, 0)::numeric AS shipped_quantity
+FROM turnover_products pp
+CROSS JOIN calendar_periods cd
+LEFT JOIN daily_activity da ON da.product_id = pp.product_id AND da.period_date = cd.period_date
+ORDER BY pp.product_id ASC, cd.period_date ASC
+"""
+)

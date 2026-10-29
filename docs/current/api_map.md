@@ -176,6 +176,47 @@ Response содержит метаданные фильтра и пагинац�
 `opening_quantity`, `incoming_quantity`, `outgoing_quantity`, `closing_quantity`.
 Пагинация и сортировка применяются к товарам (`product_id ASC`), внутри товара дни идут
 по возрастанию. Пустая выборка возвращает 200 и `items=[]`.
+# Поступления и отгрузки всего WMS по дням
+
+`GET /api/inventory-history/daily-turnover` — read-only оборот всего WMS
+(единственный склад PUSHKINO). Источник — `wms.movements`:
+`received_quantity = sum(quantity) WHERE movement_type = 'receive'`,
+`shipped_quantity = sum(quantity) WHERE movement_type = 'ship'`.
+Локации, зоны, партии и контейнеры агрегируются до товара и выбранного периода.
+Другие типы движений не входят, каждая запись movement учитывается один раз.
+
+Обязательные параметры: `date_from`, `date_to` (включительно, `Europe/Moscow`, до 366 дней).
+Необязательные: `product_id` (точный ID), `group_by=day|month` (по умолчанию `day`).
+Пагинации и лимита товаров нет. Группировка выполняется в PostgreSQL.
+Фильтра локации нет. Возвращаются только товары с receive/ship за период;
+Все календарные дни либо месяцы таких товаров присутствуют, включая периоды с нулями.
+Сортировка `product_id ASC`, затем дата периода; все товары возвращаются одним ответом.
+
+Ответ: `date_from`, `date_to`, `timezone`, `group_by`, `total_products`, `items`.
+Товар содержит `product_id`, nullable `product_name`, `totals` и `days` (group_by=day)
+либо `months` (group_by=month). В `totals`: `received_quantity`, `shipped_quantity`;
+в каждом периоде — те же количества и `date` для дня либо `month` для месяца.
+`month` — дата первого числа месяца. Крайние месяцы суммируют только movements внутри
+точного запрошенного диапазона; даты не расширяются до начала/конца месяца.
+Календарный год возвращает 12 месяцев; скользящий диапазон до 366 дней может затронуть 13.
+Итоги относятся к конкретному товару за весь период.
+Остатки не вычисляются: receive/ship не отражают корректировки, комплектацию и пересорт.
+
+Пример: `/api/inventory-history/daily-turnover?date_from=2026-01-01&date_to=2026-12-31&group_by=month`.
+Пустая выборка — HTTP 200 с `items=[]`, неверный период — 400,
+невалидные query parameters — 422. Данные читаются одним SQL-запросом в read-only
+транзакции; total_products вычисляется по возвращённым товарам. Миграция не требуется.
+Объём ответа растёт как число товаров × число периодов; время на production не измерено.
+Локальный синтетический замер 2026-10-26 (PostgreSQL 17, простые таблицы без production
+triggers/партиций, 1000 товаров, 100000 movements, ASGI-запрос с JSON-сериализацией,
+без сетевой передачи): 30 дней — 0.48–0.50 с / 2.07 MB JSON;
+90 дней — 1.23–1.27 с / 5.97 MB JSON. Это не прогноз production latency.
+Годовой замер с day/month, 1000 товаров и до 1000000 movements:
+[условия и результаты](../tools/inventory_turnover_benchmark.md).
+Swagger `/docs` содержит описания всех полей, примеры запросов и выбор HTTP 200 примеров:
+дневной, годовой месячный, неполные месяцы и пустые результаты обоих форматов.
+Для ошибок доступны примеры 400 (порядок дат, длительность) и 422 (group_by, обязательная дата).
+
 # Единый список бизнес-операций
 
 `GET /api/operations-history` — read-only список, нормализованный через `UNION ALL`
@@ -206,6 +247,39 @@ Receipt, task и container business headers в MVP не включены; их �
 `movement:<movement_id>:<created_at_epoch_us>`. Некорректный ID возвращает 400,
 отсутствующий объект — 404. Business detail сохраняет header/items даже при потерянной
 или неоднозначной movement-ссылке и сообщает проблему в `warnings`.
+
+# Сводка операций по периодам и авторам
+
+`GET /api/operations-history/summary` — read-only агрегация **того же набора событий**,
+что `GET /api/operations-history`, до пагинации. Количества единиц товара не суммируются.
+Источник SQL — общий `_EVENTS_CTES`; правила структурной дедупликации сохранены.
+
+Обязательны `date_from`, `date_to` (включительно, `Europe/Moscow`, максимум 366 дней).
+Необязательные: `group_by=day|month` (default `day`) и все фильтры списка:
+`source_type`, `operation_type`, `product_id`, `location_id`, `author`, `status`.
+Пагинации нет. Период события определяется по `created_at`, для FBS — `received_at`.
+
+Ответ: `date_from`, `date_to`, `timezone`, `group_by`, `total_operations`, `periods`.
+Каждый период содержит `period_start` (день либо первое число месяца), `total_operations`
+и `groups`. Группа содержит `source_type`, `operation_type`, `operation_name`, `author`,
+`status`, `operations_count`. Итоги периодов равны сумме групп, общий итог — сумме периодов.
+Пустые периоды возвращаются с нулём и `groups=[]`; месяцы по краям ограничены датами
+запроса. Периоды отсортированы по дате, группы — по источнику, типу, автору, статусу;
+null в сортировке последним. Неизвестные historical types сохраняются как в журнале.
+
+Автор — строка из существующего источника, в том числе имя сервиса. FBS автор общий,
+только если все позиции имеют один непустой author; иначе null. Фильтр author у FBS
+выбирает header при совпадении хотя бы одной позиции, но не подменяет автора группы.
+Standalone movement status=null; фильтр status исключает его. FBS headers остаются
+типом `fbs_shipment`, standalone `ship` — типом `ship`. Фильтр product_id выбирает событие
+целиком; location — точная, без subtree, FBS при location исключается.
+
+Пример: `/api/operations-history/summary?date_from=2026-01-01&date_to=2026-12-31&group_by=month`.
+Для drill-down используются даты периода и фильтры существующего списка.
+Отдельного фильтра «только null author/status» у списка нет.
+Ошибки: 400 — период/source_type/operation_type; 404 — location; 422 — формат или group_by.
+Read-only `REPEATABLE READ` охватывает проверку location и SQL агрегации.
+Новые таблицы, индексы и миграция не требуются. Swagger содержит примеры и описания полей.
 
 # История документа поступления
 

@@ -1,8 +1,8 @@
 """Сервис списка и typed detail бизнес-операций."""
 
 import json
-from datetime import date
-from typing import Any
+from datetime import date, timedelta
+from typing import Any, Literal
 
 from app.core.exceptions import (
     LocationNotFoundError,
@@ -19,7 +19,13 @@ from app.core.operations_history import (
     get_operation_name,
     parse_operation_event_id,
 )
-from app.core.schemas.operations_history import OperationHistoryItem, OperationsHistoryResponse
+from app.core.schemas.operations_history import (
+    OperationHistoryItem,
+    OperationSummaryGroup,
+    OperationSummaryPeriod,
+    OperationsHistoryResponse,
+    OperationsHistorySummaryResponse,
+)
 from app.core.schemas.operations_history_detail import (
     FbsShipmentDetailItem,
     FbsShipmentDetailResponse,
@@ -62,6 +68,77 @@ class OperationsHistoryService:
     def __init__(self, repository: OperationsHistoryRepository):
         self.repository = repository
 
+    @classmethod
+    def _validate_filters(
+        cls, date_from: date, date_to: date, source_type: str | None, operation_type: str | None
+    ) -> None:
+        if date_from > date_to:
+            raise OperationsHistoryValidationError("date_from не может быть позже date_to")
+        if (date_to - date_from).days + 1 > 366:
+            raise OperationsHistoryValidationError("Период не может превышать 366 календарных дней")
+        if source_type is not None and source_type not in cls.SOURCE_TYPES:
+            raise OperationsHistoryValidationError(f"Неизвестный source_type: {source_type}")
+        if operation_type is not None and operation_type not in cls.OPERATION_TYPES:
+            raise OperationsHistoryValidationError(f"Неизвестный operation_type: {operation_type}")
+
+    async def get_summary(
+        self,
+        date_from: date,
+        date_to: date,
+        source_type: str | None = None,
+        operation_type: str | None = None,
+        product_id: str | None = None,
+        location_id: int | None = None,
+        author: str | None = None,
+        status: str | None = None,
+        group_by: Literal["day", "month"] = "day",
+    ) -> OperationsHistorySummaryResponse:
+        self._validate_filters(date_from, date_to, source_type, operation_type)
+        if group_by not in {"day", "month"}:
+            raise OperationsHistoryValidationError("group_by должен быть day или month")
+        location_exists, rows = await self.repository.get_summary(
+            date_from,
+            date_to,
+            source_type,
+            operation_type,
+            product_id,
+            location_id,
+            author,
+            status,
+            group_by,
+        )
+        if not location_exists:
+            raise LocationNotFoundError(f"Локация с ID {location_id} не найдена")
+        periods: dict[date, OperationSummaryPeriod] = {}
+        current = date_from if group_by == "day" else date_from.replace(day=1)
+        last_period = date_to if group_by == "day" else date_to.replace(day=1)
+        while current <= last_period:
+            periods[current] = OperationSummaryPeriod(
+                period_start=current, total_operations=0, groups=[]
+            )
+            if current == last_period:
+                break
+            current = (
+                current + timedelta(days=1)
+                if group_by == "day"
+                else (current.replace(day=28) + timedelta(days=4)).replace(day=1)
+            )
+        for record in rows:
+            row = dict(record)
+            period = periods[row.pop("period_start")]
+            row["operation_name"] = get_operation_name(row["operation_type"])
+            group = OperationSummaryGroup.model_validate(row)
+            period.groups.append(group)
+            period.total_operations += group.operations_count
+        return OperationsHistorySummaryResponse(
+            date_from=date_from,
+            date_to=date_to,
+            timezone=self.TIMEZONE,
+            group_by=group_by,
+            total_operations=sum(period.total_operations for period in periods.values()),
+            periods=list(periods.values()),
+        )
+
     async def get_operations(
         self,
         date_from: date,
@@ -75,14 +152,7 @@ class OperationsHistoryService:
         limit: int = 100,
         offset: int = 0,
     ) -> OperationsHistoryResponse:
-        if date_from > date_to:
-            raise OperationsHistoryValidationError("date_from не может быть позже date_to")
-        if (date_to - date_from).days + 1 > 366:
-            raise OperationsHistoryValidationError("Период не может превышать 366 календарных дней")
-        if source_type is not None and source_type not in self.SOURCE_TYPES:
-            raise OperationsHistoryValidationError(f"Неизвестный source_type: {source_type}")
-        if operation_type is not None and operation_type not in self.OPERATION_TYPES:
-            raise OperationsHistoryValidationError(f"Неизвестный operation_type: {operation_type}")
+        self._validate_filters(date_from, date_to, source_type, operation_type)
         location_exists, total, rows = await self.repository.get_page(
             date_from,
             date_to,

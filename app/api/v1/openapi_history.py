@@ -25,6 +25,228 @@ def error_response(description: str, example: dict, *, validation: bool = False)
     }
 
 
+def turnover_example(group_by, date_from, date_to, periods):
+    """Примеры клиентского контракта; расчёт runtime не используется."""
+    key, date_key = ("days", "date") if group_by == "day" else ("months", "month")
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "timezone": "Europe/Moscow",
+        "group_by": group_by,
+        "total_products": 1 if periods else 0,
+        "items": [
+            {
+                "product_id": "wild1825",
+                "product_name": "Товар",
+                "totals": {
+                    "received_quantity": sum(row[1] for row in periods),
+                    "shipped_quantity": sum(row[2] for row in periods),
+                },
+                key: [
+                    {date_key: day, "received_quantity": received, "shipped_quantity": shipped}
+                    for day, received, shipped in periods
+                ],
+            }
+        ]
+        if periods
+        else [],
+    }
+
+
+TURNOVER_EXAMPLES = {
+    "daily": {
+        "summary": "По дням: поступление, нулевой день, отгрузка",
+        "description": "date_from=2026-07-01&date_to=2026-07-03&product_id=wild1825. "
+        "group_by можно не передавать: по умолчанию day.",
+        "value": turnover_example(
+            "day",
+            "2026-07-01",
+            "2026-07-03",
+            [
+                ("2026-07-01", 100.5, 0),
+                ("2026-07-02", 0, 0),
+                ("2026-07-03", 0, 20),
+            ],
+        ),
+    },
+    "monthly_partial": {
+        "summary": "По месяцам: неполные крайние месяцы и нулевой март",
+        "description": "date_from=2026-01-15&date_to=2026-04-10&group_by=month. "
+        "Январь включает только 15–31 января, апрель — 1–10 апреля.",
+        "value": turnover_example(
+            "month",
+            "2026-01-15",
+            "2026-04-10",
+            [
+                ("2026-01-01", 10, 3),
+                ("2026-02-01", 0, 4),
+                ("2026-03-01", 0, 0),
+                ("2026-04-01", 5.5, 0),
+            ],
+        ),
+    },
+    "monthly_year": {
+        "summary": "Календарный год: 12 месяцев на товар",
+        "description": "date_from=2026-01-01&date_to=2026-12-31&group_by=month. "
+        "Без product_id возвращаются все товары с receive/ship за период.",
+        "value": turnover_example(
+            "month",
+            "2026-01-01",
+            "2026-12-31",
+            [(f"2026-{month:02d}-01", 100, 20) for month in range(1, 13)],
+        ),
+    },
+    "empty_daily": {
+        "summary": "Нет receive/ship: дневной ответ HTTP 200",
+        "value": turnover_example("day", "2026-07-01", "2026-07-03", []),
+    },
+    "empty_monthly": {
+        "summary": "Нет receive/ship: месячный ответ HTTP 200",
+        "value": turnover_example("month", "2026-01-01", "2026-12-31", []),
+    },
+}
+
+TURNOVER_BAD_REQUEST_EXAMPLES = {
+    name: {
+        "summary": summary,
+        "value": {
+            "detail": message,
+            "message": message,
+            "error_code": "INVENTORY_HISTORY_VALIDATION_ERROR",
+        },
+    }
+    for name, summary, message in [
+        ("reversed_dates", "Начало периода позже конца", "date_from не может быть позже date_to"),
+        (
+            "period_too_long",
+            "Более 366 дней включительно",
+            "Период не может превышать 366 календарных дней",
+        ),
+    ]
+}
+
+TURNOVER_VALIDATION_EXAMPLES = {
+    "invalid_group": {
+        "summary": "group_by=year не поддерживается",
+        "value": {
+            "detail": [
+                {
+                    "type": "literal_error",
+                    "loc": ["query", "group_by"],
+                    "msg": "Input should be 'day' or 'month'",
+                    "input": "year",
+                    "ctx": {"expected": "'day' or 'month'"},
+                }
+            ]
+        },
+    },
+    "required_date": {
+        "summary": "Не передан обязательный date_from",
+        "value": {
+            "detail": [
+                {
+                    "type": "missing",
+                    "loc": ["query", "date_from"],
+                    "msg": "Field required",
+                    "input": None,
+                }
+            ]
+        },
+    },
+}
+
+
+OPERATIONS_SUMMARY_EXAMPLES = {
+    "daily": {
+        "summary": "По дням: два автора, нулевой день, неоднозначный автор FBS",
+        "value": {
+            "date_from": "2026-07-01",
+            "date_to": "2026-07-03",
+            "timezone": "Europe/Moscow",
+            "group_by": "day",
+            "total_operations": 4,
+            "periods": [
+                {
+                    "period_start": "2026-07-01",
+                    "total_operations": 3,
+                    "groups": [
+                        {
+                            "source_type": "movement",
+                            "operation_type": "ship",
+                            "operation_name": "Отгрузка",
+                            "author": "FBS-service",
+                            "status": None,
+                            "operations_count": 1,
+                        },
+                        {
+                            "source_type": "movement",
+                            "operation_type": "ship",
+                            "operation_name": "Отгрузка",
+                            "author": "operator",
+                            "status": None,
+                            "operations_count": 2,
+                        },
+                    ],
+                },
+                {"period_start": "2026-07-02", "total_operations": 0, "groups": []},
+                {
+                    "period_start": "2026-07-03",
+                    "total_operations": 1,
+                    "groups": [
+                        {
+                            "source_type": "fbs_shipment",
+                            "operation_type": "fbs_shipment",
+                            "operation_name": "ФБС-отгрузка",
+                            "author": None,
+                            "status": "completed",
+                            "operations_count": 1,
+                        },
+                    ],
+                },
+            ],
+        },
+    },
+    "monthly_partial": {
+        "summary": "По месяцам: крайние месяцы ограничены датами запроса",
+        "value": {
+            "date_from": "2026-01-15",
+            "date_to": "2026-02-10",
+            "timezone": "Europe/Moscow",
+            "group_by": "month",
+            "total_operations": 1,
+            "periods": [
+                {
+                    "period_start": "2026-01-01",
+                    "total_operations": 1,
+                    "groups": [
+                        {
+                            "source_type": "kit_operation",
+                            "operation_type": "kit_assembly",
+                            "operation_name": "Комплектация",
+                            "author": "operator",
+                            "status": "completed",
+                            "operations_count": 1,
+                        },
+                    ],
+                },
+                {"period_start": "2026-02-01", "total_operations": 0, "groups": []},
+            ],
+        },
+    },
+    "empty": {
+        "summary": "Нет операций: HTTP 200, календарь с нулями",
+        "value": {
+            "date_from": "2026-07-01",
+            "date_to": "2026-07-01",
+            "timezone": "Europe/Moscow",
+            "group_by": "day",
+            "total_operations": 0,
+            "periods": [{"period_start": "2026-07-01", "total_operations": 0, "groups": []}],
+        },
+    },
+}
+
+
 DAILY_EXAMPLE = {
     "date_from": "2026-07-01",
     "date_to": "2026-07-03",

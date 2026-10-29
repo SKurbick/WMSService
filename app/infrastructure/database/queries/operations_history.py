@@ -200,6 +200,19 @@ all_events AS (
 )
 """
 
+GET_OPERATIONS_HISTORY_SUMMARY = (
+    _EVENTS_CTES
+    + """
+SELECT date_trunc($9::text, created_at AT TIME ZONE 'Europe/Moscow')::date AS period_start,
+       source_type, operation_type, author, status, count(*)::bigint AS operations_count
+FROM all_events
+GROUP BY date_trunc($9::text, created_at AT TIME ZONE 'Europe/Moscow')::date,
+         source_type, operation_type, author, status
+ORDER BY period_start ASC, source_type ASC, operation_type ASC,
+         author ASC NULLS LAST, status ASC NULLS LAST
+"""
+)
+
 COUNT_OPERATIONS_HISTORY = (
     _EVENTS_CTES
     + """

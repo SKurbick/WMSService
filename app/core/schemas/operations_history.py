@@ -2,6 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_serializer
 
@@ -66,4 +67,42 @@ class OperationsHistoryResponse(BaseModel):
     offset: int = Field(description="Смещение после UNION всех источников.")
     items: list[OperationHistoryItem] = Field(
         description="События в порядке created_at DESC, event_id DESC."
+    )
+
+
+class OperationSummaryGroup(BaseModel):
+    source_type: str = Field(description="Источник события, как в журнале операций.")
+    operation_type: str = Field(
+        description="Тип операции; FBS header — fbs_shipment, standalone — ship и др."
+    )
+    operation_name: str = Field(description="Русское название типа операции.")
+    author: str | None = Field(
+        description="Автор как в журнале; null при отсутствии или неоднозначности."
+    )
+    status: str | None = Field(description="Статус header; у standalone movement — null.")
+    operations_count: int = Field(
+        ge=1, description="Число событий этой группы; не количество единиц товара."
+    )
+
+
+class OperationSummaryPeriod(BaseModel):
+    period_start: date = Field(description="Московская дата дня или первого числа месяца.")
+    total_operations: int = Field(
+        ge=0, description="Число операций периода, сумма operations_count всех групп."
+    )
+    groups: list[OperationSummaryGroup] = Field(
+        description="Группы по источнику, типу, автору и статусу. В пустом периоде — []."
+    )
+
+
+class OperationsHistorySummaryResponse(BaseModel):
+    date_from: date = Field(description="Первый включённый московский день запроса.")
+    date_to: date = Field(description="Последний включённый московский день запроса.")
+    timezone: str = Field(default="Europe/Moscow", description="Timezone фильтра и группировки.")
+    group_by: Literal["day", "month"] = Field(default="day", description="Гранулярность периодов.")
+    total_operations: int = Field(
+        ge=0, description="Число событий за весь период после фильтров, до пагинации журнала."
+    )
+    periods: list[OperationSummaryPeriod] = Field(
+        description="Все дни либо месяцы запроса, по возрастанию даты, включая пустые периоды."
     )
