@@ -1,5 +1,6 @@
 """Opt-in real PostgreSQL fixtures, isolated from application DB settings."""
 import asyncio
+import json
 import os
 import re
 from pathlib import Path
@@ -155,6 +156,25 @@ def kiz_database_template():
                       CHECK (source IN ('standard','external_detected','http_api'));
                 """
                 )
+                if os.getenv("KIZ_TEST_INVENTORY_SCHEMA") == "1":
+                    await conn.execute(
+                        "SELECT set_config('wms.inventory_runtime_roles',$1,false)",
+                        json.dumps(
+                            [
+                                {
+                                    "role": await conn.fetchval("SELECT current_user"),
+                                    "profile": "inventory",
+                                }
+                            ]
+                        ),
+                    )
+                    for migration in (
+                        "20261022_add_inventory_documents.sql",
+                        "20261029_add_inventory_application_preparations.sql",
+                        "20261030_add_inventory_location_freeze.sql",
+                        "20261030_add_inventory_physical_apply.sql",
+                    ):
+                        await conn.execute((ROOT / "scripts/migrations" / migration).read_text())
             finally:
                 await conn.close()
         finally:
@@ -193,7 +213,12 @@ async def kiz_pool(kiz_database_template, kiz_legacy_schema):
             min_size=1,
             max_size=6,
             command_timeout=10,
-            server_settings={"search_path": "wms,public"},
+            server_settings={
+                "search_path": "wms,public",
+                "wms.inventory_runtime_roles": json.dumps(
+                    [{"role": await admin.fetchval("SELECT current_user"), "profile": "inventory"}]
+                ),
+            },
         )
         if not kiz_legacy_schema:
             async with pool.acquire() as connection:

@@ -1,11 +1,15 @@
-"""Standalone inventory documents. Stage 1 never applies stock corrections."""
+"""Inventory documents, final-count freeze workflow and controlled physical apply."""
 
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query
 
-from app.api.v1.dependencies import get_inventory_document_service
+from app.api.v1.dependencies import get_inventory_document_service, require_inventory_apply
 from app.core.schemas.inventory_documents import (
+    POSTGRES_BIGINT_MAX,
+    ApplicationCommand,
+    ApplicationPreparationResponse,
+    ApplicationResultResponse,
     AttemptCommandResponse,
     AttemptResponse,
     Command,
@@ -15,6 +19,9 @@ from app.core.schemas.inventory_documents import (
     DocumentResponse,
     DocumentStatus,
     FoundItem,
+    FreezeConfirmation,
+    FreezeCommandResponse,
+    FreezeStatusResponse,
     HistoryEvent,
     ItemCommandResponse,
     ItemResponse,
@@ -26,6 +33,7 @@ from app.core.schemas.inventory_documents import (
     UpdateDocument,
 )
 from app.core.services.inventory_document_service import InventoryDocumentService
+from app.core.services.inventory_freeze_service import InventoryFreezeService
 
 router = APIRouter(
     prefix="/inventory-documents",
@@ -36,9 +44,9 @@ router = APIRouter(
         503: {"description": "Модуль выключен либо запрошено недоступное применение"},
     },
 )
-Id = Annotated[int, Path(gt=0)]
+Id = Annotated[int, Path(gt=0, le=POSTGRES_BIGINT_MAX)]
 Limit = Annotated[int, Query(ge=1, le=1000)]
-Offset = Annotated[int, Query(ge=0)]
+Offset = Annotated[int, Query(ge=0, le=POSTGRES_BIGINT_MAX)]
 Service = Annotated[InventoryDocumentService, Depends(get_inventory_document_service)]
 
 
@@ -54,7 +62,7 @@ async def create_document(data: CreateDocument, service: Service):
 async def list_documents(
     service: Service,
     status: DocumentStatus | None = None,
-    warehouse_location_id: Annotated[int | None, Query(gt=0)] = None,
+    warehouse_location_id: Annotated[int | None, Query(gt=0, le=POSTGRES_BIGINT_MAX)] = None,
     limit: Limit = 100,
     offset: Offset = 0,
 ):
@@ -230,3 +238,93 @@ async def history(document_id: Id, service: Service, limit: Limit = 100, offset:
 async def revisions(document_id: Id, service: Service, limit: Limit = 100, offset: Offset = 0):
     """Возвращает историю начального snapshot и предварительных ревизий."""
     return await service.page(document_id, "revisions", limit, offset)
+
+
+@router.post(
+    "/{document_id}/application-preview",
+    response_model=ApplicationPreparationResponse,
+    summary="Подготовить корректировки отправленной ревизии",
+)
+async def application_preview(document_id: Id, data: ApplicationCommand, service: Service):
+    """Одна неизменяемая подготовка на submitted revision. Физический pilot требует freeze.
+
+    Повтор возвращает сохранённое наблюдение, а не актуализирует его. Для нового
+    наблюдения нужны возврат на пересчёт и новая отправка на согласование.
+    """
+    return await service.prepare_application(document_id, data)
+
+
+@router.post(
+    "/{document_id}/apply",
+    response_model=ApplicationResultResponse,
+    dependencies=[Depends(require_inventory_apply)],
+    summary="Атомарно применить документ через inventory-source adjust",
+    responses={
+        409: {"description": "Протокол применения недоступен либо конфликт версии/состояния"}
+    },
+)
+async def apply_document(document_id: Id, data: ApplicationCommand, service: Service):
+    """Требует flags, финальный пересчёт, готовый freeze и актуальную подготовку."""
+    return await service.apply(document_id, data)
+
+
+@router.get(
+    "/{document_id}/application",
+    response_model=ApplicationResultResponse,
+    summary="Получить подготовку, результат применения и связанные movements",
+)
+async def application_result(document_id: Id, service: Service):
+    """Возвращает историческое наблюдение; оно не является разрешением на применение."""
+    return await service.application_result(document_id)
+
+
+@router.post(
+    "/{document_id}/freeze",
+    response_model=FreezeCommandResponse,
+    summary="Начать адресную блокировку малого partial-документа",
+)
+async def begin_freeze(document_id: Id, data: Command, service: Service):
+    """Блокирует адреса документа; существующие SQL writers должны завершиться до захвата барьеров."""
+    return await InventoryFreezeService(service).begin(document_id, data)
+
+
+@router.get(
+    "/{document_id}/freeze",
+    response_model=FreezeStatusResponse,
+    summary="Состояние блокировки и журнал invalidation",
+)
+async def freeze_status(document_id: Id, service: Service, limit: Limit = 100, offset: Offset = 0):
+    """Показывает состояние, события и связанные незавершённые задачи; timestamps не доказывают физическое время."""
+    return await InventoryFreezeService(service).status(document_id, limit, offset)
+
+
+@router.post(
+    "/{document_id}/freeze/confirm",
+    response_model=FreezeCommandResponse,
+    summary="Подтвердить физическое окно и потребовать финальный пересчёт",
+)
+async def confirm_freeze(document_id: Id, data: FreezeConfirmation, service: Service):
+    """Сохраняет подтверждение ответственного, создаёт epoch и требует новый финальный пересчёт всех строк."""
+    return await InventoryFreezeService(service).confirm(document_id, data)
+
+
+@router.post(
+    "/{document_id}/freeze/release",
+    response_model=FreezeCommandResponse,
+    summary="Явно освободить блокировку без корректировок",
+)
+async def release_freeze(document_id: Id, data: Decision, service: Service):
+    """Освобождает адреса без movements; claims сохраняются до окончательного закрытия документа."""
+    return await InventoryFreezeService(service).release(document_id, data)
+
+
+@router.post(
+    "/{document_id}/freeze/ready",
+    response_model=FreezeCommandResponse,
+    summary="Подтвердить готовность финальной ревизии к применению",
+)
+async def ready_freeze(document_id: Id, data: ApplicationCommand, service: Service):
+    """Повторно проверяет отправленную ревизию, финальные counts и подготовку под адресными барьерами."""
+    from app.core.services.inventory_application_service import InventoryApplicationService
+
+    return await InventoryApplicationService(service).ready(document_id, data)

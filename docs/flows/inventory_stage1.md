@@ -5,15 +5,22 @@
 
 ## Граница этапа
 
-Модуль пишет только собственные `inventory_document_*` и `inventory_location_claims`.
+Этот документ описывает Stage 1. Последующий [physical pilot Stage 2A](inventory_stage2a_physical_apply.md)
+добавляет applied только для документов, прошедших отдельный freeze/final count protocol.
+
+Stage 1 пишет только собственные `inventory_document_*` и `inventory_location_claims`;
+подготовительный fallback Stage 2A добавляет `inventory_application_*`.
 Inventory, movements, movement registry, КИЗ, контейнеры, tasks и ФБС только читаются.
-Нового типа движения, применения, approved/applied-статуса и apply endpoint нет.
+Нового типа движения, физического применения и approved/applied-статуса нет.
+Подготовительные endpoints Stage 2A описаны в [отдельном документе](inventory_stage2a_preparation.md).
 Каждый reconciliation response содержит `preliminary_only=true`, `safe_for_apply=false`.
 
 `INVENTORY_MODULE_ENABLED=false` по умолчанию. При выключенном модуле все его
 endpoints возвращают 503 до создания pool/обращения к новым таблицам. Это позволяет
-развернуть код до миграции. `INVENTORY_APPLY_ENABLED=false` обязателен для этапа 1:
-ошибочное включение делает новый модуль недоступным (503), а не разрешает движения.
+развернуть код до миграции. `INVENTORY_APPLY_ENABLED=false` остаётся default.
+Stage 2A отделяет этот flag от доступности Stage 1. Для физического применения нужны
+также INVENTORY_FREEZE_ENABLED=true, подходящий partial scope, freeze и финальные counts.
+Включение apply не делает старые Stage 1 counts автоматически пригодными для применения.
 Существующие endpoints и consumers от этих flags не зависят.
 
 ## Схема и жизненный цикл
@@ -76,6 +83,11 @@ Partial требует locations и/или product_ids. Selection —
 включая пустые адреса. SKU+locations применяется как пересечение. Parent/path должны
 задавать одинаковый набор warehouse descendants; иначе start/preview дают 409.
 `level` не используется как authoritative hierarchy.
+
+Resolver сверяет не только warehouse-wide membership, но и выбранные parent-based
+subtrees с LTREE-областью и их внутренние parent/path edges. Устаревшие paths после
+переноса родителя внутри склада дают `INVENTORY_HIERARCHY_CONFLICT`, а не неполный
+snapshot. Успешный preview не заменяет повторную проверку в transaction запуска.
 
 После старта selections, SKU-фильтр и materialized IDs не изменяются. Новые или
 перенесённые locations не меняют документ. Для GET scope возвращаются исходные
@@ -145,6 +157,9 @@ Event timestamps, maintenance, missing ledger history и временно нев
 Prefix `/api/inventory-documents`. List endpoints используют limit (1–1000)/offset,
 response `{items,total,limit,offset}`. Errors — detail/error_code/diagnostics;
 404 not found, 409 state/version/scope/idempotency, 422 DTO, 503 flags.
+Входные ID/document version ограничены положительным PostgreSQL bigint
+(`1..9223372036854775807`), offset — `0..9223372036854775807`; выход за диапазон
+отклоняется с 422 до выполнения SQL нового модуля. Схемы старых API не меняются.
 
 | Method | Suffix | Назначение |
 |---|---|---|
@@ -235,6 +250,31 @@ PYTHONPATH=. FBS_TASK_PROCESSING_MODE=legacy .venv/bin/pytest -q -p no:cacheprov
 
 Legacy здесь — детерминированный baseline для старых FBS mock tests; task-level cases
 сами явно переключают test settings. Изменять production FBS mode для тестов не нужно.
+
+## Проверки исправлений review (29.10.2026)
+
+- Исправлены B.1/P1 и B.2/P3 из
+  [code review](../audit/inventory_stage1_code_review_2026-10-29.md).
+  Общие location functions, физические таблицы и lifecycle КИЗ не менялись;
+  новых миграций и endpoints нет.
+- Добавлены 30 regression cases: 4 PostgreSQL-сценария рассогласования дерева
+  (пропуск/ошибочное включение потомка, full, SKU-only), 20 отказов по bigint range
+  для path/query/body без SQL, 1 DTO boundary case и 5 PostgreSQL boundary cases.
+  После успешного preview дерево изменяется; start повторно проверяет его и при
+  конфликте сохраняет draft без новых claims/snapshot/revisions/history/commands.
+- Все тесты инвентаризации: **73 passed**, 66 existing warnings, 24.61s.
+  Полный suite: **858 passed**, 66 existing warnings, 155.37s.
+  Black/Ruff и `git diff --check` прошли.
+- Проверки выполнялись только на disposable PostgreSQL **17.4**, localhost:55449,
+  с явными локальными test DSN и DB settings. Production не использовался.
+- Известный КИЗ-deadlock не исправлялся. На исходном `404c55e`, извлечённом в /tmp
+  без переключения ветки, он снова воспроизвёлся в **2 из 8** отдельных запусков
+  `test_concurrent_transfer_and_assignment_preserve_touch_protocol`.
+  Файлы этого теста, его fixtures и КИЗ services/repositories не менялись.
+  Зелёный текущий full suite не доказывает отсутствия старой недетерминированной гонки.
+- Следующий шаг — приёмочное тестирование Stage 1 с `INVENTORY_APPLY_ENABLED=false`.
+  Review ограничения по физическому порядку FBS, evidence cap/нагрузке и Stage 2
+  этими исправлениями не снимаются.
 
 ## Следующий этап
 

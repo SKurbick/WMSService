@@ -40,9 +40,15 @@ async def inventory_env(kiz_pool, monkeypatch):
         before = await c.fetchval(
             "SELECT pg_get_functiondef('wms.update_inventory_from_movement()'::regprocedure)"
         )
-        await c.execute(
-            (ROOT / "scripts/migrations/20261022_add_inventory_documents.sql").read_text()
-        )
+        if not await c.fetchval("SELECT to_regclass('wms.inventory_documents') IS NOT NULL"):
+            await c.execute(
+                (ROOT / "scripts/migrations/20261022_add_inventory_documents.sql").read_text()
+            )
+            await c.execute(
+                (
+                    ROOT / "scripts/migrations/20261029_add_inventory_application_preparations.sql"
+                ).read_text()
+            )
         assert before == await c.fetchval(
             "SELECT pg_get_functiondef('wms.update_inventory_from_movement()'::regprocedure)"
         )
@@ -230,6 +236,127 @@ async def test_scope_is_frozen_after_new_location_and_tree_move(inventory_env):
         json=dict(**cmd(document), title="Changed", mode="full", warehouse_location_id=env["root"]),
     )
     assert response.status_code == 409
+
+
+@pytest.mark.parametrize("selection", ["new_parent", "old_parent", "full", "sku_only"])
+async def test_internal_hierarchy_conflict_rechecked_after_preview_and_start_is_atomic(
+    inventory_env, selection
+):
+    from app.infrastructure.database.queries import inventory_documents as q
+
+    env = inventory_env
+    async with env["pool"].acquire() as c:
+        leaf = await c.fetchval(
+            "INSERT INTO wms.locations(name,parent_location_id,level) "
+            "VALUES('Leaf before reparent',$1,3) RETURNING location_id",
+            env["bin"],
+        )
+        await c.execute(
+            "INSERT INTO wms.movements(movement_type,product_id,to_location_id,quantity) "
+            "VALUES('receive','inv-new',$1,1)",
+            leaf,
+        )
+    selected_id = env["empty"] if selection == "new_parent" else env["zone"]
+    filters = (
+        dict(mode="full")
+        if selection == "full"
+        else dict(mode="partial", product_ids=["inv-new"])
+        if selection == "sku_only"
+        else dict(mode="partial", locations=[dict(location_id=selected_id)])
+    )
+    draft = await create(env, **filters, start=False)
+    url = f"{BASE}/{draft['document_id']}"
+    assert (await env["client"].post(f"{url}/preview-scope")).status_code == 200
+    async with env["pool"].acquire() as c:
+        # The existing trigger updates Bin.path, but leaves Leaf.path stale.
+        await c.execute(
+            "UPDATE wms.locations SET parent_location_id=$1 WHERE location_id=$2",
+            env["empty"],
+            env["bin"],
+        )
+        parent_ids = {r["location_id"] for r in await c.fetch(q.PARENT_TREE, env["root"])}
+        path_ids = {r["location_id"] for r in await c.fetch(q.EXPAND_SCOPE, env["root"], [], [])}
+        assert parent_ids == path_ids  # The old warehouse-wide membership check passed.
+        if selection in ("new_parent", "old_parent"):
+            parent_ids = {r["location_id"] for r in await c.fetch(q.PARENT_TREE, selected_id)}
+            path_ids = {
+                r["location_id"]
+                for r in await c.fetch(q.EXPAND_SCOPE, env["root"], [selected_id], [selected_id])
+            }
+            if selection == "new_parent":
+                assert leaf in parent_ids - path_ids  # Silent omission before the fix.
+            else:
+                assert leaf in path_ids - parent_ids  # Wrong inclusion before the fix.
+    before = await physical_state(env["pool"])
+    for suffix in ("preview-scope", "start"):
+        response = await env["client"].post(
+            f"{url}/{suffix}", **({"json": cmd(draft)} if suffix == "start" else {})
+        )
+        assert response.status_code == 409, response.text
+        assert response.json()["error_code"] == "INVENTORY_HIERARCHY_CONFLICT"
+    assert (await env["client"].get(url)).json() == draft
+    # Creating a fresh draft must use the same resolver, not bypass this check.
+    response = await env["client"].post(
+        BASE,
+        json=dict(
+            idempotency_key=str(uuid4()),
+            user_name="counter",
+            title="Conflicting tree",
+            warehouse_location_id=env["root"],
+            **filters,
+        ),
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["error_code"] == "INVENTORY_HIERARCHY_CONFLICT"
+    async with env["pool"].acquire() as c:
+        for table in (
+            "inventory_document_locations",
+            "inventory_location_claims",
+            "inventory_document_stock_components",
+            "inventory_document_kiz_snapshot",
+            "inventory_document_revisions",
+            "inventory_document_items",
+            "inventory_count_attempts",
+        ):
+            assert await c.fetchval(f"SELECT count(*) FROM wms.{table}") == 0
+        assert await c.fetchval("SELECT count(*) FROM wms.inventory_documents") == 1
+        assert await c.fetchval("SELECT count(*) FROM wms.inventory_document_commands") == 1
+        assert await c.fetchval("SELECT count(*) FROM wms.inventory_document_history") == 1
+    assert before == await physical_state(env["pool"])
+
+
+@pytest.mark.parametrize(
+    "parameter", ["document_path", "item_path", "attempt_path", "warehouse", "offset"]
+)
+async def test_bigint_upper_boundary_reaches_postgres_without_overflow(inventory_env, parameter):
+    from app.core.schemas.inventory_documents import POSTGRES_BIGINT_MAX
+
+    env = inventory_env
+    if parameter in ("warehouse", "offset"):
+        key = "warehouse_location_id" if parameter == "warehouse" else "offset"
+        response = await env["client"].get(BASE, params={key: POSTGRES_BIGINT_MAX})
+        assert response.status_code == 200, response.text
+        assert response.json()["items"] == []
+        return
+    if parameter == "document_path":
+        response = await env["client"].get(f"{BASE}/{POSTGRES_BIGINT_MAX}")
+    else:
+        doc = await create(
+            env,
+            mode="partial",
+            locations=[dict(location_id=env["zone"], include_descendants=False)],
+        )
+        if parameter == "item_path":
+            response = await env["client"].post(
+                f"{BASE}/{doc['document_id']}/items/{POSTGRES_BIGINT_MAX}/attempts", json=cmd(doc)
+            )
+        else:
+            item = (await items(env, doc))[0]
+            response = await env["client"].post(
+                f"{BASE}/{doc['document_id']}/items/{item['item_id']}/attempts/{POSTGRES_BIGINT_MAX}/complete",
+                json=cmd(doc, actual_quantity="0"),
+            )
+    assert response.status_code == 404, response.text
 
 
 async def test_concurrent_overlapping_start_is_atomic_and_claims_release(inventory_env):

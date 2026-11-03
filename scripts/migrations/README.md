@@ -4,6 +4,10 @@
 
 Alembic и автоматический migration runner в проекте отсутствуют. SQL применяется внешним процессом или владельцем БД. Все изменения сначала проверяются на stage и выполняются до запуска версии приложения, которая от них зависит.
 
+Текущий controlled Inventory pilot и порядок отключения описаны в
+[Stage 2A runbook](../../docs/flows/inventory_stage2a_physical_apply.md).
+Разделы 22/29 октября ниже сохраняют условия соответствующих предыдущих этапов.
+
 ## Инвентаризация — этап 1, 22.10.2026
 
 `20261022_add_inventory_documents.sql` применяется вручную после текущей КИЗ/registry
@@ -14,13 +18,72 @@ movements, КИЗ/контейнерные functions/triggers и не backfill-�
 Сначала stage PostgreSQL 17 и isolated integration tests. Затем backup и ручное
 применение владельцем БД с ON_ERROR_STOP. Код можно выложить до миграции при
 `INVENTORY_MODULE_ENABLED=false`; после миграции включить только module flag.
-`INVENTORY_APPLY_ENABLED` на этапе 1 должен оставаться false (true возвращает 503).
+`INVENTORY_APPLY_ENABLED` должен оставаться false. В подготовительной версии Stage 2A
+он больше не выключает Stage 1; physical apply всё равно недоступен при любом значении.
 Runtime-роли нужны SELECT physical evidence, права на новые tables/sequences; старое
 приложение новые объекты не использует. Rollback — выключить module, additive audit
 schema оставить. Повторный запуск SQL не поддерживается. Production apply агентом
 не выполнялся. [Подробный runbook](../../docs/flows/inventory_stage1.md).
 
+## Инвентаризация — подготовка Stage 2A, 29.10.2026
+
+`20261029_add_inventory_application_preparations.sql` применяется вручную строго после
+`20261022_add_inventory_documents.sql`. Создаёт две отдельные таблицы
+`inventory_application_preparations` и `inventory_application_components`, constraints,
+индексы и guards только новых объектов. Не изменяет старые functions/triggers/таблицы,
+не создаёт movements, не разрешает applied state и не backfill-ит данные.
+
+DB-first deployment; старый backend новых таблиц не использует. Повторный запуск не
+поддерживается, SQL обёрнут в транзакцию с ограниченными statement/lock timeouts.
+Запуск с ON_ERROR_STOP, сначала только isolated PostgreSQL 17/staging. Production
+агентом не применяется. Для rollback backend оставить additive audit-данные на месте.
+Оставить apply=false; этот флаг не способен включить отсутствующий physical writer.
+[Ограничения и последовательность дальнейшей разработки](../../docs/flows/inventory_stage2a_preparation.md).
+
 ## Найденные файлы
+
+### Inventory Stage 2A — persistent freeze и physical pilot, 30.10.2026
+
+После migrations 20261022/20261029 применяются в строгом порядке:
+
+1. `20261030_add_inventory_location_freeze.sql`: fences/состояния/история, guards всех
+   адресных writers, FBS context/deferred proof, task admission и отменённые attempts.
+2. `20261030_add_inventory_physical_apply.sql`: расширение preparations/components,
+   actual application/registry links, applied lifecycle и source-specific adjust branch.
+
+Вторая миграция получает installed pg_get_functiondef; legacy projection body остаётся
+без изменения. Изменение shared function требует staging regression, миграции сами
+production не выполняют. Повторный запуск не поддерживается. Не восстанавливать архивную
+функцию поверх runtime. [Условия совместимости, включения и rollback](../../docs/flows/inventory_stage2a_physical_apply.md).
+
+Defaults MODULE/FREEZE/APPLY=false. До любого active freeze обновить все FBS writers и
+retry workers. Для rollback сначала отключить apply/new freeze, новой версией выполнить
+explicit release оставшихся freezes; только затем откатывать приложение. Historical
+movements/registry/application data не удалять. Applied — реальный physical commit.
+
+### Stage 2A review fixes — 02.11.2026
+
+Изменены **неприменённые** migrations 20261030. Не перезапускать их на уже установленной
+старой Stage 2A schema: сначала нужен отдельный forward upgrade review.
+
+Перед physical migration выполнить read-only `20261102_inventory_projection_preflight.sql`.
+Поддержаны только MD5 trimmed prosrc `59757ad997db9dd81274bd13dadc9e4f` и
+`e20d6d1d99ebfea866825b07f0644009` при проверенной trigger/plpgsql/SECURITY INVOKER сигнатуре.
+Неподдержанное тело/attributes — P7604 и полный rollback, без поиска текстового BEGIN.
+
+Для freeze/physical migrations обязателен session `wms.inventory_runtime_roles` — полный
+JSON roster фактических roles с профилями writer/inventory. Default — check-only, нехватка
+права даёт P7605 **до установки guards / замены projection**. Только явный session
+`wms.inventory_grant_runtime_privileges=on` разрешает владельцу scoped GRANT на перечисленные
+новые tables/identity sequences/nested helpers в той же транзакции. Роли не создаются и
+не ALTER-ятся; superuser runtime не нужен, SECURITY DEFINER не добавляется. Старые WMS
+права остаются обязательными; для apply учитываются column-level metadata locking grants.
+
+После миграции reset grant mode off и выполнить read-only
+`20261102_inventory_runtime_privileges_preflight.sql`. Он проверяет каждое право отдельно
+(не ANY из comma-separated privileges), sequence USAGE и nested helper EXECUTE.
+При ошибке — ROLLBACK, не продолжать файл с середины. Никакого автоматического production
+grant/deployment. [Точная матрица прав, psql-последовательность и ограничения](../../docs/flows/inventory_stage2a_physical_apply.md#исправления-review-b1b2--02112026).
 
 ### КИЗ: первые 24 символа — 21.10.2026
 

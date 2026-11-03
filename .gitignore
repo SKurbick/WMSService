@@ -64,6 +64,7 @@ kiz_steps_tests.md
 /*-fbs2.txt
 /*-нехватает.txt
 /fbs2-*-retry-*.json
+/fbs2_missing_kiz_*.txt
 
 # Локальная диагностика RabbitMQ, не относящаяся к реализации сервиса.
 /scripts/peek_stock_reservation_messages.py
@@ -71,3 +72,6 @@ kiz_steps_tests.md
 
 # Локальный справочник новых endpoint ветки КИЗ.
 /LOCAL_KIZ_ENDPOINTS.md
+
+# Локальный отчёт о разовой коррекции и списании КИЗов.
+/docs/audit/wild188901_corrections_retry_20261025.md

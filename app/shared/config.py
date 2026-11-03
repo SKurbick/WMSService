@@ -51,9 +51,11 @@ class Settings(BaseSettings):
     # Локации
     FBS_LOCATION_CODE: str = "PUSHKINO-ФБС"
 
-    # Inventory stage 1: additive document/counting module, no physical apply path.
+    # Inventory documents and controlled Stage 2A. All new capabilities default off.
     INVENTORY_MODULE_ENABLED: bool = False
     INVENTORY_APPLY_ENABLED: bool = False
+    INVENTORY_FREEZE_ENABLED: bool = False
+    INVENTORY_PILOT_MAX_LOCATIONS: int = 20
 
     # Настройки Pydantic v2
     model_config = SettingsConfigDict(

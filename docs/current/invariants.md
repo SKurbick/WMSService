@@ -4,6 +4,19 @@
 
 ## Enforced by DB
 
+- После 20261030 freeze migration location fences существуют для старых и новых адресов.
+  Row guards охватывают movements/partitions, inventory, КИЗ, containers/contents,
+  locations, warehouse tasks/items. Активный claim сам по себе движения не блокирует.
+- FBS bypass требует transaction-local context реальных items и deferred подтверждения
+  ship этого transaction через success item либо written_off task result. Invalidation
+  коммитится с эффектом, не отдельной независимой операцией.
+- После physical apply migration source inventory_document проходит строгую exact-key
+  ветку projection с provenance, existence/quantity/KИЗ/alias и final-effect checks.
+  Для остальных sources исходный projection body сохраняется.
+- Unique application(document_id), preparation и component/movement_ref links защищают
+  от повторного применения. Deferred constraints требуют полного application результата
+  и atomic applied/освобождения claims/fences. [Протокол](../flows/inventory_stage2a_physical_apply.md).
+
 - После `20261021_normalize_kiz_code_prefix.sql` КИЗ и FBS bindings хранят 1–24
   символа кода. Уникальность применяется к буквальному префиксу без trim/case changes;
   preflight/миграция останавливаются при коллизиях без слияния identities.

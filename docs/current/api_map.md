@@ -6,13 +6,15 @@
 
 Базовый префикс API: `settings.API_V1_PREFIX`, по умолчанию `/api`.
 
-### Инвентаризация — документы и пересчёты, этап 1
+### Инвентаризация — документы, пересчёты и physical pilot Stage 2A
 
 Отдельный prefix `/api/inventory-documents`, 503 при выключенном module flag.
 Create/list/get/patch, preview-scope/scope/start, items, attempts/progress/complete,
 reconcile/submit/return-to-count/close-without-adjustment, history/revisions.
 Write-команды требуют UUID idempotency_key, user_name и (кроме create) expected_version.
-Physical apply endpoint отсутствует. [Полная таблица URL и примеры](../flows/inventory_stage1.md#api).
+Physical pilot доступен только для малых partial-документов с freeze и финальным count.
+[Stage 1](../flows/inventory_stage1.md#api), [подготовка Stage 2A](../flows/inventory_stage2a_preparation.md),
+[текущий physical pilot](../flows/inventory_stage2a_physical_apply.md).
 
 - `POST /api/inventory-documents` — создать draft.
 - `GET /api/inventory-documents` — список документов.
@@ -33,6 +35,14 @@ Physical apply endpoint отсутствует. [Полная таблица URL
 - `POST /api/inventory-documents/{document_id}/close-without-adjustment` — закрыть без применения.
 - `GET /api/inventory-documents/{document_id}/history` — audit history.
 - `GET /api/inventory-documents/{document_id}/revisions` — evidence revisions.
+- `POST /api/inventory-documents/{document_id}/application-preview` — неизменяемая подготовка submitted revision; для physical pilot проверяет финальный count/freeze.
+- `POST /api/inventory-documents/{document_id}/apply` — атомарное применение через inventory-source adjust при включённых flags и ready freeze.
+- `GET /api/inventory-documents/{document_id}/application` — подготовка, фактический результат, registry-связи.
+- `POST /api/inventory-documents/{document_id}/freeze` — начать адресную блокировку.
+- `GET /api/inventory-documents/{document_id}/freeze` — состояние и журнал блокировки, включая invalidation.
+- `POST /api/inventory-documents/{document_id}/freeze/confirm` — операционное подтверждение и новый epoch обязательного финального пересчёта.
+- `POST /api/inventory-documents/{document_id}/freeze/ready` — подтвердить готовность актуальной ревизии/подготовки.
+- `POST /api/inventory-documents/{document_id}/freeze/release` — явно освободить адреса без корректировок, сохранив claims до закрытия документа.
 
 ### Аналитика КИЗ
 

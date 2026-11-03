@@ -1,13 +1,15 @@
-"""Inventory documents/counting. Intentionally has no movement/apply dependency."""
+"""Inventory documents/counting; physical pilot delegates to inventory_application_service."""
 
 import hashlib
 import json
+import logging
 from datetime import datetime
 from decimal import Decimal
 
 import asyncpg
 
 from app.core.inventory_document_errors import InventoryDocumentError
+from app.infrastructure.database.queries import inventory_applications as application_sql
 from app.infrastructure.database.queries import inventory_documents as q
 from app.infrastructure.database.repositories.inventory_document_repository import decode
 from app.shared.config import settings
@@ -144,6 +146,16 @@ class InventoryDocumentService:
             raise InventoryDocumentError(
                 "Inventory document not found", status_code=404, code="INVENTORY_DOCUMENT_NOT_FOUND"
             )
+        return self.document_capabilities(document)
+
+    @staticmethod
+    def document_capabilities(document):
+        document["apply_enabled"] = bool(
+            settings.INVENTORY_MODULE_ENABLED
+            and settings.INVENTORY_APPLY_ENABLED
+            and settings.INVENTORY_FREEZE_ENABLED
+        )
+        document["preliminary_only"] = document["status"] != "applied"
         return document
 
     async def require_item(self, conn, document_id, item_id):
@@ -154,7 +166,9 @@ class InventoryDocumentService:
             )
         return dict(item)
 
-    async def command(self, action, request, handler, document_id=None, extra=None):
+    async def command(
+        self, action, request, handler, document_id=None, extra=None, *, isolation="repeatable_read"
+    ):
         intent = dict(
             action=action,
             document_id=document_id,
@@ -166,7 +180,7 @@ class InventoryDocumentService:
         for retry in range(3):
             try:
                 async with self.repository.pool.acquire() as conn:
-                    async with conn.transaction(isolation="repeatable_read"):
+                    async with conn.transaction(isolation=isolation):
                         await conn.execute("SET LOCAL lock_timeout = '5s'")
                         await conn.execute("SET LOCAL statement_timeout = '15s'")
                         await conn.execute(q.LOCK_COMMAND, str(request.idempotency_key))
@@ -218,6 +232,9 @@ class InventoryDocumentService:
                             dump(result),
                         )
                         return result
+            except InventoryDocumentError as error:
+                await self.audit_freeze_conflict(document_id, action, request, error.code)
+                raise
             except (asyncpg.SerializationError, asyncpg.DeadlockDetectedError):
                 if retry == 2:
                     raise InventoryDocumentError(
@@ -238,9 +255,47 @@ class InventoryDocumentService:
                     "Conflicting location claim, item or count attempt", code=code
                 ) from None
             except asyncpg.LockNotAvailableError:
+                await self.audit_freeze_conflict(
+                    document_id, action, request, "INVENTORY_CONCURRENT_COMMAND"
+                )
                 raise InventoryDocumentError(
                     "Document is busy; retry with the same key", code="INVENTORY_CONCURRENT_COMMAND"
                 ) from None
+            except asyncpg.PostgresError as error:
+                if error.sqlstate in {"P7601", "P7602", "P7603"}:
+                    await self.audit_freeze_conflict(document_id, action, request, error.sqlstate)
+                raise
+
+    async def audit_freeze_conflict(self, document_id, action, request, code):
+        """A rejection is audited AFTER rollback, never as a successful command."""
+        if document_id is None:
+            return
+        try:
+            async with self.repository.pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("SET LOCAL statement_timeout='1s'")
+                    await conn.execute("SET LOCAL lock_timeout='100ms'")
+                    if await conn.fetchval(
+                        "SELECT to_regclass('wms.inventory_freezes') IS NOT NULL"
+                    ):
+                        await conn.execute(
+                            """INSERT INTO wms.inventory_freeze_events(freeze_id,action,author,details)
+                        SELECT freeze_id,'command_rejected',$2,$3::jsonb FROM wms.inventory_freezes
+                        WHERE document_id=$1 AND state<>'released'""",
+                            document_id,
+                            request.user_name,
+                            dump(
+                                dict(
+                                    command=action,
+                                    error_code=code,
+                                    idempotency_key=str(request.idempotency_key),
+                                )
+                            ),
+                        )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Could not persist inventory freeze rejection audit", exc_info=True
+            )
 
     async def resolve_scope(self, conn, spec):
         root_id = spec["warehouse_location_id"]
@@ -281,6 +336,19 @@ class InventoryDocumentService:
             raise InventoryDocumentError(
                 "Selected location is outside the warehouse",
                 code="INVENTORY_SCOPE_OUTSIDE_WAREHOUSE",
+            )
+        # Root membership alone cannot detect stale paths after an intra-warehouse
+        # reparent. Compare the selected subtrees and their internal edges using
+        # the same transaction snapshot as scope expansion and eventual capture.
+        parent_scope = await conn.fetch(q.PARENT_SCOPE, subtree if direct else [root_id], direct)
+        if {r["location_id"] for r in parent_scope} != {r["location_id"] for r in rows} or any(
+            r["parent_location_id"] is not None
+            and r["path"] != f"{r['parent_path']}.{r['location_id']}"
+            for r in parent_scope
+        ):
+            raise InventoryDocumentError(
+                "Selected parent/path hierarchy is inconsistent",
+                code="INVENTORY_HIERARCHY_CONFLICT",
             )
         return rows
 
@@ -503,6 +571,14 @@ class InventoryDocumentService:
     async def begin_count(self, document_id, item_id, request):
         async def run(conn, document):
             self.require_status(document, "counting")
+            from app.core.services.inventory_freeze_service import lock_active_freeze, freeze_token
+
+            freeze = await lock_active_freeze(conn, document_id)
+            if freeze and freeze["state"] != "frozen":
+                raise InventoryDocumentError(
+                    "Final count requires a confirmed frozen window",
+                    code="INVENTORY_FREEZE_CONFLICT",
+                )
             item = await self.require_item(conn, document_id, item_id)
             evidence = await self.repository.capture(
                 conn, [item["location_id"]], [item["product_id"]]
@@ -513,7 +589,7 @@ class InventoryDocumentService:
                 item_id,
                 document["current_revision"],
                 request.user_name,
-                dump({"start": evidence}),
+                dump({"start": evidence, **({"freeze": freeze_token(freeze)} if freeze else {})}),
             )
             await conn.execute(q.SET_LATEST_ATTEMPT, document_id, item_id, attempt["attempt_id"])
             await conn.execute(q.BUMP_VERSION, document_id)
@@ -530,6 +606,9 @@ class InventoryDocumentService:
     async def save_count(self, document_id, item_id, attempt_id, request, *, complete):
         async def run(conn, document):
             self.require_status(document, "counting")
+            from app.core.services.inventory_freeze_service import lock_active_freeze, freeze_token
+
+            freeze = await lock_active_freeze(conn, document_id)
             item = await self.require_item(conn, document_id, item_id)
             attempt = await conn.fetchrow(q.GET_ATTEMPT, document_id, item_id, attempt_id)
             if attempt is None:
@@ -539,6 +618,14 @@ class InventoryDocumentService:
             if attempt["status"] != "in_progress" or item["latest_attempt_id"] != attempt_id:
                 raise InventoryDocumentError(
                     "Attempt is not the current open attempt", code="INVENTORY_ATTEMPT_CONFLICT"
+                )
+            if freeze and (
+                freeze["state"] != "frozen"
+                or decode(attempt["evidence"]).get("freeze") != freeze_token(freeze)
+            ):
+                raise InventoryDocumentError(
+                    "Count window was invalidated; reconfirm and recount",
+                    code="INVENTORY_FREEZE_CONFLICT",
                 )
             if complete:
                 evidence = decode(attempt["evidence"])
@@ -578,7 +665,7 @@ class InventoryDocumentService:
             dict(item_id=item_id, attempt_id=attempt_id),
         )
 
-    async def reconciliation(self, conn, document, author):
+    async def observe_reconciliation(self, conn, document):
         document_id = document["document_id"]
         locations = await conn.fetch(q.FIXED_LOCATIONS, document_id)
         location_codes = {r["location_id"]: r["location_code"] for r in locations}
@@ -641,6 +728,11 @@ class InventoryDocumentService:
                     safe_for_apply=False,
                 )
             )
+        return current, lines
+
+    async def reconciliation(self, conn, document, author):
+        document_id = document["document_id"]
+        current, lines = await self.observe_reconciliation(conn, document)
         revision_no = document["current_revision"] + 1
         current["reconciliation_lines"] = normalized(lines)
         await conn.execute(
@@ -687,6 +779,20 @@ class InventoryDocumentService:
     async def return_to_count(self, document_id, request):
         async def run(conn, document):
             self.require_status(document, "pending_approval")
+            from app.core.services.inventory_freeze_service import (
+                lock_active_freeze,
+                InventoryFreezeService,
+            )
+
+            freeze = await lock_active_freeze(conn, document_id)
+            if freeze and freeze["state"] == "ready_to_apply":
+                await conn.execute(
+                    "UPDATE wms.inventory_freezes SET state='frozen' WHERE freeze_id=$1",
+                    freeze["freeze_id"],
+                )
+                await InventoryFreezeService(self).event(
+                    conn, freeze, "returned_to_count", request.user_name, {"reason": request.reason}
+                )
             item_ids = {r["item_id"] for r in await conn.fetch(q.ALL_ITEMS, document_id)}
             selected = set(request.item_ids) if request.item_ids is not None else item_ids
             if not selected.issubset(item_ids):
@@ -704,6 +810,12 @@ class InventoryDocumentService:
     async def close(self, document_id, request):
         async def run(conn, document):
             self.require_status(document, "draft", "counting", "pending_approval")
+            from app.core.services.inventory_freeze_service import lock_active_freeze
+
+            if await lock_active_freeze(conn, document_id):
+                raise InventoryDocumentError(
+                    "Explicitly release the freeze before closing", code="INVENTORY_FREEZE_CONFLICT"
+                )
             await conn.execute(q.RELEASE_CLAIMS, document_id)
             await conn.execute(q.CLOSE, document_id)
             return await self.require_document(conn, document_id), document_id
@@ -713,6 +825,147 @@ class InventoryDocumentService:
     async def get(self, document_id):
         async with self.repository.pool.acquire() as conn:
             return await self.require_document(conn, document_id)
+
+    def require_submitted_revision(self, document, request):
+        self.require_status(document, "pending_approval")
+        if (
+            document["submitted_revision"] != request.submitted_revision
+            or document["current_revision"] != request.submitted_revision
+        ):
+            raise InventoryDocumentError(
+                "Submitted revision is no longer current",
+                code="INVENTORY_SUBMITTED_REVISION_CONFLICT",
+            )
+
+    async def preparation_response(self, conn, row):
+        result = dict(row)
+        result.pop("evidence")
+        for name in ("blockers", "lines"):
+            result[name] = decode(result[name])
+        result["components"] = []
+        components_query = (
+            application_sql.PILOT_COMPONENTS
+            if "freeze_id" in row.keys()
+            else application_sql.GET_COMPONENTS
+        )
+        for component in await conn.fetch(components_query, row["preparation_id"]):
+            component = dict(component)
+            component["stock_evidence"] = decode(component["stock_evidence"])
+            result["components"].append(component)
+        return result
+
+    async def prepare_application(self, document_id, request):
+        """Persist a blocked observation, never an approved/executable correction plan."""
+
+        async def run(conn, document):
+            self.require_submitted_revision(document, request)
+            from app.core.services.inventory_freeze_service import lock_active_freeze
+
+            freeze = await lock_active_freeze(conn, document_id)
+            if freeze and await conn.fetchval(
+                "SELECT to_regclass('wms.inventory_applications') IS NOT NULL"
+            ):
+                from app.core.services.inventory_application_service import (
+                    InventoryApplicationService,
+                )
+
+                return await InventoryApplicationService(self).prepare_locked(
+                    conn, document, request, freeze
+                )
+            saved = await conn.fetchrow(
+                application_sql.GET_PREPARATION, document_id, request.submitted_revision
+            )
+            if saved is None:
+                current, lines = await self.observe_reconciliation(conn, document)
+                blockers = {
+                    "physical_count_boundary_unproven",
+                    "freeze_required_for_physical_apply",
+                }
+                for line in lines:
+                    # This is a numerical difference, NOT a safe physical adjustment.
+                    line["provisional_difference"] = (
+                        None
+                        if line["actual_quantity"] is None
+                        else line["actual_quantity"] - line["current_expected_quantity"]
+                    )
+                    blockers.update(line["conflicts"])
+                    if line["requires_recount"]:
+                        blockers.add("recount_required")
+                saved = await conn.fetchrow(
+                    application_sql.INSERT_PREPARATION,
+                    document_id,
+                    request.submitted_revision,
+                    document["version"],
+                    request.user_name,
+                    dump(sorted(blockers)),
+                    dump(current),
+                    dump(lines),
+                )
+                index = EvidenceIndex(current)
+                for line in lines:
+                    stocks = index.pair(line["product_id"], line["location_id"])["stocks"]
+                    # A found item may have no physical row; preserve that explicitly.
+                    for number, stock in enumerate(stocks or [{"inventory_id": None}], 1):
+                        await conn.execute(
+                            application_sql.INSERT_COMPONENT,
+                            saved["preparation_id"],
+                            document_id,
+                            line["item_id"],
+                            number,
+                            dump(stock),
+                        )
+                await conn.execute(q.BUMP_VERSION, document_id)
+            return await self.preparation_response(conn, saved), document_id
+
+        return await self.command("prepare_application", request, run, document_id)
+
+    async def apply(self, document_id, request):
+        if settings.INVENTORY_FREEZE_ENABLED:
+            from app.core.services.inventory_application_service import InventoryApplicationService
+
+            return await InventoryApplicationService(self).apply(document_id, request)
+        # Defense in depth for internal callers; HTTP checks this before pool access too.
+        if not settings.INVENTORY_MODULE_ENABLED or not settings.INVENTORY_APPLY_ENABLED:
+            raise InventoryDocumentError(
+                "Inventory apply is disabled", status_code=503, code="INVENTORY_APPLY_DISABLED"
+            )
+
+        async def run(conn, document):
+            self.require_submitted_revision(document, request)
+            # Stage 1 observations alone do not establish a final frozen window.
+            # Do not special-case zero differences when the protocol is disabled.
+            raise InventoryDocumentError(
+                "Physical apply requires the enabled freeze protocol and a final frozen count",
+                code="INVENTORY_APPLY_PROTOCOL_UNAVAILABLE",
+                details={
+                    "blockers": [
+                        "physical_count_boundary_unproven",
+                        "freeze_protocol_not_enabled",
+                    ]
+                },
+            )
+
+        return await self.command("apply", request, run, document_id)
+
+    async def application_result(self, document_id):
+        async with self.repository.pool.acquire() as conn:
+            async with conn.transaction(isolation="repeatable_read", readonly=True):
+                document = await self.require_document(conn, document_id)
+                if await conn.fetchval(
+                    "SELECT to_regclass('wms.inventory_applications') IS NOT NULL"
+                ):
+                    from app.core.services.inventory_application_service import (
+                        InventoryApplicationService,
+                    )
+
+                    return await InventoryApplicationService(self).result_locked(conn, document)
+                row = await conn.fetchrow(application_sql.LATEST_PREPARATION, document_id)
+                return dict(
+                    document=document,
+                    applied=False,
+                    movements=[],
+                    preparation=await self.preparation_response(conn, row) if row else None,
+                )
 
     async def list_documents(self, status=None, warehouse_location_id=None, limit=100, offset=0):
         async with self.repository.pool.acquire() as conn:
@@ -724,7 +977,7 @@ class InventoryDocumentService:
                 for row in rows:
                     item = dict(row)
                     item["locations"] = decode(item["locations"])
-                    items.append(item)
+                    items.append(self.document_capabilities(item))
                 total = await conn.fetchval(q.COUNT_DOCUMENTS, status, warehouse_location_id)
                 return dict(items=items, total=total, limit=limit, offset=offset)
 

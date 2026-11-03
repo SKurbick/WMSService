@@ -71,6 +71,19 @@ PARENT_TREE = """WITH RECURSIVE tree(location_id) AS (
  UNION
  SELECT l.location_id FROM wms.locations l JOIN tree t ON l.parent_location_id=t.location_id
 ) SELECT location_id FROM tree"""
+PARENT_SCOPE = """WITH RECURSIVE tree(location_id) AS (
+ SELECT location_id FROM wms.locations WHERE location_id=ANY($1::bigint[])
+ UNION
+ SELECT l.location_id FROM wms.locations l JOIN tree t ON l.parent_location_id=t.location_id
+), selected(location_id) AS (
+ SELECT location_id FROM tree
+ UNION
+ SELECT location_id FROM wms.locations WHERE location_id=ANY($2::bigint[])
+)
+SELECT l.location_id,l.parent_location_id,l.path::text AS path,p.path::text AS parent_path
+FROM selected s JOIN wms.locations l USING(location_id)
+LEFT JOIN wms.locations p ON p.location_id=l.parent_location_id
+"""
 INSERT_LOCATION = """INSERT INTO wms.inventory_document_locations
 (document_id,location_id,location_code,path,was_active) VALUES($1,$2,$3,$4,$5)"""
 INSERT_CLAIM = "INSERT INTO wms.inventory_location_claims(location_id,document_id) VALUES($1,$2)"

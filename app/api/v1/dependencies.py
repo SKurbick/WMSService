@@ -90,11 +90,12 @@ def require_inventory_module():
         raise InventoryDocumentError(
             "Inventory module is disabled", status_code=503, code="INVENTORY_MODULE_DISABLED"
         )
-    if settings.INVENTORY_APPLY_ENABLED:
+
+
+def require_inventory_apply(enabled=Depends(require_inventory_module)):
+    if not settings.INVENTORY_APPLY_ENABLED:
         raise InventoryDocumentError(
-            "Physical apply is not implemented in stage 1",
-            status_code=503,
-            code="INVENTORY_APPLY_NOT_IMPLEMENTED",
+            "Inventory apply is disabled", status_code=503, code="INVENTORY_APPLY_DISABLED"
         )
 
 

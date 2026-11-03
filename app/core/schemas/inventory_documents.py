@@ -16,10 +16,14 @@ from pydantic import (
 
 from app.core.json_validation import validate_jsonb_value
 
+POSTGRES_BIGINT_MAX = 2**63 - 1
+PositiveBigint = Annotated[int, Field(gt=0, le=POSTGRES_BIGINT_MAX)]
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 Sku = Annotated[str, StringConstraints(min_length=1, max_length=50, pattern=r"^\S(?:.*\S)?$")]
 Quantity = Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2, allow_inf_nan=False)]
-DocumentStatus = Literal["draft", "counting", "pending_approval", "closed_without_adjustment"]
+DocumentStatus = Literal[
+    "draft", "counting", "pending_approval", "closed_without_adjustment", "applied"
+]
 
 
 class Input(BaseModel):
@@ -32,14 +36,14 @@ class Input(BaseModel):
 
 
 class LocationSelection(Input):
-    location_id: int = Field(gt=0)
+    location_id: PositiveBigint
     include_descendants: bool = True
 
 
 class DocumentScope(Input):
     title: str = Field(min_length=1, max_length=200, pattern=r"\S")
     mode: Literal["full", "partial"]
-    warehouse_location_id: int = Field(gt=0)
+    warehouse_location_id: PositiveBigint
     locations: list[LocationSelection] = Field(default_factory=list, max_length=1000)
     product_ids: list[Sku] = Field(default_factory=list, max_length=5000)
 
@@ -63,7 +67,7 @@ class CreateDocument(DocumentScope):
 
 class Command(Input):
     idempotency_key: UUID
-    expected_version: int = Field(gt=0, description="Optimistic document version")
+    expected_version: PositiveBigint = Field(description="Optimistic document version")
     user_name: Name
 
 
@@ -71,23 +75,26 @@ class UpdateDocument(DocumentScope, Command):
     pass
 
 
+class ApplicationCommand(Command):
+    submitted_revision: Annotated[int, Field(gt=0, le=2**31 - 1)]
+
+
+class FreezeConfirmation(Command):
+    confirmation: str = Field(min_length=30, max_length=2000, pattern=r"\S")
+    unrecorded_operations_resolved: Literal[True]
+
+
 class Decision(Command):
     reason: str = Field(min_length=1, max_length=2000, pattern=r"\S")
 
 
 class ReturnToCount(Decision):
-    item_ids: list[int] | None = Field(default=None, min_length=1, max_length=10000)
-
-    @model_validator(mode="after")
-    def positive_ids(self):
-        if self.item_ids is not None and any(i <= 0 for i in self.item_ids):
-            raise ValueError("item_ids must be positive")
-        return self
+    item_ids: list[PositiveBigint] | None = Field(default=None, min_length=1, max_length=10000)
 
 
 class FoundItem(Command):
     product_id: Sku
-    location_id: int = Field(gt=0)
+    location_id: PositiveBigint
 
 
 class CountQuantity(Command):
@@ -119,8 +126,8 @@ class DocumentResponse(BaseModel):
     product_ids: list[str]
     location_count: int
     item_count: int
-    preliminary_only: Literal[True] = True
-    apply_enabled: Literal[False] = False
+    preliminary_only: bool = True
+    apply_enabled: bool = False
 
 
 class ItemResponse(BaseModel):
@@ -147,7 +154,7 @@ class AttemptResponse(BaseModel):
     attempt_number: int
     revision_no: int
     author: str
-    status: Literal["in_progress", "completed"]
+    status: Literal["in_progress", "completed", "cancelled"]
     started_at: datetime
     completed_at: datetime | None
     actual_quantity: Decimal | None
@@ -225,3 +232,74 @@ class RevisionResponse(BaseModel):
     author: str
     evidence: dict[str, Any]
     preliminary_only: Literal[True]
+
+
+class ApplicationComponentResponse(BaseModel):
+    component_id: int
+    item_id: int
+    component_number: int
+    stock_evidence: dict[str, Any]
+    adjustment_quantity: Decimal | None = None
+    target_quantity: Decimal | None = None
+
+
+class ApplicationPreparationResponse(BaseModel):
+    preparation_id: int
+    document_id: int
+    submitted_revision: int
+    observed_document_version: int
+    created_at: datetime
+    created_by: str
+    source_type: Literal["inventory_document"]
+    can_apply: bool = False
+    freeze_id: int | None = None
+    freeze_epoch: int | None = None
+    blockers: list[str]
+    lines: list[dict[str, Any]]
+    components: list[ApplicationComponentResponse]
+
+
+class ApplicationResultResponse(BaseModel):
+    document: DocumentResponse
+    applied: bool = False
+    movements: list[dict[str, Any]] = Field(default_factory=list)
+    preparation: ApplicationPreparationResponse | None
+    application: dict[str, Any] | None = None
+
+
+class FreezeResponse(BaseModel):
+    freeze_id: int
+    document_id: int
+    state: Literal["freezing", "frozen", "ready_to_apply", "invalidated", "released"]
+    epoch: int
+    created_by: str
+    created_at: datetime
+    confirmed_by: str | None
+    confirmed_at: datetime | None
+    confirmation: str | None
+    released_at: datetime | None
+
+
+class FreezeCommandResponse(BaseModel):
+    document: DocumentResponse
+    freeze: FreezeResponse
+
+
+class FreezeEventResponse(BaseModel):
+    event_id: int
+    action: str
+    author: str
+    occurred_at: datetime
+    location_id: int | None
+    product_id: str | None
+    fbs_shipment_id: int | None
+    movement_id: int | None = None
+    movement_created_at: datetime | None = None
+    details: dict[str, Any]
+
+
+class FreezeStatusResponse(BaseModel):
+    freeze: FreezeResponse | None
+    events: Page[FreezeEventResponse]
+    conflicting_operations: list[dict[str, Any]] = Field(default_factory=list)
+    conflicts_truncated: bool = False
