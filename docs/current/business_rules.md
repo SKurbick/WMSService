@@ -36,6 +36,47 @@
 - Без фильтров summary.total_operations совпадает с total списка; это верно и при
   одинаковых фильтрах. Неизвестные historical types возвращаются безопасно как в журнале.
 
+## Inventory Stage 2A — контролируемый адресный physical pilot
+
+- Stage 1 сохраняется. Physical pilot — только small partial, до 20 адресов по default;
+  full и SKU-only со scope всего большого склада не блокируются автоматически.
+- Freeze — отдельный persistent объект, не location claim. Freezing/frozen/ready_to_apply/
+  invalidated/released, без автоматического таймера. Подтверждение ответственного хранится
+  как операционное свидетельство, не как техническое доказательство физического времени.
+- Подтверждение требует урегулировать связанные warehouse tasks. Активные задачи без
+  определимого адреса тоже исключают pilot; остальная WMS продолжает работать.
+- Финальные counts обязательны в новом freeze epoch. Invalidation не поправляет actual
+  автоматически; нужно восстановить окно и пересчитать. Старые attempts не удаляются.
+- FBS standard/external/HTTP/retry продолжает списание. Подтверждённый FBS effect на
+  frozen-адресе атомарно инвалидирует окно. Обычный ship не является FBS-исключением.
+- Применение всего документа — одним atomic adjust application, с approved revision,
+  components и registry refs; partial approval не поддерживается. Нулевое расхождение
+  тоже проходит проверки. Состояние applied означает действительно committed результат.
+- Initial snapshot не меняется. Корректировка считается относительно frozen/current
+  verified basis, а не по старому initial discrepancy. Auto-allocation по batch нет.
+- ФБС-зона/descendants, active КИЗ, контейнерные/неоднозначные batch/empty keys, незавершённые
+  операции и изменившиеся relevant evidence исключены. MODULE/FREEZE/APPLY defaults=false.
+- Explicit release без adjust оставляет claims до закрытия. Applied освобождает freeze
+  и claims при commit. [Полный workflow и пределы](../flows/inventory_stage2a_physical_apply.md).
+
+## Инвентаризация — этап 1 (22.10.2026)
+
+- На этапе 1: draft/counting/pending_approval/closed_without_adjustment. Applied добавлен
+  только последующим контролируемым Stage 2A, описанным выше; отдельного approved нет.
+- Full охватывает root склада и descendants; partial — locations/subtrees/SKU/intersection.
+  SKU-only включает пустые locations всего склада. Неактивные locations не исключаются.
+- После старта scope/SKU и initial snapshot неизменяемы. Unique active claims запрещают
+  второй документ на той же location даже при разных SKU, но обычные движения продолжаются.
+- Expected — available loose, исключая active КИЗ exact holder; registered без holder
+  не вычитаются. Batch decomposition и stable КИЗ IDs сохраняются; allocation не выполняется.
+- Не пересчитано (actual NULL), count 0 и положительный actual различаются. Новая попытка
+  сохраняется отдельно; progress тоже попадает в audit. Submit требует completed count всех
+  необходимых строк. Ambiguity можно передать на рассмотрение, но нельзя считать safe apply.
+- Found pair только внутри frozen locations/SKU, initial expected=0; reconciliation отдельно
+  показывает текущий expected и incoming evidence. Нет автоматического объявления излишка.
+- Return-to-count сохраняет attempts/решение; close окончательный и освобождает claims.
+- Stage 1 никогда не пишет movements/inventory/lifecycle КИЗ. [API/runbook](../flows/inventory_stage1.md).
+
 ## Сводка КИЗ по организациям
 
 - `/api/kiz-reports/summary` считает строки wms.kiz, а не inventory и не raw inbox.

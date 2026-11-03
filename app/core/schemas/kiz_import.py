@@ -109,8 +109,8 @@ class KizImportGroupResult(BaseModel):
 class KizImportGroupRejection(BaseModel):
     group_index: int = Field(description="Индекс отклонённой группы в исходном wild_groups, начиная с 0.")
     product_id: str | None = Field(None, description="Переданный wild; null при некорректной группе.")
-    error_code: str
-    error_message: str
+    error_code: str = Field(description="Код бизнес-ошибки отклонённой группы КИЗ.")
+    error_message: str = Field(description="Описание причины отклонения группы КИЗ.")
 
 
 class KizImportProcessResult(BaseModel):

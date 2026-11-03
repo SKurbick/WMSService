@@ -127,7 +127,9 @@ class FbsKizRepository:
                     )
         return errors
 
-    async def lock_bindings(self, connection: Connection, task_ids: Sequence[str]) -> dict[str, dict]:
+    async def lock_bindings(
+        self, connection: Connection, task_ids: Sequence[str]
+    ) -> dict[str, dict]:
         rows = await connection.fetch(
             """
             SELECT binding.binding_id, binding.task_id, binding.kiz_code,
@@ -180,6 +182,16 @@ class FbsKizRepository:
         connection: Connection,
         scopes: Sequence[tuple[int, str]],
     ) -> dict[tuple[int, str], dict]:
+        # Acquire all multi-source fences in one canonical order before stock rows.
+        # Capability check keeps this application version compatible with old DBs.
+        if await connection.fetchval(
+            "SELECT to_regprocedure('wms.inventory_freeze_fbs_lock_locations(bigint[])') IS NOT NULL "
+            "AND NULLIF(current_setting('wms.inventory_fbs_shipment_id',true),'') IS NOT NULL"
+        ):
+            await connection.execute(
+                "SELECT wms.inventory_freeze_fbs_lock_locations($1::bigint[])",
+                sorted({location_id for location_id, _ in scopes}),
+            )
         result: dict[tuple[int, str], dict] = {}
         for location_id, product_id in sorted(set(scopes)):
             await connection.fetchval(
@@ -233,7 +245,9 @@ class FbsKizRepository:
             )
         return dict(row)
 
-    async def get_locations(self, connection: Connection, location_ids: Sequence[int]) -> dict[int, dict]:
+    async def get_locations(
+        self, connection: Connection, location_ids: Sequence[int]
+    ) -> dict[int, dict]:
         rows = await connection.fetch(
             """
             SELECT location_id, location_code

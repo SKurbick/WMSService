@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+from app.core.inventory_document_errors import InventoryDocumentError
 from app.core.exceptions import (
     DomainException,
     LocationNotFoundError,
@@ -59,6 +60,15 @@ logger = logging.getLogger(__name__)
 def add_exception_handlers(app: FastAPI):
     """Добавить обработчики исключений в приложение"""
 
+    @app.exception_handler(InventoryDocumentError)
+    async def inventory_document_error_handler(request, exc):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=jsonable_encoder(
+                {"detail": str(exc), "error_code": exc.code, "diagnostics": exc.details}
+            ),
+        )
+
     @app.exception_handler(KizNotFoundError)
     async def kiz_not_found_handler(request, exc):
         return JSONResponse(
@@ -75,6 +85,18 @@ def add_exception_handlers(app: FastAPI):
     @app.exception_handler(ContainerOperationIdempotencyConflictError)
     @app.exception_handler(asyncpg.PostgresError)
     async def write_conflict_handler(request, exc):
+        if getattr(exc, "sqlstate", None) in {"P7601", "P7602", "P7603"}:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": str(exc),
+                    "error_code": "INVENTORY_LOCATION_FROZEN"
+                    if exc.sqlstate == "P7601"
+                    else "INVENTORY_FBS_PROVENANCE_CONFLICT"
+                    if exc.sqlstate == "P7602"
+                    else "INVENTORY_APPLY_CONFLICT",
+                },
+            )
         if isinstance(exc, KizOperationIdempotencyConflictError):
             return JSONResponse(
                 status_code=409,

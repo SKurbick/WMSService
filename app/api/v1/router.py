@@ -5,6 +5,7 @@ from app.api.v1.endpoints import (
     locations,
     containers,
     inventory,
+    inventory_documents,
     movements,
     reports,
     system,
@@ -30,6 +31,7 @@ api_router = APIRouter()
 api_router.include_router(locations.router)
 api_router.include_router(containers.router)
 api_router.include_router(inventory.router)
+api_router.include_router(inventory_documents.router)
 api_router.include_router(movements.router)
 api_router.include_router(reports.router)
 api_router.include_router(system.router)

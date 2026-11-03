@@ -9,6 +9,80 @@
 - Диагностические receipt/physical поля допускают null; отсутствие receipt и превышение количества исключены из integrity.is_valid.
 - Изменения схемы БД не требуются. Старые pending/rejected сообщения не обрабатываются автоматически, доступны через `/process`.
 
+## 2026-10-30 — Stage 2A: адресный freeze и physical pilot
+
+- Бизнес разрешил временную остановку операций по конкретным адресам, с обязательным
+  исключением ФБС. Это позволяет перейти от preparation fallback к малому partial pilot.
+- Постоянные location fence rows + DB writer guards обеспечивают атомарную admission
+  проверку, включая absent stock row. Ordinary locks SHARE NOWAIT, active FBS UPDATE;
+  свободные FBS rows используют SHARE, чтобы не сериализовать разные SKU всей ФБС-зоны.
+  Savepoint снимает спекулятивный SHARE при гонке free→frozen, затем берётся UPDATE.
+- FBS provenance берётся из реальной product-group транзакции, подтверждается deferred
+  success/task-result links. Источник ship сам по себе не считается FBS. Multi-source
+  fences и freeze headers блокируются в стабильном порядке; обычные FBS source fields не меняются.
+- Короткий task-admission latch только на warehouse tasks/items закрывает phantom
+  unscoped intent при confirm/ready/apply. Старые SQL writers используют его через DB
+  trigger. Он не удерживается во время физического count и не охватывает public assembly
+  tasks/FBS. Не вводится глобальная версия остатков и не останавливается очередь.
+- Physical source — existing adjust + inventory_document. Installed projection function
+  расширяется early branch; legacy body сохраняется дословно. Отдельного movement type
+  и registry нет. Header/apply/link/deferred guards ограничивают источник текущей транзакцией.
+- Fences → FK/product/location/physical NOWAIT recheck избегает новых ожиданий в обратном
+  legacy lock order. Known КИЗ deadlocks остаются отдельным техническим долгом.
+- Manual acknowledgement не доказывает отсутствие неизвестных физических действий.
+  Full/batch/container/mixed/ФБС-zone auto-apply не включается. Production flags/миграции
+  не менялись; требуется staging acceptance. [Runbook](../flows/inventory_stage2a_physical_apply.md).
+
+## 2026-10-29 — Inventory Stage 2A: только подготовительный fallback
+
+- ТЗ разрешает не создавать physical writer, если безопасность даже обычной ячейки
+  недоказуема. В count attempts нет свидетельства публикации всех физически выполненных
+  операций. Локальный PG17 контрпример: expected=10, actual=8 и отсутствие новых movements
+  совместимы и с недостачей 2, и с физическим transfer 2, записанным после count.
+  Наивный adjust во втором случае оставляет WMS=6 вместо фактических 8.
+- RR, timestamps и SQL locks на approval не восстанавливают отсутствующее свидетельство.
+  Текущий maintenance можно сериализовать table lock на movements; он не объявляется
+  непреодолимым препятствием. Общий совместимый writer protocol пока не доказан.
+- Добавлены только неизменяемые preparations/components, связь с submitted revision,
+  наблюдения reconciliation, блокирующие причины и API. Историческая подготовка не является
+  разрешением на применение. Ни один источник не пишет movements от inventory_document.
+- Существующие update_inventory_from_movement, guard КИЗ, movement registry и public
+  movement API не меняются. Строгая source-specific ветка и registry links откладываются
+  до доказанного физического/SQL протокола, а не публикуются как якобы готовый writer.
+- Apply false возвращает 503; apply true проверяет документ/версию/ревизию и возвращает
+  409 INVENTORY_APPLY_PROTOCOL_UNAVAILABLE, включая нулевое расхождение. Stage 1 доступен
+  при обоих значениях apply flag. Defaults остаются false, production flags не меняются.
+
+
+## 2026-10-29 — точечные исправления review инвентаризации Stage 1
+
+- Resolver сравнивает выбранную область по parent-связям и LTREE, а также проверяет
+  её parent/path edges. Одного совпадения множества адресов всего склада недостаточно:
+  после переноса родителя внутри склада path потомков может остаться устаревшим.
+- Проверка выполняется заново при start в его REPEATABLE READ transaction; конфликт
+  не создаёт claims/snapshot/revision и не ремонтирует дерево. Shared location
+  functions, физические остатки, КИЗ и movement writers не меняются.
+- Только новый inventory API ограничивает входные ID, document version и offset
+  диапазоном PostgreSQL bigint. Валидные запросы и idempotency fingerprint сохраняются.
+- Миграция не требуется. Stage 2 и известный старый КИЗ-deadlock не входят в исправления.
+
+## 2026-10-22 — инвентаризация, этап 1 без применения
+
+- Отдельные inventory documents, не tasks и не inventory_snapshots; additive migration
+  `20261022_add_inventory_documents.sql`, без изменения existing physical tables/functions.
+- Claims уникальны по location независимо от SKU; snapshot/start одной REPEATABLE READ
+  transaction. Claims не читаются обычными writers и не блокируют movements.
+- Все module write-команды имеют optimistic document version, UUID idempotency key,
+  canonical request hash и saved response; сериализуются по document row и command key.
+- Initial scope/components, revisions, history и completed attempts защищены новыми
+  guards только на таблицах модуля. Inventory IDs в component snapshot не являются FK.
+- Reconciliation сравнивает видимые identity sets и состояния, не использует created_at
+  как commit/physical order. Делает только preliminary revision с safe_for_apply=false.
+- Оба feature flags по умолчанию false. Apply=true в stage 1 fail-closed (503).
+  Физического approval endpoint, новых movement types и adjustment links пока нет.
+- Для stage 2 использовать существующий movement_registry, отдельный inventory source
+  для adjust и отдельное ревью атомарного применения. [Runbook](../flows/inventory_stage1.md).
+
 ## 2026-10-21 — отдельная аналитика реестра КИЗ
 
 - Добавлен read-only `GET /api/kiz-reports/summary`, без изменения контракта `/api/kiz`.
@@ -789,3 +863,35 @@ Ship movement и shipped event объединяются только по точ
   Период — московский created_at события, для FBS received_at; максимум 366 дней.
 - Проверка location и агрегация читаются одним read-only REPEATABLE READ snapshot.
   Новых таблиц, индексов, миграций и write flows нет. Swagger описывает контракт и ограничения.
+
+## 2026-11-02 — Stage 2A: fail-closed projection adaptation и явные runtime ACL
+
+- Статус: active; production migration/flags автоматически не выполняются.
+- B.1 закрывается фиксированным исполняемым outer wrapper и allowlist двух точных
+  legacy prosrc fingerprints плюс attributes. Legacy body вложен без изменения; поиск
+  BEGIN / helper name substring не используется. Неизвестный body отклоняется целиком.
+- B.2: обязательный явный roster roles/profiles; owner-only SECURITY INVOKER checker
+  проверяет rights до включения guards. Default check-only. Scoped GRANT разрешён только
+  явным ручным operator opt-in, в общей migration transaction, без ALTER ROLE/default
+  privileges/schema-wide grants/нового SECURITY DEFINER. Runtime не требует superuser.
+- Writer и inventory API получают разные ACL; locking reads включают UPDATE, metadata
+  при необходимости — только UPDATE ключевой колонки, identities — только USAGE.
+  Старый контракт, включая EXECUTE ship_kiz для multi-source FBS, остаётся предпосылкой.
+- Добавлены read-only projection/privilege preflights и real non-owner regressions.
+  Проверки/точные fingerprints/порядок: docs/flows/inventory_stage2a_physical_apply.md.
+- Изменения рассчитаны на ещё не применённые Stage 2A migrations. Уже установленная
+  старая Stage 2A требует отдельной forward upgrade procedure, без утраты физических
+  movements и application history. Freeze/FBS/adjust бизнес-протокол не расширяется.
+
+## 2026-11-03 — единый release candidate Inventory Stage 2A
+
+- Основа: fc0662a с тремя upstream commits; Stage 1/2A применены как сохранённый overlay
+  в отдельном worktree без commit и изменения исходной ветки. Независимые doc blocks
+  сохранены обеими сторонами; бизнес-логика КИЗ/FBS/history не переопределялась.
+- Auto/partial registration под freeze и adjust в новой history проверяются отдельными
+  PostgreSQL tests. Turnover остаётся receive/ship-only. Descriptions двух KizImportGroupRejection
+  полей исправлены по явному согласованию пользователя, без смены DTO-валидации.
+- Release source snapshot и runtime image разделены. Audit/data/maintenance исключены
+  из runtime/database bundles; dependencies constraints и cached base image закреплены.
+- До ручного commit manifest не выдаёт base commit за commit тестируемого candidate.
+  Подробности: docs/releases/inventory_stage2a_candidate_2026-11-03.md.

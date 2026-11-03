@@ -4,7 +4,10 @@ services:
   wms_service_api:
     build: .  # Путь к Dockerfile FastAPI
     container_name: wms_service_api
-    image: wms_service_api_image
+    image: ${WMS_IMAGE:-wms_service_api_image}
+    # Runtime configuration stays outside the build context/image.
+    env_file:
+      - ${WMS_ENV_FILE:-.env}
 
     ports:
       - "8310:8010"

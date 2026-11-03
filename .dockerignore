@@ -1,0 +1,23 @@
+# Runtime image: exclude repository metadata, credentials, evidence and test tooling.
+.git
+.env
+.env.*
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+docs
+local_docs
+tests
+scripts
+release
+*.log
+*.xml
+fbs*.txt
+
+# Deployment/manual documentation is not needed inside the runtime image.
+docker-compose*.yml
+docker-compose*.yaml
+instruction.md

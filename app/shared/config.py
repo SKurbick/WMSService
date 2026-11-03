@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     # Локации
     FBS_LOCATION_CODE: str = "PUSHKINO-ФБС"
 
+    # Inventory documents and controlled Stage 2A. All new capabilities default off.
+    INVENTORY_MODULE_ENABLED: bool = False
+    INVENTORY_APPLY_ENABLED: bool = False
+    INVENTORY_FREEZE_ENABLED: bool = False
+    INVENTORY_PILOT_MAX_LOCATIONS: int = 20
+
     # Настройки Pydantic v2
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore"

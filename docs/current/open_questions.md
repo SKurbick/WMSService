@@ -1,5 +1,29 @@
 # Open Questions
 
+## Inventory — границы расширения после controlled pilot
+
+- Для обычных адресов согласован controlled pilot: persistent DB freeze, операционное
+  подтверждение ответственного, финальный count и atomic adjust. Протокол/проверки —
+  docs/flows/inventory_stage2a_physical_apply.md. До production нужны владелец физического
+  окна, обучение/маркировка адресов и staging проверка всех deployed workers/roles.
+- Неизвестные/непубликованные физические действия этим не становятся технически
+  доказуемыми. Как получить надёжную физическую границу для delayed ФБС и смешанных
+  КИЗ/containers — вопрос Stage 2B. Нельзя подменять ответ timestamp/ID или ручным согласием.
+- Active warehouse tasks с неопределимым адресом делают pilot неприменимым до разрешения
+  неопределённости; WMS tasks не переписываются и глобально не останавливаются.
+
+
+## Инвентаризация: отложено до этапа 2
+
+- INV-02-01: доказуемая physical boundary ФБС и count; stage 1 консервативно отмечает
+  ambiguity, не вычисляет автоматически безопасную физическую корректировку.
+- INV-02-02: technical allocation shortage/excess по batch components, без новых UI-фильтров.
+- INV-02-03: source-specific strict adjust, revision locks, immutable application links
+  и document-wide idempotent approval. Existing updater на этапе 1 не меняется.
+- INV-OPS-01: stage load test full-warehouse evidence capture; лимит 100000 rows на
+  категорию даёт явный conflict, история не усекалась. Контроль роста revision JSON нужен
+  до большого production pilot. [Runbook](../flows/inventory_stage1.md).
+
 Статус: `CURRENT`. Последний triage: 2026-09-24.
 
 Статусы: `open` — требуется решение или проверка; `answered` — ответ подтверждён

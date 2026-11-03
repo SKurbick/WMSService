@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 LABEL authors="skurbick"
 
 # Устанавливаем рабочую директорию
@@ -11,11 +11,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Копируем файл с зависимостями
-COPY requirements.txt .
+COPY requirements.txt constraints.release.txt ./
 
 # Устанавливаем Python зависимости
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt -c constraints.release.txt
 
 # Копируем весь проект
 COPY . .

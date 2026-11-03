@@ -477,7 +477,18 @@ class FbsShipmentRepository:
 
     async def lock_items_for_processing(self, conn: Connection, *, item_ids: Sequence[int]) -> list:
         """Блокирует FBS items до конца внешней product-group транзакции."""
-        return await conn.fetch(LOCK_ITEMS_FOR_PROCESSING, list(item_ids))
+        rows = await conn.fetch(LOCK_ITEMS_FOR_PROCESSING, list(item_ids))
+        shipments = {row["shipment_id"] for row in rows}
+        if len(shipments) == 1:
+            # Built-in settings work with both old and new DB versions. The freeze
+            # migration additionally verifies actual success links at transaction commit.
+            await conn.execute(
+                "SELECT set_config('wms.inventory_fbs_shipment_id',$1,true), "
+                "set_config('wms.inventory_fbs_items',$2,true)",
+                str(next(iter(shipments))),
+                json.dumps([row["item_id"] for row in rows]),
+            )
+        return rows
 
     async def get_success_linked_assembly_tasks(
         self, conn: Connection, *, assembly_tasks: Sequence[str]

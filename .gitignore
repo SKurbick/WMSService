@@ -12,6 +12,10 @@ __pycache__/
 .coverage
 .coverage.*
 htmlcov/
+coverage.xml
+.hypothesis/
+.tox/
+.nox/
 *.log
 
 # Локальные утилиты и рабочие материалы.
