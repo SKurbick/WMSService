@@ -255,7 +255,6 @@ class FbsKizRepository:
         author: str,
         tasks: Sequence[dict],
     ) -> int:
-        external_id = f"fbs:{shipment_id}:{product_id}"
         fingerprint = hashlib.sha256(
             json.dumps(
                 [
@@ -266,6 +265,10 @@ class FbsKizRepository:
                 ensure_ascii=False,
             ).encode()
         ).hexdigest()
+        # A shipment/product can commit several disjoint task batches as missing
+        # assembly tasks arrive. Confirmed task effects are filtered by the caller;
+        # the operation identity must distinguish the remaining physical intents.
+        external_id = f"fbs:{shipment_id}:{product_id}:{fingerprint}"
         row = await connection.fetchrow(
             """
             INSERT INTO wms.kiz_operations (
