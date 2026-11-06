@@ -34,6 +34,8 @@ from app.core.schemas.inventory_documents import (
 )
 from app.core.services.inventory_document_service import InventoryDocumentService
 from app.core.services.inventory_freeze_service import InventoryFreezeService
+from app.core.services.inventory_identity_service import InventoryIdentityService
+from app.core.schemas.inventory_identities import IdentityAccounting, IdentityScan
 
 router = APIRouter(
     prefix="/inventory-documents",
@@ -328,3 +330,44 @@ async def ready_freeze(document_id: Id, data: ApplicationCommand, service: Servi
     from app.core.services.inventory_application_service import InventoryApplicationService
 
     return await InventoryApplicationService(service).ready(document_id, data)
+
+
+@router.post(
+    "/{document_id}/identity-accounting",
+    response_model=DocumentResponse,
+    summary="Включить КИЗ и опционально контейнеры в draft",
+)
+async def identity_accounting(document_id: Id, data: IdentityAccounting, service: Service):
+    """Фиксирует в draft режим КИЗ и опциональный пересчёт контейнеров; физические остатки не меняются."""
+    return await InventoryIdentityService(service).enable(document_id, data)
+
+
+@router.get(
+    "/{document_id}/identities", summary="Snapshot, история идентификационных пересчётов и сканы"
+)
+async def identities(document_id: Id, service: Service, limit: Limit = 100, offset: Offset = 0):
+    """Возвращает неизменяемый исходный снимок, сканы, попытки и причины ручного разрешения расхождений."""
+    return await InventoryIdentityService(service).get(document_id, limit, offset)
+
+
+@router.post("/{document_id}/identity-counts", summary="Начать новый пересчёт КИЗ и QR")
+async def begin_identity_count(document_id: Id, data: Command, service: Service):
+    """Начинает попытку со свидетельствами состояния; для применения требуется подтверждённый freeze epoch."""
+    return await InventoryIdentityService(service).begin(document_id, data)
+
+
+@router.post(
+    "/{document_id}/identity-counts/{count_id}/scans", summary="Сохранить один скан с историей"
+)
+async def scan_identity(document_id: Id, count_id: Id, data: IdentityScan, service: Service):
+    """Записывает скан в текущую попытку. КИЗ нормализуется общим механизмом, новый дублирующий скан сохраняется как конфликт."""
+    return await InventoryIdentityService(service).scan(document_id, count_id, data)
+
+
+@router.post(
+    "/{document_id}/identity-counts/{count_id}/complete",
+    summary="Завершить сканирование и обнаружить расхождения",
+)
+async def complete_identity_count(document_id: Id, count_id: Id, data: Command, service: Service):
+    """Сравнивает идентификаторы и содержимое с текущими данными, сохраняя неоднозначности без физического применения."""
+    return await InventoryIdentityService(service).complete(document_id, count_id, data)

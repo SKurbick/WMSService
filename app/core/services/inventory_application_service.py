@@ -37,6 +37,13 @@ class InventoryApplicationService:
             await self.documents.repository.capture(conn, ids, document["product_ids"])
         )
         index = EvidenceIndex(current)
+        from app.core.services.inventory_identity_service import InventoryIdentityService
+
+        identity = await InventoryIdentityService(self.documents).observation(
+            conn, document, freeze
+        )
+        if identity:
+            current["identity"] = identity
         baseline = EvidenceIndex(decode(freeze["baseline"]) or current)
         blockers = set()
         if await conn.fetch(freeze_sql.CONFLICTING_TASKS, ids):
@@ -74,17 +81,47 @@ class InventoryApplicationService:
             blockers.add("location_hierarchy_changed")
         raw_items = await conn.fetch(doc_sql.ALL_ITEMS, document["document_id"])
         counted_pairs = {(r["product_id"], r["location_id"]) for r in raw_items}
+        if identity and any(
+            (c["product_id"], c["location_id"]) not in counted_pairs and Decimal(c["quantity"]) > 0
+            for c in identity["plan"]["unidentified_changes"]
+        ):
+            blockers.add("unlisted_post_operation_stock_requires_count")
         for pair in {
             (r["product_id"], r["location_id"]) for r in current["stocks"]
         } - counted_pairs:
             if expected_and_conflicts(index.pair(*pair))[0] > 0:
                 blockers.add("unlisted_positive_stock_requires_count")
+        if identity:
+            blockers.discard("pilot_active_kiz_location")
+            blockers.discard("pilot_container_or_empty_container_key_unsupported")
+            blockers.update(identity["blockers"])
         lines = []
         components = []
         for item in raw_items:
             now = index.pair(item["product_id"], item["location_id"])
             before = baseline.pair(item["product_id"], item["location_id"])
             expected, conflicts = expected_and_conflicts(now)
+            identity_change = Decimal(0)
+            if identity:
+                conflicts = [
+                    c
+                    for c in conflicts
+                    if c
+                    not in (
+                        "active_kiz_physical_separation_required",
+                        "registered_kiz_without_holder",
+                    )
+                ]
+                identity_change = sum(
+                    (
+                        Decimal(c["quantity"])
+                        for c in identity["plan"]["unidentified_changes"]
+                        if c["product_id"] == item["product_id"]
+                        and c["location_id"] == item["location_id"]
+                    ),
+                    Decimal(0),
+                )
+                expected += identity_change
             attempt = decode(item["attempt_evidence"]) or {}
             if item["attempt_status"] != "completed" or item["needs_recount"]:
                 conflicts.append("final_count_incomplete")
@@ -105,6 +142,12 @@ class InventoryApplicationService:
             if actual is not None and actual > Decimal("99999999.99"):
                 conflicts.append("physical_numeric_10_2_capacity_exceeded")
             delta = None if actual is None else actual - expected
+            if (
+                identity
+                and delta
+                and (identity_change or any(r["lifecycle_status"] == "active" for r in now["kiz"]))
+            ):
+                conflicts.append("mixed_identity_quantity_adjustment_requires_resolution")
             stocks = now["stocks"]
             for number, stock in enumerate(
                 stocks
@@ -193,6 +236,8 @@ class InventoryApplicationService:
                 "INVENTORY_APPLICATION_NOT_READY",
             )
         current, lines, _, blockers = await self.observation(conn, document, freeze)
+        if dump(current.get("identity")) != dump(decode(row["evidence"]).get("identity")):
+            blockers.append("identity_count_or_evidence_changed_since_preparation")
         saved_index, current_index = EvidenceIndex(decode(row["evidence"])), EvidenceIndex(current)
         if any(
             evidence_changed(
@@ -252,12 +297,39 @@ class InventoryApplicationService:
         application = dict(row) if row else None
         if application:
             application.pop("transaction_id")
+        identity_results = []
+        identity_movements = []
+        if row and await conn.fetchval(
+            "SELECT to_regclass('wms.inventory_identity_actions') IS NOT NULL"
+        ):
+            identity_results = [
+                dict(r, intent=decode(r["intent"]), result=decode(r["result"]))
+                for r in await conn.fetch(
+                    "SELECT * FROM wms.inventory_identity_actions WHERE application_id=$1 ORDER BY action_no",
+                    row["application_id"],
+                )
+            ]
+            identity_movements = [
+                dict(r)
+                for r in await conn.fetch(
+                    """SELECT r.movement_ref,m.movement_id,m.created_at,m.movement_type,
+                m.product_id,m.from_location_id,m.to_location_id,m.quantity,m.source_type,m.source_id,m.source_item_id
+                FROM wms.inventory_identity_movement_links l JOIN wms.movement_registry r USING(movement_ref)
+                JOIN wms.movements m ON m.movement_id=r.movement_id AND m.created_at=r.movement_created_at
+                WHERE l.application_id=$1 ORDER BY l.action_no,r.movement_ref""",
+                    row["application_id"],
+                )
+            ]
         return normalized(
             dict(
                 document=document,
+                identity_actions=identity_results,
                 application=application,
                 applied=bool(row and row["status"] == "applied"),
-                movements=[dict(r) for r in await conn.fetch(sql.MOVEMENTS, row["application_id"])]
+                movements=(
+                    [dict(r) for r in await conn.fetch(sql.MOVEMENTS, row["application_id"])]
+                    + identity_movements
+                )
                 if row
                 else [],
                 preparation=await self.documents.preparation_response(conn, prep) if prep else None,
@@ -302,14 +374,41 @@ class InventoryApplicationService:
             locations = [
                 r["location_id"] for r in await conn.fetch(doc_sql.FIXED_LOCATIONS, document_id)
             ]
+            from app.core.services.inventory_identity_service import InventoryIdentityService
+
+            identity_config = await InventoryIdentityService(self.documents).config(
+                conn, document_id
+            )
+            # Controlled KIZ/container services require UPDATE later. Take it NOWAIT
+            # before physical locks rather than upgrade behind an FBS location SHARE.
+            location_lock = "UPDATE" if identity_config else "KEY SHARE"
             await conn.fetch(
-                "SELECT location_id FROM wms.locations WHERE location_id=ANY($1::bigint[]) ORDER BY location_id FOR KEY SHARE NOWAIT",
+                f"SELECT location_id FROM wms.locations WHERE location_id=ANY($1::bigint[]) ORDER BY location_id FOR {location_lock} NOWAIT",
                 locations,
             )
+            if identity_config:
+                identity_state = await InventoryIdentityService(self.documents).capture(
+                    conn, document
+                )
+                container_ids = [c["container_id"] for c in identity_state["containers"]]
+                await conn.fetch(
+                    "SELECT container_id FROM wms.containers WHERE container_id=ANY($1::bigint[]) ORDER BY container_id FOR UPDATE NOWAIT",
+                    container_ids,
+                )
+                await conn.fetch(
+                    "SELECT content_id FROM wms.container_contents WHERE container_id=ANY($1::bigint[]) ORDER BY content_id FOR UPDATE NOWAIT",
+                    container_ids,
+                )
             await conn.fetch(
                 "SELECT inventory_id FROM wms.inventory WHERE location_id=ANY($1::bigint[]) ORDER BY product_id,location_id,inventory_id FOR UPDATE NOWAIT",
                 locations,
             )
+            if identity_config:
+                await conn.fetch(
+                    "SELECT kiz_id FROM wms.kiz WHERE location_id=ANY($1::bigint[]) OR container_id=ANY($2::bigint[]) ORDER BY kiz_id FOR UPDATE NOWAIT",
+                    locations,
+                    container_ids,
+                )
             prep = await self.verified_preparation(conn, document, request, freeze)
             aid = await conn.fetchval(
                 sql.CREATE_APPLICATION,
@@ -323,6 +422,13 @@ class InventoryApplicationService:
             await conn.execute(
                 "SELECT set_config('wms.inventory_application_id',$1,true)", str(aid)
             )
+            from app.core.services.inventory_identity_service import InventoryIdentityService
+
+            identity = decode(prep["evidence"]).get("identity")
+            if identity:
+                await InventoryIdentityService(self.documents).execute(
+                    conn, document, aid, identity, request.user_name
+                )
             item_map = {r["item_id"]: r for r in await conn.fetch(doc_sql.ALL_ITEMS, document_id)}
             for component in await conn.fetch(sql.PILOT_COMPONENTS, prep["preparation_id"]):
                 delta = component["adjustment_quantity"]
@@ -354,6 +460,10 @@ class InventoryApplicationService:
                     freeze_error(
                         "Movement registry entry missing", "INVENTORY_APPLICATION_INCOMPLETE"
                     )
+            if identity:
+                await InventoryIdentityService(self.documents).verify_effect(
+                    conn, document, identity
+                )
             await conn.execute(
                 "UPDATE wms.inventory_applications SET status='applied',applied_at=clock_timestamp() WHERE application_id=$1",
                 aid,

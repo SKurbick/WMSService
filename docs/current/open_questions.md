@@ -1,5 +1,19 @@
 # Open Questions
 
+## Stage 2B — оставшиеся технические условия
+
+- Runtime role roster и scoped EXECUTE/sequence/table grants должны быть проверены на staging:
+  production права не менялись. Новый inventory_identity_runtime_privileges() проверяет
+  отдельный профиль inventory; он не заменяет Stage 2A preflight и старые warehouse grants.
+- Вложенность запрещена текущим chk_container_flat. Если она понадобится физически, нужен
+  отдельный совместимый container contract, guards для ancestor scopes и controlled subtree
+  operations. Снимать CHECK в модуле инвентаризации без этого нельзя.
+- Для quantity adjustment одного SKU с active КИЗ и для межконтейнерного обмена identities
+  без изменения quantity требуется отдельная доказанная allocation operation. Сейчас это
+  явные blockers; общее quantity adjust не используется вместо КИЗ lifecycle.
+- Delayed FBS physical boundary, batch allocation и масштабирование остаются отдельным
+  техническим долгом. Stage 2B не выдаёт timestamp за время физического изъятия.
+
 ## Inventory — границы расширения после controlled pilot
 
 - Для обычных адресов согласован controlled pilot: persistent DB freeze, операционное

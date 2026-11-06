@@ -1,5 +1,17 @@
 # API Map
 
+## Inventory Stage 2B — идентификаторы и контейнеры
+
+- POST /api/inventory-documents/{document_id}/identity-accounting — opt-in в draft; containers=false по умолчанию.
+- GET /api/inventory-documents/{document_id}/identities — snapshot и пагинированная история попыток со сканами.
+- POST /api/inventory-documents/{document_id}/identity-counts — новая попытка пересчёта всей выбранной области.
+- POST /api/inventory-documents/{document_id}/identity-counts/{count_id}/scans — КИЗ/QR, фактический holder и содержимое.
+- POST /api/inventory-documents/{document_id}/identity-counts/{count_id}/complete — сравнение и план controlled operations.
+
+Остальные команды submit/return/freeze/application-preview/ready/apply используются повторно.
+Missing/unknown/closed identities не превращаются в quantity adjust. Полный контракт:
+[inventory_stage2b.md](../flows/inventory_stage2b.md).
+
 Русское руководство по КИЗ: [назначение, остатки, карточка, события, перемещение, отгрузка и история](kiz_api.md). Параметры, схемы ответов и примеры опубликованы в Swagger в разделе «КИЗ».
 
 Статус: `CURRENT`.

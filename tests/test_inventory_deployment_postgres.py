@@ -149,6 +149,7 @@ async def grant_legacy(conn, role):
         "AND c.relname NOT LIKE 'inventory_document%' AND c.relname NOT LIKE 'inventory_application%' "
         "AND c.relname NOT LIKE 'inventory_count_attempts%' AND c.relname NOT LIKE 'inventory_location_claims%' "
         "AND c.relname NOT LIKE 'inventory_freeze%' AND c.relname NOT LIKE 'inventory_location_fences%'"
+        "AND c.relname NOT LIKE 'inventory_identity_%'"
     )
     await conn.execute(
         f'GRANT EXECUTE ON FUNCTION wms.ship_kiz(bigint,bigint,varchar,bigint,numeric) TO "{role}"'
@@ -178,6 +179,10 @@ async def runtime_env(physical_env, request):  # noqa: F811
             json.dumps([{"role": role, "profile": profile}]),
         )
         await conn.execute("SELECT wms.inventory_runtime_privileges('apply')")
+        if await conn.fetchval(
+            "SELECT to_regprocedure('wms.inventory_identity_runtime_privileges()') IS NOT NULL"
+        ):
+            await conn.execute("SELECT wms.inventory_identity_runtime_privileges()")
         await conn.execute(PRIVILEGES_PREFLIGHT)
         database = await conn.fetchval("SELECT current_database()")
     try:

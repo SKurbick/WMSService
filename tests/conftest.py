@@ -176,6 +176,13 @@ def kiz_database_template():
                         "20261030_add_inventory_physical_apply.sql",
                     ):
                         await conn.execute((ROOT / "scripts/migrations" / migration).read_text())
+                    if os.getenv("KIZ_TEST_IDENTITY_SCHEMA") == "1":
+                        await conn.execute(
+                            (
+                                ROOT
+                                / "scripts/migrations/20261105_add_inventory_identity_counts.sql"
+                            ).read_text()
+                        )
             finally:
                 await conn.close()
         finally:

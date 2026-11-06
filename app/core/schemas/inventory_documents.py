@@ -265,6 +265,7 @@ class ApplicationResultResponse(BaseModel):
     movements: list[dict[str, Any]] = Field(default_factory=list)
     preparation: ApplicationPreparationResponse | None
     application: dict[str, Any] | None = None
+    identity_actions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FreezeResponse(BaseModel):

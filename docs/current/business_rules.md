@@ -2,6 +2,29 @@
 
 Статус: `CURRENT`.
 
+## Inventory Stage 2B — идентификационный пересчёт
+
+- Opt-in КИЗ/container accounting фиксируется в draft; scope и исходный snapshot неизменяемы.
+- Loose actual исключает active КИЗ. Собственный container quantity включает свои КИЗ,
+  но не содержимое дочерних контейнеров. Один скан идентичности не равен дополнительной единице.
+- Повтор команды с UUID идемпотентен; новый скан того же normalized КИЗ сохраняется как
+  duplicate conflict. История старых и superseded попыток не удаляется.
+- Active loose КИЗ между frozen адресами исправляется explicit controlled transfer;
+  flat QR — controlled move; распределение container/loose в одном адресе — fill/extract
+  с доказанным source capacity и соответствующим финальным count.
+- Missing/unknown/terminal КИЗ, unknown/missing QR, batch/holder ambiguity и quantity
+  adjustment mixed active SKU блокируют весь apply, не подменяются обычным adjust.
+- Registered без holder не имеет физического адреса. Регистрация/активация/удаление по
+  одному inventory scan автоматически не выполняются. Ручное решение — стандартными
+  controlled операциями после release, затем новый freeze/count или закрытие без применения.
+- Возврат на count требует новой identity attempt. Новый frozen epoch всегда требует
+  новых counts. FBS продолжает atomic invalidation. Операторское подтверждение не доказывает
+  физическое время неизвестных событий.
+- Текущий DB CHECK chk_container_flat запрещает nesting. Его снятие и новые nested physical
+  operations не входят в это изменение; найденная неподдерживаемая hierarchy не применяется.
+
+Контракт: [inventory_stage2b.md](../flows/inventory_stage2b.md).
+
 ## Поступления и отгрузки всего WMS — 2026-10-26
 
 - Подтверждено пользователем: весь WMS считается одним складом PUSHKINO.

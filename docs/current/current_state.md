@@ -4,6 +4,12 @@
 
 ## Инвентаризация — stage 1
 
+Дополнение 05.11: Stage 2B в отдельной ветке от интегрированного `9f3202c` добавляет
+opt-in КИЗ/QR snapshots, scan attempts и controlled transfer/move/fill/extract в общей
+application transaction. Обычная quantity-инвентаризация сохраняется. Production не
+обновлён; defaults flags остаются false. Ограничения и workflow:
+[inventory_stage2b.md](../flows/inventory_stage2b.md).
+
 Добавлен самостоятельный `/api/inventory-documents`: draft editing/preview, frozen scope,
 claims, initial physical/КИЗ snapshot, counting attempts/progress, found SKU, preliminary
 reconciliation, submission, recount, closing without adjustments, audit/revision history.

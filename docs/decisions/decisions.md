@@ -1,5 +1,25 @@
 # Decisions
 
+## 2026-11-05 — Inventory Stage 2B через действующие controlled operations
+
+- Зафиксированная интегрированная основа 9f3202c сохраняется; разработка без commit в
+  feature/inventory-stage2b. Stage 1/2A документы, claims, freeze, revisions и application
+  identity остаются общей моделью, добавлены только identity observations/actions/links.
+- Единицы разделены на unidentified loose, конкретный active КИЗ и собственный QR contents.
+  Переходы holder не имитируются quantity adjust. Transfer/move/fill/extract переиспользуют
+  existing services на одном connection/savepoints общей outer application transaction.
+- Shared admission получает ограниченный action context с applying application/current xid,
+  ready epoch и fixed location; unsupported Stage 2A body/attributes останавливают migration.
+  FBS exception/invalidation сохранены; projection и lifecycle functions не переписываются.
+- Identity plan связан с completed final count и preparation, deferred constraints проверяют
+  полноту actions/registry refs; post-effect recheck сверяет actual holders/contents/unidentified.
+- Контракт privileges расширяется точечными grants/checks для новых inventory objects и
+  existing controlled functions. Нет новых SECURITY DEFINER или широких schema grants.
+- В текущем container contract nesting запрещён chk_container_flat. Не удаляем его ради
+  формального выполнения unsupported nested apply; это отдельное развитие container subsystem.
+- Неоднозначные identities/lifecycle/quantity allocations сохраняются как conflicts с
+  workflow release → controlled resolution → новый freeze/count; успешный applied не имитируется.
+
 ## 2026-10-22 — автоматическая регистрация КИЗ без обязательного receipt
 
 - Заменено прежнее ограничение B2.1: наличие receipt и его количество больше не являются условиями регистрации.

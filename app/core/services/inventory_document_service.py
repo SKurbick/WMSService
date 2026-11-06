@@ -478,6 +478,9 @@ class InventoryDocumentService:
                 request.user_name,
                 dump(evidence),
             )
+            from app.core.services.inventory_identity_service import InventoryIdentityService
+
+            await InventoryIdentityService(self).snapshot(conn, document)
             await conn.execute(q.START_DOCUMENT, document_id, evidence["observed_at"])
             return await self.require_document(conn, document_id), document_id
 
@@ -763,6 +766,9 @@ class InventoryDocumentService:
     async def submit(self, document_id, request):
         async def run(conn, document):
             self.require_status(document, "counting")
+            from app.core.services.inventory_identity_service import InventoryIdentityService
+
+            await InventoryIdentityService(self).require_complete(conn, document)
             items = await conn.fetch(q.ALL_ITEMS, document_id)
             if any(r["needs_recount"] or r["attempt_status"] != "completed" for r in items):
                 raise InventoryDocumentError(

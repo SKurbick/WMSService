@@ -1,5 +1,7 @@
 # Локальное окружение и настройки IDE.
 .env
+.env.*
+!.env.example
 .idea/
 .venv/
 

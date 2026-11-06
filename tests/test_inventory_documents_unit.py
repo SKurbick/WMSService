@@ -139,8 +139,16 @@ def test_inventory_openapi_has_stage1_and_preparatory_operations():
         for method in methods
         if method in {"get", "post", "put", "patch", "delete"}
     ]
-    assert len(operations) == 27
+    assert len(operations) == 32
     for suffix in ("application-preview", "apply", "application"):
+        assert f"/api/inventory-documents/{{document_id}}/{suffix}" in paths
+    for suffix in (
+        "identity-accounting",
+        "identities",
+        "identity-counts",
+        "identity-counts/{count_id}/scans",
+        "identity-counts/{count_id}/complete",
+    ):
         assert f"/api/inventory-documents/{{document_id}}/{suffix}" in paths
 
 

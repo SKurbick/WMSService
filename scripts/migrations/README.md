@@ -42,6 +42,23 @@ DB-first deployment; старый backend новых таблиц не испо�
 
 ## Найденные файлы
 
+### Inventory Stage 2B — 05.11.2026
+
+После актуальных КИЗ/registry/controlled containers и четырёх Inventory Stage 1/2A migrations:
+`20261105_add_inventory_identity_counts.sql`. Старые файлы Stage 2A не изменены.
+Создаются шесть новых identity tables, immutable/deferred guards; shared admission меняется
+только для server-derived identity action текущей application transaction. Projection не меняется.
+
+Перед запуском — явный `wms.inventory_runtime_roles` roster. Default — check-only privileges;
+владелец может явно разрешить `wms.inventory_grant_runtime_privileges=on` для точечных grants
+в авторизованной deployment-сессии. Migration целиком откатывается при неподдержанном body/
+attributes admission или нехватке прав. Никаких автоматических production grants/миграций.
+
+После установки: `20261105_inventory_identity_privileges_preflight.sql` с тем же roster,
+READ ONLY и grant mode off. Для старой установленной версии этой migration нужен forward
+upgrade; повторный запуск исторического файла не допускается. Полный перечень прав,
+порядок flags/release/rollback — [Stage 2B](../../docs/flows/inventory_stage2b.md).
+
 ### Коррекции товара КИЗа — 23.10.2026
 
 После organization, FBS Stage 1 и prefix migrations применить
