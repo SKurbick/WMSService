@@ -28,7 +28,48 @@ Swagger UI доступен по `/docs`, ReDoc — `/redoc`, health check — `
 docker compose up --build
 ```
 
-Compose публикует сервис на `localhost:8310`, но не поднимает PostgreSQL или RabbitMQ и ожидает внешнюю сеть `vector_db_default`. Текущий compose-файл также не передает переменные окружения в контейнер.
+Compose публикует сервис на порту хоста `8310` (все интерфейсы), передаёт
+переменные из `.env` через `env_file` и ожидает внешнюю сеть
+`vector_db_default`. PostgreSQL и RabbitMQ запускаются отдельно.
+
+Для боевого хоста подготовлен локальный `.env.production.host` с текущими
+значениями подключения (файл с секретами исключён из Git). Перенесите его
+содержимое в `.env` рядом с compose-файлом. Рабочий локальный `.env` автоматически
+не изменяется. В production-профиле:
+- `DEBUG=false`, RabbitMQ AMQP port `5672`;
+- основной FBS, резервы и KIZ import включены;
+- external FBS выключен: при проверке 2026-11-09 его очередь отсутствовала;
+- `FBS_TASK_PROCESSING_MODE=task_level` и
+  `FBS_VALIDATE_ASSEMBLY_TASKS=false` сохранены из текущего окружения.
+
+**Этот профиль предназначен для запуска после восстановления БД и данных.**
+До запуска восстановить требуемые таблицы `public`, применить необходимую цепочку
+миграций, проверить DB permissions и наличие локаций `FBS_LOCATION_CODE` и
+`KIZ_IMPORT_RECEIPT_LOCATION_CODE`. Включённые consumers сразу начнут получать
+сообщения, включая накопленные резервы. Если восстановление ещё идёт, оставить
+все четыре `*_CONSUMER_ENABLED`/`CONSUMER_ENABLED` равными `false`.
+
+После подготовки `.env` и внешней сети:
+
+```bash
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=100 wms_service_api
+```
+
+После изменения `.env` требуется пересоздание контейнера:
+`docker compose up -d --force-recreate`; одного `restart` недостаточно.
+Не запускать несколько экземпляров/uvicorn workers: каждый запускает собственные
+consumers и retry worker, у которого пока нет конкурентного claim.
+
+Образ копирует только `app/`, работает от пользователя `wms` и не содержит
+`.env`. В Compose добавлена только передача переменных через `env_file`.
+`/health` подтверждает только доступность HTTP, а не работоспособность БД/очередей.
+
+В `requirements.txt` пока присутствуют dev-зависимости, а `aio-pika` не закреплён
+по версии: сборка не полностью воспроизводима. Их разделение и фиксация версий
+требуют отдельной проверки зависимостей.
 
 ## Миграции
 

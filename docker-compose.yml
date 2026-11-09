@@ -1,16 +1,15 @@
-version: '3.8'
-
 services:
   wms_service_api:
-    build: .  # Путь к Dockerfile FastAPI
+    build: .
     container_name: wms_service_api
     image: wms_service_api_image
-
+    env_file:
+      - .env
     ports:
       - "8310:8010"
     networks:
-      - vector_db_default  # Имя сети из docker inspect
+      - vector_db_default
 
 networks:
   vector_db_default:
-    external: true  # Используем существующую сеть
+    external: true

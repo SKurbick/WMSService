@@ -91,3 +91,13 @@ B1 определяет warehouse как корневой ancestor `locations.pa
 Открыты отдельные будущие решения: shipment/FBS/kit/re-sorting/receipt непосредственно в
 контейнере, direct assignment, arbitrary container-to-container KIZ transfer, nesting,
 batch-aware KIZ, account/owner restrictions и KIZ-aware adjustment. C1 их не реализует.
+
+## Production-хост после потери БД — 2026-11-09
+
+- Подтвердить фактические host/port/credentials восстановленной БД и готовность
+  public/WMS schema, данных, прав и локаций перед включением consumers.
+- Нужен ли external FBS в этом production deployment? Очередь
+  wms.fbs.external_write_off отсутствовала при пассивной проверке; профиль
+  оставляет EXTERNAL_FBS_CONSUMER_ENABLED=false.
+- Подтвердить намеренное FBS_VALIDATE_ASSEMBLY_TASKS=false в production:
+  текущее значение сохранено, правило обработки в этой задаче не менялось.

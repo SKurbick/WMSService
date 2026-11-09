@@ -1,27 +1,25 @@
 FROM python:3.12-slim
 LABEL authors="skurbick"
 
-# Устанавливаем рабочую директорию
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
 WORKDIR /app
 
-# Установка шрифтов с поддержкой кириллицы
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-# Копируем файл с зависимостями
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем Python зависимости
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN groupadd --system wms && useradd --system --gid wms --no-create-home wms
+COPY --chown=wms:wms app/ ./app/
 
-# Копируем весь проект
-COPY . .
-
-# Открываем порт (внутренний порт контейнера)
+USER wms
 EXPOSE 8010
 
-# Запускаем приложение на порту 8010 (внутренний)
+# One process: each worker would start its own consumers and retry worker.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8010"]
